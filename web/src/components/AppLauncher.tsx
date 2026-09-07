@@ -142,6 +142,7 @@ const ACCENT: Record<string, string> = {
   'bg-purple-500': '#a855f7',
   'bg-cyan-700': '#0e7490',
   'bg-indigo-700': '#4338ca',
+  'bg-lime-600': '#65a30d',
 }
 
 function GridIcon() {
