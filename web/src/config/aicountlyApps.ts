@@ -313,6 +313,14 @@ export const AICOUNTLY_APPS: AicountlyAppDef[] = [
     sandboxHost: 'capital.gh.aicountly.com',
     accent: 'bg-rose-700',
   },
+  {
+    id: 'apis',
+    name: 'APIs',
+    jumpKey: 'apis',
+    prodHost: 'apis.aicountly.com',
+    sandboxHost: 'apis.gh.aicountly.com',
+    accent: 'bg-neutral-700',
+  },
 ]
 
 /** App id for the host running this build. */
