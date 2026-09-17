@@ -20,6 +20,8 @@ namespace Aicountly\Api;
 
 require __DIR__ . '/src/Env.php';
 require __DIR__ . '/src/Portal.php';
+require __DIR__ . '/src/Db.php';
+require __DIR__ . '/src/Health.php';
 
 Env::load(__DIR__ . '/.env');
 
@@ -170,6 +172,7 @@ if ($path === '' || $path === 'health') {
         'app' => 'Messaging',
         'env' => Env::get('APP_ENV', 'unknown'),
         'time' => gmdate('c'),
+        'database' => Health::database(),
     ]);
 }
 
