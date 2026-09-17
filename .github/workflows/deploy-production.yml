@@ -130,6 +130,10 @@ jobs:
             echo "::error::server-php contains a committed .env — refusing to deploy. The API .env belongs on the server only."
             exit 1
           fi
+          # The migration step at the end of this workflow depends on both of
+          # these. Finding out over SSH is a slower way to learn it.
+          test -f server-php/bin/migrate.php || { echo "::error::server-php/bin/migrate.php missing — the deploy cannot apply migrations"; exit 1; }
+          test -d server-php/database/migrations || { echo "::error::server-php/database/migrations/ missing — the deploy cannot apply migrations"; exit 1; }
           # A syntax error here is a 500 on every endpoint, and rsync would ship
           # it happily. Cheaper to catch on the runner.
           find server-php -name '*.php' -print0 | xargs -0 -n1 php -l
@@ -289,10 +293,17 @@ jobs:
           # runtime on every request, unlike the web build. It must never be
           # uploaded and must never be deleted, hence the excludes below
           # combined with --delete.
+          #
+          # tests/ is excluded for a sharper reason than tidiness:
+          # tests/run.sh WRITES A TEST .env, overwriting whatever is there.
+          # On a production server that would replace the live configuration
+          # with placeholders pointed at a throwaway database. It has no
+          # business being deployed at all.
           rsync -avz --delete \
             --exclude='.env' \
             --exclude='.env.*' \
             --exclude='.git*' \
+            --exclude='tests/' \
             --chmod=D755,F644 \
             -e ssh \
             server-php/ "deploy-target:$REMOTE_ROOT/api/"
@@ -300,17 +311,77 @@ jobs:
           echo "Deployed server-php to \$REMOTE_ROOT/api/"
           echo "::notice::If this is the first API deploy, create api/.env on the server from server-php/.env.example — it is never uploaded."
 
+      # Apply pending database migrations, on the server, using the server's
+      # own api/.env.
+      #
+      # Every migration is additive and idempotent: each runs in its own
+      # transaction, is recorded with a checksum, and nothing in
+      # database/migrations/ drops a table, drops a column or rewrites data.
+      # Re-running prints "Up to date."
+      #
+      # This step FAILS THE DEPLOY when it fails. An app serving requests
+      # against a schema it does not match is worse than a visibly failed
+      # deploy — the first breaks quietly for users, the second breaks loudly
+      # for us. The one expected failure is a very first deploy, where
+      # api/.env does not exist yet; create it and re-run.
+      - name: Apply database migrations
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+        run: |
+          # Find the account's PHP CLI. cPanel accounts often have several and
+          # the one on PATH is not reliably the CLI build.
+          php_bin=$(ssh deploy-target 'command -v php || command -v /usr/local/bin/php || command -v /usr/bin/php' 2>/dev/null | head -n1)
+          if [ -z "$php_bin" ]; then
+            echo "::error::No PHP CLI found on the server. Migrations were not applied."
+            exit 1
+          fi
+          echo "Using $php_bin"
+
+          if ! ssh deploy-target "test -f '$REMOTE_ROOT/api/.env'"; then
+            echo "::error::$REMOTE_ROOT/api/.env does not exist, so migrations cannot run. Create it from server-php/.env.example (see docs/DEPLOYMENT.md), then re-run this workflow. Expected on a first deploy."
+            exit 1
+          fi
+
+          echo "--- pending ---"
+          ssh deploy-target "$php_bin '$REMOTE_ROOT/api/bin/migrate.php' --status" || true
+
+          echo "--- applying ---"
+          if ssh deploy-target "$php_bin '$REMOTE_ROOT/api/bin/migrate.php'"; then
+            echo "Migrations applied."
+          else
+            code=$?
+            if [ "$code" = "2" ]; then
+              echo "::error::A migration that has already been applied has been EDITED since. Reapplying it would not undo what the old version did — resolve this by hand rather than by redeploying."
+            else
+              echo "::error::Migrations failed (exit $code). The API is deployed but its schema may not match. Fix this before announcing the release."
+            fi
+            exit 1
+          fi
+
       # A deployed API that cannot answer is worth knowing about now rather
       # than from the app's login screen. /health needs no credentials.
       - name: Smoke-test the deployed API
         run: |
           url="https://messaging.aicountly.com/api/health"
           code=$(curl -fsS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$url" || echo "000")
-          if [ "$code" = "200" ]; then
-            echo "GET $url → 200"
-            cat /tmp/health.json
-          else
+          if [ "$code" != "200" ]; then
             echo "::warning::GET $url returned $code. If this is the first deploy, check that the subdomain's document root is the one in PROD_SSH_REMOTE_ROOT and that api/.env exists."
+            exit 0
+          fi
+
+          echo "GET $url → 200"
+          cat /tmp/health.json
+          echo ""
+
+          # `usable` is the one field worth reading: it means the database is
+          # reachable AND the schema is present. A channel is deliberately NOT
+          # part of it — Messaging with nothing connected is up, usable, and
+          # honest about not being able to send yet, which is the correct state
+          # for a fresh deploy.
+          if grep -q '"usable":true' /tmp/health.json; then
+            echo "Database reachable and schema present."
+          else
+            echo "::warning::/api/health reports usable:false — the database is unreachable or the schema is missing. Check the DB_* values in api/.env and the migration step above."
           fi
 
       - name: Clean up SSH credentials
@@ -327,7 +398,8 @@ jobs:
             echo "|---|---|"
             echo "| Target | https://messaging.aicountly.com |"
             echo "| Web | \`web/dist/\` → document root |"
-            echo "| API | \`server-php/\` → \`api/\` in the document root |"
+            echo "| API | \`server-php/\` → \`api/\` in the document root (tests/ excluded) |"
+            echo "| Migrations | applied on the server from \`api/bin/migrate.php\` |"
             echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
             echo "| Ref | \`${GITHUB_REF_NAME}\` |"
           } >> "$GITHUB_STEP_SUMMARY"

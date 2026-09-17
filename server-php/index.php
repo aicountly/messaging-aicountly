@@ -9,16 +9,17 @@ declare(strict_types=1);
  * both messaging.aicountly.com and messaging.gh.aicountly.com.
  *
  * Routes:
- *   GET  /api/health          liveness + which environment answered
- *   POST /api/global/{path}   allow-listed relay to the portal auth API
- *   GET  /api/session         who the caller is, per the portal
- *
- * There is deliberately nothing else here yet.
+ *   GET  /api/health              liveness, database readiness, channel and integration state
+ *   POST /api/global/{path}       allow-listed relay to the portal auth API
+ *   GET  /api/session             who the caller is, per the portal
+ *   *    /api/webhooks/...        provider callbacks — NO session, signature verified
+ *   *    /api/v1/...              the Messaging API proper — see src/Routes.php
  */
 
 namespace Aicountly\Api;
 
 require __DIR__ . '/src/Env.php';
+require __DIR__ . '/src/Autoload.php';
 require __DIR__ . '/src/Portal.php';
 
 Env::load(__DIR__ . '/.env');
@@ -134,8 +135,9 @@ function apply_cors(): void
     }
 
     header('Access-Control-Allow-Origin: ' . $origin);
-    header('Access-Control-Allow-Headers: Authorization, Content-Type');
-    header('Access-Control-Allow-Methods: GET, POST, OPTIONS');
+    header('Access-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key, X-Service-Key, '
+        . 'X-Actor-Uuid, X-Saas-Origin, X-Source-App, X-Correlation-Id');
+    header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
     header('Access-Control-Max-Age: 600');
     header('Vary: Origin');
 }
@@ -165,11 +167,28 @@ if ($mountPoint !== '' && $mountPoint !== '/' && strpos($uri, $mountPoint) === 0
 $path = normalise_path($uri);
 
 if ($path === '' || $path === 'health') {
+    // Liveness AND readiness. 'status' stays ok whenever PHP is serving, so an
+    // uptime monitor pointed here keeps behaving as it always has; the database
+    // and integration blocks are what tell you whether the app can actually be
+    // used. Reporting only the former is how a deploy goes green on an app
+    // whose every real endpoint answers 503.
+    $database = Health::database();
+
     send_json(200, [
-        'status' => 'ok',
-        'app' => 'Messaging',
-        'env' => Env::get('APP_ENV', 'unknown'),
-        'time' => gmdate('c'),
+        'status'   => 'ok',
+        'app'      => 'Messaging',
+        'env'      => Env::get('APP_ENV', 'unknown'),
+        'time'     => gmdate('c'),
+        'database' => $database,
+        // Booleans and counts only. This endpoint is public: no sender
+        // addresses (they identify the tenant) and certainly no credentials.
+        'integrations' => Health::integrations(),
+        'channels'     => Health::channels(),
+        // One field to read when something is wrong. A channel is NOT in it:
+        // Messaging with no channel connected is up, usable, and honest about
+        // not being able to send — which is a configuration state, not an
+        // outage.
+        'usable'   => $database['reachable'] && ($database['schema']['ready'] ?? false),
     ]);
 }
 
@@ -219,6 +238,38 @@ if ($path === 'session') {
         'authenticated' => true,
         'uuid' => $session['uuid_aictly'] ?? ($session['uuid'] ?? ''),
     ]);
+}
+
+// ---------------------------------------------------------------------------
+// The Messaging API
+//
+// Everything above this line is the auth bootstrap and predates the product.
+// Everything below is the product, and it all goes through one router so that
+// authentication, company scope and the tenant check happen in one place rather
+// than being remembered per endpoint.
+// ---------------------------------------------------------------------------
+
+$router = new Router();
+Routes::register($router);
+
+try {
+    if ($router->dispatch($method, $path)) {
+        exit;
+    }
+} catch (\PDOException $e) {
+    // A database problem is ours, not the caller's. The detail goes to the log;
+    // the caller gets something they can act on.
+    error_log('[messaging] database error on ' . $path . ': ' . $e->getMessage());
+    Http::error(503, 'database_unavailable', 'The Messaging database is not reachable right now. Please retry.', [
+        'retryable' => true,
+    ]);
+} catch (ResponseSent $e) {
+    // Only reachable under CLI, where Http throws instead of exiting.
+    send_json($e->status, $e->payload);
+} catch (\Throwable $e) {
+    error_log('[messaging] unhandled error on ' . $path . ': ' . $e->getMessage()
+        . ' @ ' . $e->getFile() . ':' . $e->getLine());
+    Http::error(500, 'server_error', 'Something went wrong handling that request.');
 }
 
 send_json(404, ['message' => 'Not found.']);

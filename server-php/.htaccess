@@ -30,6 +30,23 @@
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
   Header always set Cache-Control "no-store"
+  Header set Referrer-Policy "no-referrer"
+
+  # This API serves conversation content and, through the context endpoints,
+  # balances and order values read live from their owning products. None of it
+  # may come to rest in a shared cache or a proxy, and a service worker must
+  # not be able to keep it either. index.php sets no-store per response; this
+  # is the belt to that braces.
+  Header always set Pragma "no-cache"
+</IfModule>
+
+# --- Upload limits ---------------------------------------------------------
+# Message attachments are capped at 16MB in Domain/AttachmentService. PHP has
+# to allow at least that much or the cap would be enforced by a truncated
+# upload rather than by a clear refusal.
+<IfModule mod_php.c>
+  php_value upload_max_filesize 16M
+  php_value post_max_size 20M
 </IfModule>
 
 # The API's .env sits inside the document root, so without this it would be

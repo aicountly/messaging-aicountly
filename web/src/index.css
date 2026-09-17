@@ -1,25 +1,66 @@
+/* AICOUNTLY design tokens — green and white, which is what Aicountly is.
+
+   TWO GREENS, NOT ONE. #25b003 is the brand mark and is used for accents,
+   active states and chart ink. White text never sits on it, because it does not
+   clear 4.5:1 — #176c09 does that job and is what every button, link and focus
+   ring uses. Getting this wrong is how a brand-coloured product becomes an
+   unreadable one, and it is the most common way an accessible palette is
+   undone.
+
+   NO DARK SCHEME. The palette is a light one by design: a premium
+   green-and-white surface with dark panels in the middle of it is neither.
+   Declaring `color-scheme: light` stops the browser recolouring form controls
+   for a dark preference and leaving an inbox with black inputs on white cards.
+
+   The product area inside the shell takes its own tokens from
+   ui/messaging-ui.css. These are for the shell, the sign-in screen and the
+   launcher — the parts that sit outside it. */
+
 :root {
-  --bg: #ffffff;
-  --fg: #18181b;
-  --muted: #71717a;
-  --border: #e4e4e7;
-  --accent: #18181b;
-  --accent-fg: #fafafa;
+  --brand: #25b003;
+  --brand-dark: #176c09;
+  --brand-soft: #edf9e9;
+
+  --bg: #f5f8f5;
+  --fg: #17231b;
+  --muted: #647168;
+  --border: #e1e9e2;
+  --accent: #176c09;
+  --accent-fg: #ffffff;
+
+  --surface: #ffffff;
+  --surface-2: #f7faf7;
+  --surface-3: #eaf1eb;
+  --border-strong: #c9d7cd;
+  --link: #176c09;
+  --focus: #176c09;
+
+  /* Status colours. Every one is paired with TEXT in the components that use
+     them — status is never conveyed by colour alone. That is an accessibility
+     requirement, and it is also the only way a screenshot of this dashboard
+     means anything to somebody who cannot tell the greens from the ambers. */
+  --danger: #a62b39;
+  --danger-bg: #fff0f2;
+  --success: #176a25;
+  --success-bg: #eaf7ed;
+  --warning: #805200;
+  --warning-bg: #fff6df;
+  --info: #175cd3;
+  --info-bg: #eef4ff;
+  --neutral: #506157;
+  --neutral-bg: #eef1ef;
+
+  --radius: 1rem;
+  --radius-sm: 0.75rem;
+  --shadow: 0 5px 22px rgb(25 55 30 / 3.5%);
+  --shadow-lg: 0 18px 48px rgb(15 40 25 / 16%);
+  --sidebar-w: 15rem;
+  --header-h: 4.25rem;
 
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  line-height: 1.6;
-  color-scheme: light dark;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #09090b;
-    --fg: #fafafa;
-    --muted: #a1a1aa;
-    --border: #27272a;
-    --accent: #fafafa;
-    --accent-fg: #09090b;
-  }
+  font-size: 14px;
+  line-height: 1.55;
+  color-scheme: light;
 }
 
 * {
@@ -32,4 +73,132 @@ body {
   background: var(--bg);
   color: var(--fg);
   -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+/* A visible focus ring on everything, in the accessible green. Thick enough to
+   see against a white card, offset so it does not sit on the border. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Tabular figures wherever a count, an amount or a duration appears: a column
+   of numbers that does not line up is a column somebody has to read twice. */
+.num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------------------------------------------------------------------------
+   The shell at narrow widths.
+
+   A 15rem sidebar on a 390px phone leaves 150px for the product, which is not
+   a layout — it is a column of wrapped words. Below 960px the sidebar becomes
+   an off-canvas drawer behind a button in the header and the content gets the
+   whole width.
+   --------------------------------------------------------------------------- */
+
+.shell-sidebar-toggle {
+  display: none;
+}
+
+@media (max-width: 960px) {
+  .shell-sidebar-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    flex: none;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--fg);
+  }
+
+  .shell-sidebar {
+    position: fixed !important;
+    inset: 0 auto 0 0;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.18s ease;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .shell-sidebar[data-open='true'] {
+    transform: translateX(0);
+  }
+
+  .shell-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: rgb(14 32 22 / 38%);
+    border: none;
+    padding: 0;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Motion. 120–200ms, and only in response to something the user just did.
+
+   There is deliberately no ambient animation in this product. A pulsing dot on
+   an inbox somebody watches for eight hours is not delight, it is a
+   distraction they cannot switch off.
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .shell-sidebar {
+    transition: none;
+  }
+
+  /* Near-zero rather than `animation: none`, which would freeze a spinner
+     mid-rotation and leave it looking broken. This lets it complete instantly
+     and settle. */
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

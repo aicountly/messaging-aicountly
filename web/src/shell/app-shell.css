@@ -1,0 +1,371 @@
+/* The application frame. */
+
+.shell-sidebar {
+  width: var(--sidebar-w);
+  flex: none;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 1.35rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  min-height: 100vh;
+}
+
+.shell-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0 0.5rem;
+  min-width: 0;
+}
+
+.shell-brand img {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  flex: none;
+}
+
+.shell-brand strong {
+  display: block;
+  font-size: 0.95rem;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.shell-brand small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.shell-nav {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.shell-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.6rem 0.65rem;
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-size: 0.88rem;
+  font-weight: 500;
+  transition: background 0.14s ease;
+}
+
+.shell-nav-item:hover {
+  background: var(--surface-2);
+  text-decoration: none;
+}
+
+.shell-nav-item.active {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-weight: 650;
+}
+
+.shell-nav-item svg {
+  flex: none;
+}
+
+.shell-nav-count {
+  margin-left: auto;
+}
+
+.shell-nav-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 0.55rem 0.35rem;
+}
+
+.shell-sidebar-foot {
+  margin-top: auto;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.shell-promo {
+  background: var(--brand-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.shell-promo strong {
+  display: block;
+  color: var(--brand-dark);
+  font-weight: 650;
+}
+
+.shell-promo span {
+  color: var(--brand-dark);
+  opacity: 0.85;
+}
+
+/* --- Top bar -------------------------------------------------------------- */
+
+.shell-topbar {
+  min-height: var(--header-h);
+  padding: 0.75rem 1.75rem;
+  border-bottom: 1px solid var(--border);
+  background: rgb(255 255 255 / 85%);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  flex-wrap: wrap;
+  position: sticky;
+  top: 0;
+  z-index: 40;
+}
+
+@media (max-width: 700px) {
+  .shell-topbar {
+    padding: 0.7rem 1rem;
+  }
+}
+
+.shell-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+
+@media (max-width: 1100px) {
+  .shell-title {
+    /* The product name is already in the sidebar; on a narrow screen the room
+       is better spent on the search field. */
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+}
+
+.shell-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+  min-width: 0;
+  max-width: 30rem;
+  margin: 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.5rem 0.7rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.shell-search:hover {
+  border-color: var(--border-strong);
+}
+
+.shell-search span {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-search kbd {
+  flex: none;
+  font: inherit;
+  font-size: 0.72rem;
+  border: 1px solid var(--border);
+  border-radius: 0.3rem;
+  padding: 0.05rem 0.3rem;
+  background: var(--surface-2);
+}
+
+@media (max-width: 860px) {
+  .shell-search {
+    order: 5;
+    max-width: none;
+    flex-basis: 100%;
+  }
+
+  .shell-search kbd {
+    display: none;
+  }
+}
+
+.shell-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+.shell-company {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.45rem 0.6rem;
+  font-size: 0.85rem;
+  max-width: 14rem;
+}
+
+@media (max-width: 700px) {
+  .shell-company {
+    max-width: 9rem;
+  }
+}
+
+.shell-user {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: #d9eed6;
+  color: var(--brand-dark);
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+
+/* --- Notification bell --------------------------------------------------- */
+
+.shell-bell {
+  position: relative;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.shell-bell:hover {
+  background: var(--brand-soft);
+}
+
+.shell-bell-dot {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 1.5px solid var(--surface);
+}
+
+.shell-notifications {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(24rem, calc(100vw - 2rem));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  max-height: 26rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+/* --- Environment indicator ----------------------------------------------- */
+
+.shell-env {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 0.5rem;
+  background: var(--warning-bg);
+  color: var(--warning);
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+/* --- Global search ------------------------------------------------------- */
+
+.shell-search-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(14 32 22 / 42%);
+  z-index: 80;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4rem 1rem 1rem;
+}
+
+.shell-search-dialog {
+  width: min(40rem, 100%);
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+  max-height: calc(100vh - 6rem);
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-search-input {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 1.15rem;
+  font-size: 1rem;
+  width: 100%;
+}
+
+.shell-search-input:focus {
+  outline: none;
+}
+
+.shell-search-results {
+  overflow-y: auto;
+  padding: 0.5rem;
+}
+
+.shell-search-result {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  padding: 0.6rem 0.7rem;
+  font-size: 0.87rem;
+}
+
+.shell-search-result:hover,
+.shell-search-result[aria-selected='true'] {
+  background: var(--brand-soft);
+}
+
+.shell-search-result small {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-top: 0.1rem;
+}
+
+.shell-search-group {
+  padding: 0.5rem 0.7rem 0.25rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  font-weight: 650;
+}

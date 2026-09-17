@@ -79,21 +79,145 @@ PHP reads its `.env` on **every request**. So the API's `.env` belongs on the
 server, and only on the server.
 
 Create it once by hand — cPanel File Manager or SSH — at
-`<remote root>/api/.env`, from `server-php/.env.example`:
+`<remote root>/api/.env`, from `server-php/.env.example`. That template is the
+annotated list, in eight sections; the minimum for a working deploy is:
 
 ```
 APP_ENV=production
+
+DB_HOST=localhost
+DB_PORT=5432
+DB_NAME=<cpaneluser>_messaging
+DB_USER=<cpaneluser>_messaging
+DB_PASS=...
+
+MESSAGING_PUBLIC_BASE_URL=https://messaging.aicountly.com
+MESSAGING_WEBHOOK_BASE_URL=https://messaging.aicountly.com
+MESSAGING_ATTACHMENT_DIR=/home/<cpaneluser>/messaging-attachments
+MESSAGING_ATTACHMENT_SIGNING_KEY=<openssl rand -hex 32>
+
+MANAGE_SERVICE_KEY=...
 ```
 
-That is the whole file for a production deploy; `APP_ENV=sandbox` for the
-sandbox. `GET /api/health` reports the value back, which is how you confirm
-you are looking at the environment you think you are.
+`APP_ENV=sandbox` for the sandbox. `GET /api/health` reports the value back,
+which is how you confirm you are looking at the environment you think you are.
 
-The API has no database yet. When the product needs one, add the credentials to
-this same file — and note that cPanel prefixes both database and user with the
-account name, so a database entered as `app` becomes `<cpaneluser>_app`. Use the
-full prefixed names, add the user to the database with **ALL PRIVILEGES**, and
-set `DB_HOST=localhost` (on cPanel the database is on the same machine).
+Everything else — the other sibling products, the channel providers, AI — is
+optional in the sense that its absence is a *reported state* rather than a
+failure. An unset `BOOKS_SERVICE_KEY` means the business-context panel says
+Books is not connected; it does not mean the inbox breaks. Nothing is on by
+default except the features Messaging owns outright, and `/api/health` names the
+missing key for each one.
+
+Two of the values above are not optional in the same way:
+
+- **`MESSAGING_WEBHOOK_BASE_URL` is a security control.** Some providers sign
+  the request URL, and that URL is reconstructed from this value rather than
+  from the incoming `Host` header — otherwise anybody who can set `Host` could
+  make a forged signature verify. Set it to the exact origin you registered
+  with the provider.
+- **`MESSAGING_ATTACHMENT_DIR` must be outside the document root.** A file
+  served directly by Apache is a file served without a permission check.
+
+## The database
+
+PostgreSQL, and it holds **Messaging's own tables only**. There is no foreign
+data wrapper here, no linked server, no cross-database view and no credential
+for another product's database — everything owned elsewhere is read live over
+HTTP. See [DATA_OWNERSHIP.md](DATA_OWNERSHIP.md).
+
+On cPanel: create the database and a user under **PostgreSQL Databases**, then
+add the user to the database with **ALL PRIVILEGES**. cPanel prefixes both names
+with the account name, so a database entered as `messaging` becomes
+`<cpaneluser>_messaging` — use the full prefixed names in `.env`, and
+`DB_HOST=localhost`, because on cPanel the database is on the same machine.
+
+### Migrations
+
+```bash
+php api/bin/migrate.php --status    # what would run, changes nothing
+php api/bin/migrate.php --dry-run   # parse and check each file, roll back
+php api/bin/migrate.php             # apply what is pending
+```
+
+Numbered, forward-only and idempotent. Each file runs in its own transaction and
+is recorded with a checksum, so:
+
+- a half-applied migration cannot exist — either the file is in and recorded, or
+  neither;
+- re-running is safe and prints `Up to date.`;
+- a file that has been **edited since it was applied** is reported (exit code 2)
+  rather than silently reapplied, because reapplying it would not undo what the
+  old version did.
+
+Nothing in `database/migrations/` drops a table, drops a column or rewrites
+data. A change that needs to is a change that needs a human and a backup, not a
+deploy step.
+
+**The deploy runs this for you.** After the API is uploaded, each workflow runs
+`php api/bin/migrate.php` over the same SSH connection and fails the job if it
+fails — an app running against a schema it does not match is worse than a
+visibly failed deploy. On the very first deploy the step is expected to fail,
+because `api/.env` does not exist yet; create it and re-run.
+
+## Background jobs on cPanel
+
+Neither job is needed to sign in and read the app. Both are needed for it to
+send anything.
+
+Under **Cron Jobs** in cPanel, with `<root>` the document root:
+
+```cron
+# The send queue. Every minute.
+#
+# Safe to run concurrently with itself — claiming uses FOR UPDATE SKIP LOCKED,
+# and a unique index means one message can only ever have one job, so an
+# overlapping run cannot become a duplicate send. The dispatch gates run here,
+# immediately before the provider call, not at enqueue time.
+* * * * * /usr/local/bin/php /home/<user>/<root>/api/bin/dispatch-worker.php --batch=25 >/dev/null 2>&1
+
+# Resume journey runs whose delay has expired. Every five minutes.
+*/5 * * * * /usr/local/bin/php /home/<user>/<root>/api/bin/journey-tick.php >/dev/null 2>&1
+
+# The scheduled operational checks — reads overdue invoices from Books, live,
+# and starts a journey run for any that has none. Once an hour is plenty.
+#
+# It stores no invoice: the rows are processed in memory and discarded, and
+# every run re-reads its own invoice before drafting and again before sending.
+# It is not a synchronisation job. See DATA_OWNERSHIP.md.
+0 * * * * /usr/local/bin/php /home/<user>/<root>/api/bin/journey-tick.php --checks >/dev/null 2>&1
+
+# Return a dead worker's claimed jobs to the queue. Every fifteen minutes.
+#
+# Deliberately a separate invocation: requeuing on every start would re-run a
+# job a live worker is still processing.
+*/15 * * * * /usr/local/bin/php /home/<user>/<root>/api/bin/dispatch-worker.php --requeue-stale >/dev/null 2>&1
+```
+
+Check `/usr/local/bin/php` against the account's actual PHP binary — cPanel
+often has several, and the CLI one is not always the default in `PATH`.
+
+Without the queue cron, a message dispatched from the UI still goes out: the
+controller processes the job inline so the agent sees the outcome rather than a
+spinner that resolves somewhere else. What waits is anything queued by a
+journey, and anything that needs a retry.
+
+## Provider webhooks
+
+Register each channel's webhook against the connection it belongs to:
+
+```
+https://messaging.aicountly.com/api/webhooks/{provider}/{connection-uuid}
+```
+
+The Channels & Trust screen shows the exact URL for each connection, along with
+whether the webhook has been verified and when one last arrived.
+
+These routes take no session — a provider has none, and demanding one would
+silently drop every delivery receipt. They authenticate on the provider's own
+signature over the raw body, using the secret named by that connection's
+`webhook_secret_ref`. The tenant comes from the connection uuid in the URL,
+never from the payload.
 
 ### Protecting the API's .env over HTTP
 
@@ -130,11 +254,24 @@ itself, a system directory, or anything containing `..` is refused.
 ## First deploy checklist
 
 1. Create the subdomain in cPanel and note its document root.
-2. Add the five SSH secrets for that environment.
-3. Run **Deploy to cPanel …**. This deploys web and API together; the API is
-   deployed but unconfigured until the next step.
-4. Create `api/.env` on the server (see above), from `server-php/.env.example`.
-5. Re-run **Deploy to cPanel …** (or just confirm the API), then confirm
-   `https://<host>/api/health` returns the right `env` and open the site to
-   sign in. See [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md)
-   for what a healthy login looks like.
+2. Create the PostgreSQL database and user, and grant ALL PRIVILEGES.
+3. Add the five SSH secrets for that environment.
+4. Run **Deploy to cPanel …**. This deploys web and API together. The migration
+   step at the end is **expected to fail** on a first deploy, because
+   `api/.env` does not exist yet.
+5. Create `api/.env` on the server (see above), from
+   `server-php/.env.example`. Create `MESSAGING_ATTACHMENT_DIR` outside the
+   document root while you are there.
+6. Re-run **Deploy to cPanel …**. The migration step should now report what it
+   applied.
+7. Confirm `https://<host>/api/health` returns the right `env` and
+   `"usable": true`, then open the site and sign in. See
+   [auth/AICOUNTLY_AUTH_WORKFLOW.md](auth/AICOUNTLY_AUTH_WORKFLOW.md) for what a
+   healthy login looks like.
+8. Add the cron jobs (see above).
+9. Connect a channel in **Channels & Trust**, set its credential variable in
+   `api/.env`, and register the webhook URL the screen shows you.
+
+At step 7, `"usable": true` with every integration reported as not connected is
+the correct state for a fresh deploy. The product is up and honest about not
+being able to send yet; it is not broken.

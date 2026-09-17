@@ -1,0 +1,1387 @@
+/* The Messaging product surface.
+
+   Scoped under `.msg-ui` so these rules cannot reach the sign-in screen or the
+   app launcher, which have their own look and sit outside the shell.
+
+   Design character, from the brief: premium, clean, business-focused. White
+   surfaces with restrained green highlights, clear hierarchy, generous
+   spacing, COMPACT operational tables — an agent scanning forty conversations
+   needs density, and a dashboard needs air. Those are different jobs and the
+   spacing differs accordingly. */
+
+.msg-ui {
+  padding: 1.75rem;
+  max-width: 1800px;
+  margin: 0 auto;
+}
+
+@media (max-width: 700px) {
+  .msg-ui {
+    /* 16px side gutter on a phone, and never a horizontal page scroll. */
+    padding: 1rem;
+  }
+}
+
+/* --- Page header ---------------------------------------------------------- */
+
+.msg-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.25rem;
+  margin-bottom: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.msg-page-header h1 {
+  margin: 0;
+  font-size: clamp(1.5rem, 2.4vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.msg-page-header p {
+  margin: 0.35rem 0 0;
+  color: var(--muted);
+}
+
+.msg-page-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* --- Cards and panels ----------------------------------------------------- */
+
+.msg-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.msg-card-body {
+  padding: 1.25rem;
+}
+
+.msg-panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.25rem;
+  min-width: 0;
+}
+
+.msg-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.msg-panel-header h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.msg-panel-header p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.msg-mint {
+  background: linear-gradient(115deg, #f2fbee, #fff);
+  border-color: #cce6c4;
+}
+
+/* --- Grids ---------------------------------------------------------------- */
+
+.msg-grid {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.msg-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.msg-grid-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.msg-grid-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.msg-split {
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+}
+
+@media (max-width: 1100px) {
+  .msg-grid-4 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .msg-grid-3,
+  .msg-split {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 700px) {
+  .msg-grid-2,
+  .msg-grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.msg-stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+/* --- Metric tiles --------------------------------------------------------- */
+
+.msg-metric-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 1100px) {
+  .msg-metric-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .msg-metric-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.msg-metric {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.15rem 1.25rem;
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.msg-metric-icon {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+}
+
+.msg-metric-icon-warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.msg-metric-icon-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.msg-metric-icon-info {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.msg-metric-body {
+  min-width: 0;
+  flex: 1;
+}
+
+.msg-metric-label {
+  display: block;
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.msg-metric-value {
+  display: block;
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  margin: 0.15rem 0 0.2rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-metric-foot {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+/* --- Change chips --------------------------------------------------------- */
+
+.msg-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  font-size: 0.76rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.msg-tone-positive {
+  color: var(--success);
+}
+
+.msg-tone-negative {
+  color: var(--danger);
+}
+
+.msg-tone-neutral {
+  color: var(--muted);
+}
+
+/* --- Status pills ---------------------------------------------------------
+   Always rendered WITH their label text. `.msg-status` never carries meaning
+   on its own — see the `StatusPill` component. */
+
+.msg-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 650;
+  line-height: 1.5;
+  white-space: nowrap;
+  background: var(--neutral-bg);
+  color: var(--neutral);
+}
+
+.msg-status-success {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.msg-status-warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+}
+
+.msg-status-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.msg-status-info {
+  background: var(--info-bg);
+  color: var(--info);
+}
+
+.msg-status-brand {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+}
+
+/* --- Buttons -------------------------------------------------------------- */
+
+.msg-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--fg);
+  padding: 0.55rem 0.85rem;
+  font-weight: 650;
+  font-size: 0.85rem;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.msg-button:hover:not(:disabled) {
+  background: var(--brand-soft);
+  border-color: #cce6c4;
+}
+
+.msg-button:disabled {
+  opacity: 0.55;
+}
+
+.msg-button-primary {
+  background: var(--brand-dark);
+  border-color: var(--brand-dark);
+  color: var(--accent-fg);
+}
+
+.msg-button-primary:hover:not(:disabled) {
+  background: #125807;
+  border-color: #125807;
+}
+
+.msg-button-danger {
+  background: var(--surface);
+  border-color: #e8c3c8;
+  color: var(--danger);
+}
+
+.msg-button-danger:hover:not(:disabled) {
+  background: var(--danger-bg);
+}
+
+.msg-button-ghost {
+  background: transparent;
+  border-color: transparent;
+}
+
+.msg-button-ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: transparent;
+}
+
+.msg-button-small {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.78rem;
+}
+
+/* --- Notices -------------------------------------------------------------- */
+
+.msg-notice {
+  display: flex;
+  gap: 0.75rem;
+  align-items: flex-start;
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
+.msg-notice strong {
+  display: block;
+  margin-bottom: 0.15rem;
+}
+
+.msg-notice-info {
+  background: var(--info-bg);
+  color: #123b8a;
+  border-color: #cddcf7;
+}
+
+.msg-notice-warning {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-color: #ecd9a8;
+}
+
+.msg-notice-danger {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: #eec7cc;
+}
+
+.msg-notice-success {
+  background: var(--success-bg);
+  color: var(--success);
+  border-color: #c6e3cd;
+}
+
+.msg-notice-brand {
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  border-color: #cce6c4;
+}
+
+.msg-notice-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-notice-action {
+  flex: none;
+}
+
+/* --- Tables --------------------------------------------------------------- */
+
+.msg-table-wrap {
+  /* Scrolls WITHIN a labelled container, so a wide operational table never
+     causes a horizontal scroll on the page itself. */
+  overflow-x: auto;
+  border-radius: var(--radius-sm);
+}
+
+.msg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.msg-table th {
+  text-align: left;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.6rem 0.75rem;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.msg-table td {
+  padding: 0.7rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.msg-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.msg-table tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.msg-table-clickable tbody tr {
+  cursor: pointer;
+}
+
+/* --- Rows ----------------------------------------------------------------- */
+
+.msg-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.9rem;
+  padding: 0.8rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.msg-row:last-child {
+  border-bottom: 0;
+}
+
+.msg-row-tight {
+  padding: 0.5rem 0;
+}
+
+.msg-row-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-row small {
+  display: block;
+  color: var(--muted);
+  margin-top: 0.15rem;
+  font-size: 0.8rem;
+}
+
+.msg-score {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--brand-dark);
+  color: var(--accent-fg);
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+/* --- States: loading, empty, error, permission, pending ------------------- */
+
+.msg-state {
+  text-align: center;
+  padding: 2.5rem 1.5rem;
+  color: var(--muted);
+}
+
+.msg-state-icon {
+  margin-bottom: 0.75rem;
+  color: var(--muted);
+}
+
+.msg-state h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+  font-weight: 650;
+  color: var(--fg);
+}
+
+.msg-state p {
+  margin: 0 auto;
+  max-width: 44ch;
+  line-height: 1.55;
+  font-size: 0.85rem;
+}
+
+.msg-state-actions {
+  margin-top: 1.1rem;
+  display: flex;
+  gap: 0.5rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.msg-skeleton {
+  background: linear-gradient(90deg, var(--surface-3) 25%, var(--surface-2) 37%, var(--surface-3) 63%);
+  background-size: 400% 100%;
+  border-radius: var(--radius-sm);
+  animation: msg-shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes msg-shimmer {
+  0% {
+    background-position: 100% 50%;
+  }
+
+  100% {
+    background-position: 0 50%;
+  }
+}
+
+.msg-spin {
+  animation: msg-rotate 0.9s linear infinite;
+}
+
+@keyframes msg-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* --- Source badge and freshness ------------------------------------------
+   Every panel that shows another product's data carries one of these. "Books,
+   read 4 seconds ago" is the difference between a number an agent can promise
+   a customer and a number they should check. */
+
+.msg-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.msg-source strong {
+  color: var(--brand-dark);
+  font-weight: 650;
+}
+
+.msg-freshness {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+/* --- Forms ---------------------------------------------------------------- */
+
+.msg-field {
+  display: block;
+  margin-bottom: 0.9rem;
+}
+
+.msg-field > label {
+  display: block;
+  font-size: 0.82rem;
+  font-weight: 650;
+  margin-bottom: 0.3rem;
+}
+
+.msg-field-hint {
+  display: block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  margin-bottom: 0.35rem;
+  line-height: 1.45;
+}
+
+.msg-field-error {
+  display: block;
+  color: var(--danger);
+  font-size: 0.78rem;
+  margin-top: 0.3rem;
+}
+
+.msg-input,
+.msg-select,
+.msg-textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.55rem 0.7rem;
+  font-size: 0.88rem;
+}
+
+.msg-input:disabled,
+.msg-select:disabled,
+.msg-textarea:disabled {
+  background: var(--surface-2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+.msg-textarea {
+  min-height: 96px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+.msg-input[aria-invalid='true'],
+.msg-textarea[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.msg-filters {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.msg-filters .msg-input,
+.msg-filters .msg-select {
+  width: auto;
+  min-width: 9rem;
+}
+
+/* --- Chips / segmented controls ------------------------------------------ */
+
+.msg-chips {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.msg-chip {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  padding: 0.3rem 0.7rem;
+  font-size: 0.78rem;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.msg-chip[aria-pressed='true'] {
+  background: var(--brand-soft);
+  border-color: #cce6c4;
+  color: var(--brand-dark);
+}
+
+.msg-count-pill {
+  display: inline-flex;
+  min-width: 1.35rem;
+  justify-content: center;
+  padding: 0 0.35rem;
+  border-radius: 999px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-count-pill-alert {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+/* --- The inbox three-column workspace ------------------------------------ */
+
+.msg-inbox {
+  display: grid;
+  grid-template-columns: 20rem minmax(0, 1fr) 20rem;
+  gap: 1rem;
+  align-items: start;
+}
+
+@media (max-width: 1400px) {
+  .msg-inbox {
+    grid-template-columns: 18rem minmax(0, 1fr);
+  }
+
+  /* On tablet the context panel drops below the thread rather than squeezing
+     both into unreadable columns. */
+  .msg-inbox-context {
+    grid-column: 1 / -1;
+  }
+
+  .msg-inbox-context .msg-stack {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+}
+
+@media (max-width: 860px) {
+  .msg-inbox {
+    grid-template-columns: 1fr;
+  }
+
+  .msg-inbox-context .msg-stack {
+    grid-template-columns: 1fr;
+  }
+
+  /* On a phone the list and the thread are separate ROUTES, not two columns.
+     `data-mobile-hidden` is set by the page from the URL. */
+  .msg-inbox [data-mobile-hidden='true'] {
+    display: none;
+  }
+}
+
+.msg-conversation-list {
+  display: grid;
+  gap: 0.3rem;
+  max-height: calc(100vh - 16rem);
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
+.msg-conversation-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 0.7rem 0.75rem;
+  transition: background 0.12s ease;
+}
+
+.msg-conversation-item:hover {
+  background: var(--surface-2);
+}
+
+.msg-conversation-item[aria-current='true'] {
+  background: var(--brand-soft);
+  border-color: #b9dfae;
+}
+
+.msg-conversation-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.msg-conversation-top strong {
+  font-size: 0.87rem;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-conversation-preview {
+  display: block;
+  margin-top: 0.2rem;
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-conversation-meta {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin-top: 0.35rem;
+  flex-wrap: wrap;
+}
+
+/* --- The thread ----------------------------------------------------------- */
+
+.msg-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  max-height: calc(100vh - 26rem);
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+
+.msg-bubble {
+  max-width: min(90%, 44rem);
+  padding: 0.75rem 0.9rem;
+  border-radius: 0.9rem;
+  background: var(--surface-3);
+  font-size: 0.88rem;
+  line-height: 1.55;
+  /* An incoming message arrives with a short fade rather than a jump. 160ms,
+     inside the brief's 120–200ms band, and disabled under reduced motion by
+     the global rule. */
+  animation: msg-arrive 0.16s ease-out;
+}
+
+@keyframes msg-arrive {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.msg-bubble-outbound {
+  margin-left: auto;
+  background: var(--brand-soft);
+  border: 1px solid #d6ecce;
+}
+
+.msg-bubble-draft {
+  margin-left: auto;
+  background: #fff;
+  border: 1px dashed #b9dfae;
+}
+
+.msg-bubble-note {
+  /* Internal notes look DIFFERENT, not similar-but-tinted. Amber, dashed,
+     left-aligned, labelled. A note that looks like a message is a note that
+     gets sent to a customer. */
+  max-width: min(90%, 44rem);
+  background: var(--warning-bg);
+  border: 1px dashed #e0c68f;
+  color: #4a3200;
+}
+
+.msg-bubble-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.45rem;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.msg-bubble-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* --- Composer ------------------------------------------------------------- */
+
+.msg-composer {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+}
+
+.msg-composer-tools {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.6rem;
+}
+
+.msg-composer-actions {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+.msg-composer-disabled {
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+/* --- Business context panel ---------------------------------------------- */
+
+.msg-context {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  background: var(--surface);
+}
+
+.msg-context-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.msg-context-head h3 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--muted);
+}
+
+.msg-context-value {
+  display: block;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-definition-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 0.75rem;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
+.msg-definition-list dt {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.msg-definition-list dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* --- Evidence list (why this draft / why this suggestion) ----------------- */
+
+.msg-evidence {
+  display: grid;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+}
+
+.msg-evidence-item {
+  display: grid;
+  gap: 0.1rem;
+  padding: 0.5rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.msg-evidence-item strong {
+  font-weight: 650;
+}
+
+.msg-evidence-item small {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+/* --- Funnel -------------------------------------------------------------- */
+
+.msg-funnel {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.msg-funnel-row {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+
+@media (max-width: 560px) {
+  .msg-funnel-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+}
+
+.msg-funnel-label {
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.msg-funnel-track {
+  background: var(--surface-3);
+  border-radius: 0.35rem;
+  overflow: hidden;
+  height: 1.5rem;
+}
+
+.msg-funnel-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #64c843, #25b003);
+  border-radius: 0.35rem;
+  transition: width 0.2s ease;
+}
+
+.msg-funnel-value {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* --- Journey canvas ------------------------------------------------------ */
+
+.msg-canvas {
+  background-color: #fbfdfb;
+  background-image: radial-gradient(#dbe6dc 1px, transparent 1px);
+  background-size: 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  min-height: 24rem;
+  overflow-x: auto;
+}
+
+.msg-nodes {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.msg-node {
+  background: var(--surface);
+  border: 1px solid #b9dcae;
+  border-radius: var(--radius-sm);
+  padding: 0.85rem;
+  min-height: 6.5rem;
+  font-size: 0.82rem;
+  position: relative;
+}
+
+.msg-node-eyebrow {
+  display: block;
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.msg-node b {
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.88rem;
+}
+
+.msg-node p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.msg-node-approval {
+  border-color: #ebd19b;
+  background: #fffaf0;
+}
+
+.msg-node-failure {
+  border-color: #eec7cc;
+  background: var(--danger-bg);
+}
+
+.msg-node-invalid {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 2px rgb(166 43 57 / 12%);
+}
+
+/* A node lighting up as a run reaches it. One 180ms flash, not a loop. */
+.msg-node-active {
+  animation: msg-node-flash 0.18s ease-out;
+  border-color: var(--brand);
+}
+
+@keyframes msg-node-flash {
+  from {
+    background: var(--brand-soft);
+  }
+}
+
+/* --- Template preview ---------------------------------------------------- */
+
+.msg-preview {
+  background: #f0f5f0;
+  border-radius: 1.1rem;
+  padding: 0.9rem;
+}
+
+.msg-preview-message {
+  background: #fff;
+  border-radius: 0.8rem;
+  padding: 0.9rem;
+  margin-top: 0.7rem;
+  font-size: 0.87rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  box-shadow: 0 1px 3px rgb(20 40 25 / 8%);
+}
+
+/* --- Charts -------------------------------------------------------------- */
+
+.msg-chart {
+  width: 100%;
+  overflow: visible;
+}
+
+.msg-legend {
+  display: flex;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+
+.msg-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.msg-legend-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* --- Drawer -------------------------------------------------------------- */
+
+.msg-drawer-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgb(14 32 22 / 40%);
+  border: 0;
+  padding: 0;
+  z-index: 70;
+}
+
+.msg-drawer {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(34rem, 100%);
+  background: var(--surface);
+  z-index: 71;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+  animation: msg-slide-in 0.18s ease-out;
+}
+
+@keyframes msg-slide-in {
+  from {
+    transform: translateX(1.5rem);
+    opacity: 0.6;
+  }
+}
+
+.msg-drawer-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 1.1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.msg-drawer-head h2 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 650;
+}
+
+.msg-drawer-head p {
+  margin: 0.2rem 0 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.msg-drawer-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.25rem;
+}
+
+.msg-drawer-foot {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+/* --- Timeline (delivery events, journey steps, consent history) ---------- */
+
+.msg-timeline {
+  display: grid;
+  gap: 0;
+  font-size: 0.83rem;
+}
+
+.msg-timeline-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.75rem;
+  padding-bottom: 0.9rem;
+  position: relative;
+}
+
+.msg-timeline-row:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 1.1rem;
+  bottom: 0;
+  width: 1px;
+  background: var(--border);
+}
+
+.msg-timeline-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--brand);
+  margin-top: 0.3rem;
+  flex: none;
+  z-index: 1;
+  border: 2px solid var(--surface);
+  box-shadow: 0 0 0 1px var(--brand);
+}
+
+.msg-timeline-dot-danger {
+  background: var(--danger);
+  box-shadow: 0 0 0 1px var(--danger);
+}
+
+.msg-timeline-dot-warning {
+  background: var(--warning);
+  box-shadow: 0 0 0 1px var(--warning);
+}
+
+.msg-timeline-dot-muted {
+  background: var(--border-strong);
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.msg-timeline-body strong {
+  display: block;
+  font-weight: 650;
+}
+
+.msg-timeline-body small {
+  display: block;
+  color: var(--muted);
+  margin-top: 0.1rem;
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+/* --- Utilities ----------------------------------------------------------- */
+
+.msg-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+.msg-muted {
+  color: var(--muted);
+}
+
+.msg-small {
+  font-size: 0.8rem;
+}
+
+.msg-spacer {
+  flex: 1;
+}
+
+.msg-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.msg-nowrap {
+  white-space: nowrap;
+}
+
+.msg-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Reduced motion.
+
+   The product area declares its own transitions, so it has to honour the
+   preference itself rather than relying on the shell's block — a user who has
+   asked the operating system for less movement has usually asked for a reason,
+   and "it only stops moving on some screens" is not honouring it.
+
+   The spinner keeps turning, at one revolution, because a Send button with no
+   pending indication is a button somebody presses twice.
+   --------------------------------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  .msg-ui *,
+  .msg-drawer,
+  .msg-drawer-scrim,
+  .msg-funnel-fill,
+  .msg-chip,
+  .msg-button,
+  .msg-conversation-item {
+    transition: none !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

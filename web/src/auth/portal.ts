@@ -19,7 +19,7 @@ import {
   resolveLoginPortalOrigin,
   resolveProductKeyFromHost,
 } from './hostnames'
-import { clearAllTokens, getAuthToken, getSesKey, saveSession } from './tokens'
+import { clearAllTokens, clearSession, getAuthToken, getSesKey, saveSession } from './tokens'
 import { getApiBaseUrl } from '../config'
 
 /** Portal convention for "come back here afterwards". */
@@ -303,17 +303,27 @@ let mintInFlight: Promise<string> | null = null
  * A valid ses_key, minting one from the auth_token when needed.
  *
  * Concurrent callers share one request: a burst of API calls on a cold session
- * would otherwise mint a handful of keys and keep only the last.
+ * would otherwise mint a handful of keys and keep only the last. The inbox
+ * opens five panels at once, so this matters here more than it did when the
+ * app had one screen.
  *
- * There is no refresh path here on purpose. The key lives in memory and
- * `getSesKey()` returns null once it expires, so the next call simply mints a
- * fresh one from the long-lived auth_token — which is what a refresh would
- * achieve. `/seskey/refresh` becomes worth wiring up when the app starts making
- * enough API calls for the extra round trip to matter.
+ * `force` discards the in-memory key first. It exists for exactly one caller:
+ * the API client's single retry after a 401. A key can be revoked server-side
+ * before it expires locally, and without `force` that retry would present the
+ * same dead key and fail identically — signing the user out for something a
+ * fresh mint fixes.
+ *
+ * There is still no `/seskey/refresh` round trip here. The key lives in memory
+ * and expires on its own, so the next call mints a fresh one from the
+ * long-lived auth_token — which is what a refresh would achieve.
  */
-export async function ensureSesKey(): Promise<string> {
-  const existing = getSesKey()
-  if (existing) return existing
+export async function ensureSesKey(force = false): Promise<string> {
+  if (force) {
+    clearSession()
+  } else {
+    const existing = getSesKey()
+    if (existing) return existing
+  }
 
   if (!mintInFlight) {
     mintInFlight = requestSesKey('/seskey').finally(() => {
