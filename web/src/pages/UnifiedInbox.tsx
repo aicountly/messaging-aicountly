@@ -1010,8 +1010,8 @@ function ReplyComposer({
   return (
     <div className="msg-composer">
       {/* The assistant's tools. Each is shown only where the company permits
-          it AND a model is configured — a button that always fails is worse
-          than no button. */}
+          it AND AI Pulse says it can answer — a button that always fails is
+          worse than no button. */}
       {aiAvailable && (
         <div className="msg-composer-tools">
           {aiPermitted.draft && (

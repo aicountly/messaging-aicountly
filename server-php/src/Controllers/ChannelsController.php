@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Aicountly\Api\Controllers;
 
+use Aicountly\Api\Ai\AiClient;
 use Aicountly\Api\Audit;
 use Aicountly\Api\Channels\Capability;
 use Aicountly\Api\Channels\ChannelConnection;
@@ -422,6 +423,10 @@ final class ChannelsController extends Controller
     /**
      * Integration cards. A pending integration is never shown as connected.
      *
+     * AI Pulse is the one card read live rather than from configuration:
+     * there is nothing to configure here for it, so "connected" means Pulse
+     * said it can run Messaging's AI, and "unavailable" says why it cannot.
+     *
      * @return list<array<string, mixed>>
      */
     private static function integrations(\Aicountly\Api\Context $ctx, \Aicountly\Api\Auth $auth, bool $mayManage): array
@@ -436,12 +441,28 @@ final class ChannelsController extends Controller
             'drive'        => ['label' => 'Drive', 'purpose' => 'Document storage for attachments.'],
             'reach'        => ['label' => 'Reach', 'purpose' => 'Campaign planning. Messaging does not rebuild it.'],
             'billing'      => ['label' => 'Billing', 'purpose' => 'Dues and collection schedules.'],
-            'ai'           => ['label' => 'Console (AI)', 'purpose' => 'Model credentials and AI governance.'],
+            'ai'           => ['label' => 'AI Pulse', 'purpose' => 'Runs the assistant — drafts, translation, summaries and '
+                . 'classification — on the model Console binds to it. Messaging holds no model key.'],
         ];
 
         $cards = [];
         foreach ($products as $key => $meta) {
             $enabled = Features::enabled($key);
+            if ($key === 'ai' && $enabled) {
+                $ai = AiClient::status($auth);
+                $cards[] = [
+                    'product'     => $key,
+                    'label'       => 'Aicountly ' . $meta['label'],
+                    'purpose'     => $meta['purpose'],
+                    'state'       => $ai['available'] ? 'connected' : 'unavailable',
+                    'state_label' => $ai['available'] ? 'Connected' : 'Unavailable',
+                    'remedy'      => $ai['available'] ? null : ($mayManage
+                        ? trim((string) $ai['reason'] . ' ' . (string) ($ai['admin_hint'] ?? ''))
+                        : (string) $ai['reason']),
+                ];
+
+                continue;
+            }
             $cards[] = [
                 'product' => $key,
                 'label'   => 'Aicountly ' . $meta['label'],

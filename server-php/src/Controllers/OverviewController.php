@@ -39,6 +39,7 @@ final class OverviewController extends Controller
         $prior = MetricsService::overview($ctx, $previous);
 
         $suggestions = NextBestActions::for($ctx, $auth);
+        $ai = AiClient::status($auth);
 
         Http::data([
             'period'          => $period->describe(),
@@ -57,8 +58,12 @@ final class OverviewController extends Controller
             'suggestions'     => $suggestions,
             'suggestions_narrative' => NextBestActions::narrate($ctx, $auth, $suggestions),
             'ai'              => [
-                'available' => AiClient::isAvailable(),
-                'status'    => \Aicountly\Api\Ai\ConsoleCredentials::status(),
+                'available' => $ai['available'],
+                'status'    => [
+                    'reason'     => $ai['reason'],
+                    // Names configuration, so only for somebody who could act on it.
+                    'admin_hint' => Permissions::allows($ctx, $auth, 'messaging.ai.manage') ? $ai['admin_hint'] : null,
+                ],
             ],
             'queue'           => Permissions::allows($ctx, $auth, 'messaging.dispatch.manage')
                 ? DispatchService::queueHealth($ctx)

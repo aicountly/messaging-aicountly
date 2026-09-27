@@ -443,3 +443,31 @@ test('the session key is never written to storage', () => {
     )
   }
 })
+
+test('the browser never calls AI Pulse or a model provider directly', () => {
+  // Messaging's AI runs on its own server, which calls AI Pulse as the
+  // signed-in user. The gateway is server to server only, and a model key in
+  // a bundle is a key published to everyone who opens the page.
+  const forbidden = [
+    '/api/ai/v1/',
+    'X-Pulse-Product',
+    'X-Pulse-Service-Key',
+    'generativelanguage.googleapis.com',
+    'api.openai.com',
+    'api.anthropic.com',
+  ]
+  for (const file of sourceFiles()) {
+    const source = readFileSync(file, 'utf8')
+    for (const needle of forbidden) {
+      assert.ok(!source.includes(needle), `${file} must not reach ${needle} from the browser`)
+    }
+  }
+
+  const pkg = JSON.parse(readFileSync(join(root, '..', 'package.json'), 'utf8'))
+  for (const name of Object.keys({ ...pkg.dependencies, ...pkg.devDependencies })) {
+    assert.ok(
+      !/^(openai$|@anthropic-ai\/|@google\/(generative-ai|genai)$)/.test(name),
+      `no model SDK belongs in the bundle: ${name}`,
+    )
+  }
+})

@@ -73,8 +73,9 @@ final class ChannelConnection
      * it out of backups, and means a compromised database yields the names of
      * secrets rather than the secrets.
      *
-     * Where Console manages the credential, the ref is `console:<module>` and
-     * resolution goes there instead — same principle, one more hop.
+     * Where Console manages the credential, the ref is `console:<name>` and
+     * resolution goes there instead — same principle, one more hop. See
+     * ConsoleSecrets.
      */
     public function credential(): string
     {
@@ -82,9 +83,8 @@ final class ChannelConnection
             return '';
         }
         if (str_starts_with($this->credentialRef, 'console:')) {
-            // Console-managed provider credentials resolve through the same path
-            // as AI keys. Nothing is written to disk. See Ai/ConsoleCredentials.
-            return \Aicountly\Api\Ai\ConsoleCredentials::providerSecret(substr($this->credentialRef, 8));
+            // Console-managed provider credentials. Nothing is written to disk.
+            return ConsoleSecrets::get(substr($this->credentialRef, 8));
         }
 
         return Env::get($this->credentialRef);
@@ -96,7 +96,7 @@ final class ChannelConnection
             return '';
         }
         if (str_starts_with($this->webhookSecretRef, 'console:')) {
-            return \Aicountly\Api\Ai\ConsoleCredentials::providerSecret(substr($this->webhookSecretRef, 8));
+            return ConsoleSecrets::get(substr($this->webhookSecretRef, 8));
         }
 
         return Env::get($this->webhookSecretRef);

@@ -24,6 +24,11 @@ declare(strict_types=1);
  *   Appts      /api/v1/bookings
  *   Drive      /api/v1/documents
  *   Reach      /api/v1/campaigns
+ *   AI Pulse   /api/ai/v1/status, /api/ai/v1/generate — the AI gateway, with a
+ *              canned answer; it checks the headers Pulse checks
+ *   Console    /api/ai/credentials/resolve — channel secrets only (`channel:*`);
+ *              an AI module is refused the way Console refuses a product whose
+ *              AI runs through Pulse
  *
  * ## Failure is switched by the request, not by a setup step
  *
@@ -287,6 +292,92 @@ if ($path === '/api/v1/campaigns') {
         'data' => [['campaign_uuid' => 'cm000000-0000-4000-8000-000000000001', 'name' => 'Monsoon offer', 'status' => 'running']],
         'meta' => ['total' => 1, 'limit' => 20, 'offset' => 0],
     ]);
+}
+
+// ---------------------------------------------------------------------------
+// AI Pulse — the AI gateway. Server to server: the product names itself and
+// sends the user's session (or, with no user, the service key).
+// ---------------------------------------------------------------------------
+
+/** A request header, case-insensitively. */
+function header_value(string $name): string
+{
+    foreach (function_exists('getallheaders') ? (getallheaders() ?: []) : [] as $key => $value) {
+        if (strcasecmp((string) $key, $name) === 0) {
+            return trim((string) $value);
+        }
+    }
+
+    return '';
+}
+
+function pulse_caller(): void
+{
+    if (header_value('X-Pulse-Product') !== 'messaging') {
+        send(400, ['status' => 0, 'code' => 'product_required', 'message' => 'Send X-Pulse-Product.', 'retryable' => false]);
+    }
+    if (preg_match('/^Bearer\s+\S+/', header_value('Authorization')) !== 1 && header_value('X-Pulse-Service-Key') === '') {
+        send(401, ['status' => 0, 'code' => 'unauthenticated', 'message' => 'Send a session or a service key.', 'retryable' => false]);
+    }
+}
+
+if ($path === '/api/ai/v1/status') {
+    pulse_caller();
+    send(200, ['status' => 1, 'data' => [
+        'enabled'   => true,
+        'available' => true,
+        'reason'    => null,
+        'tiers'     => ['economy' => true, 'strong' => false],
+        'caller'    => ['product' => 'messaging', 'auth' => header_value('Authorization') !== '' ? 'user' : 'service'],
+    ]]);
+}
+
+if ($path === '/api/ai/v1/generate' && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
+    pulse_caller();
+    $request = json_decode((string) file_get_contents('php://input'), true);
+    if (!is_array($request) || !is_string($request['feature'] ?? null) || preg_match('/^[a-z0-9][a-z0-9_.:-]{1,63}$/', $request['feature']) !== 1) {
+        send(422, ['status' => 0, 'code' => 'invalid_request', 'message' => 'feature is required.', 'retryable' => false, 'detail' => ['field' => 'feature']]);
+    }
+
+    $wantsJson = ($request['response_format']['type'] ?? 'text') === 'json';
+    send(200, ['status' => 1, 'data' => [
+        'id'          => 'a11ce000-0000-4000-8000-00000000c0de',
+        // Plain, fact-free text, so a draft built from it trips none of the
+        // product's own checks. The tests are about the route, not the prose.
+        'text'        => $wantsJson ? '{}' : 'Thank you for your message. We are looking into it and will reply shortly.',
+        'json'        => $wantsJson ? new stdClass() : null,
+        'tool_calls'  => [],
+        'stop_reason' => 'end',
+        'model'       => 'stub-flash',
+        'provider'    => 'stub',
+        'tier'        => (string) ($request['tier'] ?? 'strong'),
+        'usage'       => ['input_tokens' => 100, 'output_tokens' => 20, 'cached_input_tokens' => 0],
+        'cost_usd'    => null,
+        'latency_ms'  => 5,
+        'attempts'    => 1,
+        'replayed'    => false,
+        'cached'      => false,
+    ]]);
+}
+
+// ---------------------------------------------------------------------------
+// Console — a channel secret kept by reference. Never an AI key: Messaging's
+// AI runs through Pulse, and Console refuses the AI modules of such a product.
+// ---------------------------------------------------------------------------
+
+if ($path === '/api/ai/credentials/resolve') {
+    if (header_value('Authorization') !== 'Bearer test-console-service-key-0123456789') {
+        send(401, ['status' => 0, 'message' => 'Unauthorised.']);
+    }
+    $module = (string) ($query['module'] ?? '');
+    if (!str_starts_with($module, 'channel:')) {
+        send(409, ['status' => 0, 'code' => 'uses_ai_pulse', 'message' => 'This product runs its AI through AI Pulse.']);
+    }
+
+    send(200, ['status' => 1, 'data' => [
+        'credentials' => [['api_key' => 'stub-secret-for-' . substr($module, 8)]],
+        'ttl_seconds' => 300,
+    ]]);
 }
 
 send(404, ['error' => ['code' => 'not_found', 'message' => 'The stub does not serve ' . $path]]);

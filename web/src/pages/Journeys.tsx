@@ -686,9 +686,9 @@ function NaturalLanguageBuilder({
       }
     >
       {!aiAvailable && (
-        <Notice tone="warning" title="The assistant is not configured">
-          An instruction cannot be interpreted without a model. You can still start from one of the operational
-          journeys on the previous screen and edit it.
+        <Notice tone="warning" title="The assistant is not available">
+          {session?.ai.reason ? `${session.ai.reason} ` : ''}An instruction cannot be interpreted without it. You can
+          still start from one of the operational journeys on the previous screen and edit it.
         </Notice>
       )}
 

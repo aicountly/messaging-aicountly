@@ -690,6 +690,55 @@ check('health reports usability from the database, not from the integrations', s
 });
 
 // ---------------------------------------------------------------------------
+// The assistant, through AI Pulse. With the stub up, Pulse answers; with it
+// down, the assistant says it is unavailable and nothing else is affected.
+// ---------------------------------------------------------------------------
+
+check('the assistant says it runs through AI Pulse, and whether Pulse can answer', static function () use ($router, $siblings): void {
+    $response = call($router, 'GET', 'v1/ai/status');
+    assertStatus(200, $response, 'AI status');
+
+    $data = $response['body']['data'] ?? [];
+    assertSame('AI Pulse', $data['powered_by'] ?? null, 'the status names AI Pulse');
+    assertFalse(array_key_exists('model', $data) || array_key_exists('provider', $data),
+        'and reports no model or provider of Messaging\'s own, because Pulse picks the model');
+    assertSame($siblings === 'up', (bool) ($data['available'] ?? null), 'available exactly when Pulse answers');
+    if ($siblings === 'down') {
+        assertTrue((string) ($data['reason'] ?? '') !== '', 'and when it does not, it says why');
+    }
+
+    $session = call($router, 'GET', 'v1/session');
+    assertStatus(200, $session, 'the shell bootstrap');
+    assertSame($siblings === 'up', (bool) ($session['body']['data']['ai']['available'] ?? null),
+        'the shell agrees, so the composer shows its AI tools only when they can work');
+});
+
+check('a draft is written through AI Pulse, or refused honestly when Pulse cannot be reached', static function () use ($router, $conversationUuid, $siblings): void {
+    $response = call($router, 'POST', 'v1/ai/draft', ['conversation_uuid' => $conversationUuid], ['tone' => 'neutral']);
+
+    if ($siblings === 'up') {
+        assertStatus(200, $response, 'the draft');
+        $data = $response['body']['data'] ?? [];
+        assertTrue((string) ($data['draft'] ?? '') !== '', 'there is draft text');
+        assertSame('suggestion', $data['kind'] ?? null, 'labelled a suggestion');
+
+        $run = Db::first(
+            'SELECT status, pulse_task_id, model FROM messaging_ai_runs WHERE ai_run_uuid = :uuid',
+            ['uuid' => (string) ($data['ai_run_uuid'] ?? '')],
+        );
+        assertSame('ok', $run['status'] ?? null, 'the run is logged');
+        assertSame('a11ce000-0000-4000-8000-00000000c0de', $run['pulse_task_id'] ?? null, 'with Pulse\'s id for the call');
+
+        return;
+    }
+
+    assertStatus(503, $response, 'no Pulse, no draft');
+    assertSame('ai_unavailable', $response['body']['error']['code'] ?? null, 'reported as the assistant being unavailable');
+    assertTrue(str_contains((string) ($response['body']['error']['message'] ?? ''), 'Write the reply yourself'),
+        'in the words the inbox always used');
+});
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

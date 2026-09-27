@@ -21,8 +21,8 @@ use Aicountly\Api\Permissions;
  * `kind: verified_fact` because that is what it is: "12 payment reminders are
  * waiting for review" is a count, not a prediction.
  *
- * The model's only role is optional prose (`narrate()`), and where no model is
- * configured the rule-based sentence is used instead. NOTHING IS FABRICATED
+ * The model's only role is optional prose (`narrate()`), and where AI is not
+ * available the rule-based sentence is used instead. NOTHING IS FABRICATED
  * WHEN A MODEL IS UNAVAILABLE — the suggestions are all still there, because
  * they never needed one.
  *
@@ -506,19 +506,23 @@ final class NextBestActions
     /**
      * Optional prose over the rule-based suggestions.
      *
-     * Where no model is configured this returns null and the UI shows the
+     * Where AI is not available this returns null and the UI shows the
      * rule-based titles, which were never dependent on a model. The brief's
      * "do not manufacture predictions when a suitable model is unavailable" is
      * satisfied by there being nothing to manufacture.
+     *
+     * The Command Centre re-reads this every minute while it is open, so the
+     * same counts are answered from AI Pulse's cache for five minutes rather
+     * than asking the model again. New counts are a new question.
      *
      * @param list<array<string, mixed>> $suggestions
      */
     public static function narrate(Context $ctx, Auth $auth, array $suggestions): ?array
     {
-        if ($suggestions === [] || !AiClient::isAvailable()) {
+        if ($suggestions === [] || !(bool) (Settings::for($ctx)['ai_suggest_allowed'] ?? false)) {
             return null;
         }
-        if (!(bool) (Settings::for($ctx)['ai_suggest_allowed'] ?? false)) {
+        if (!AiClient::isAvailable($auth)) {
             return null;
         }
 
@@ -537,7 +541,15 @@ final class NextBestActions
         - Two sentences at most. No preamble, no bullet points.
         PROMPT;
 
-        $result = AiClient::complete($system, implode("\n", $facts), 180);
+        $result = AiClient::complete(
+            $ctx,
+            $auth,
+            AiClient::FEATURE_NARRATE_ACTIONS,
+            $system,
+            implode("\n", $facts),
+            180,
+            ['cache_ttl_seconds' => 300],
+        );
         AiClient::logRun($ctx, $auth, \Aicountly\Api\Support\Uuid::v4(), 'narrate_actions', null, $result);
 
         if (!$result['ok']) {

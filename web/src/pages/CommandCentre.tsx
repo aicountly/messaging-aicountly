@@ -260,8 +260,8 @@ function NextBestMoves({ overview, onDismissed }: { overview: OverviewResponse; 
         </span>
       }
     >
-      {/* The narration, where a model is configured, labelled as prose over
-          counts the model did not produce. Absent entirely without one, and
+      {/* The narration, where AI Pulse can answer, labelled as prose over
+          counts the model did not produce. Absent entirely without it, and
           the suggestions below are unaffected. */}
       {overview.suggestions_narrative && (
         <p style={{ margin: '0 0 1rem', lineHeight: 1.6 }}>

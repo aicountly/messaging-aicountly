@@ -605,7 +605,7 @@ function AiPermissionsPanel({
   return (
     <Panel
       title="AI permissions"
-      subtitle="What Aicountly Messaging AI may do"
+      subtitle="What Aicountly Messaging AI may do · Powered by AI Pulse"
       action={
         <span className="msg-source">
           <Sparkles size={13} aria-hidden />

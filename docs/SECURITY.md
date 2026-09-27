@@ -171,10 +171,13 @@ withdrawal with its evidence.
 
 ## AI
 
-Messaging holds no model provider key. Console holds the configuration and
-issues a short-lived credential, so AI is governed in one place for the fleet.
-With Console unconfigured every AI feature reports itself unavailable and names
-that as the reason.
+Messaging holds no model key and calls no model provider. Every AI task goes to
+the AI Pulse gateway, server to server, with the signed-in user's own session
+and the company; Pulse verifies both with Manage, runs the model Console binds
+to it, and applies the per-company and per-product allowances. The browser
+never talks to Pulse or to a model. When Pulse cannot answer, every AI feature
+reports itself unavailable and says why — there is no fallback model. Tests
+fail if a model provider host, SDK or model key reappears in the product.
 
 **Inbound messages and documents are untrusted data.** They cannot redefine
 system instructions, reveal secrets or reach a tool. `AiClient::untrusted()`

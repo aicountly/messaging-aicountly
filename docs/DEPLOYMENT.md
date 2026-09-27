@@ -109,6 +109,17 @@ Books is not connected; it does not mean the inbox breaks. Nothing is on by
 default except the features Messaging owns outright, and `/api/health` names the
 missing key for each one.
 
+AI needs nothing in `api/.env`: it runs through AI Pulse as the signed-in user,
+and the Pulse host follows this one (`PULSE_API_ORIGIN` only to point
+elsewhere). An `api/.env` from before AI moved to Pulse may still hold
+`CONSOLE_API_URL` and `CONSOLE_SERVICE_KEY`; keep them only if a channel
+connection uses a `console:<name>` reference, otherwise delete both:
+
+```sql
+SELECT cmp_id, connection_uuid FROM messaging_channel_connections
+WHERE credential_ref LIKE 'console:%' OR webhook_secret_ref LIKE 'console:%';
+```
+
 Two of the values above are not optional in the same way:
 
 - **`MESSAGING_WEBHOOK_BASE_URL` is a security control.** Some providers sign

@@ -159,10 +159,12 @@ cd server-php && tests/run.sh      # needs a reachable PostgreSQL
 cd web && npm run test:ui
 ```
 
-`tests/run.sh` writes a **test** `.env` (overwriting any local one), applies the
+`tests/run.sh` writes a **test** `.env` (overwriting any local one), runs the
+AI Pulse suite (`tests/pulse.php` — no database, no network), applies the
 migrations twice to prove they are idempotent, starts a local stub standing in
-for the sibling products, and runs the domain suite plus the HTTP suite — the
-latter twice, once with the siblings answering and once with the stub stopped.
+for the sibling products and AI Pulse, and runs the domain suite plus the HTTP
+suite — the latter twice, once with the siblings answering and once with the
+stub stopped.
 Override the database with `TEST_DB_HOST`, `TEST_DB_PORT`, `TEST_DB_NAME`,
 `TEST_DB_USER`, `TEST_DB_PASS`.
 
@@ -218,6 +220,10 @@ Two things about it are worth knowing without reading it:
   *name* of the environment variable; the adapter resolves the value at the
   moment of the call, and the API only ever returns a `credential_present`
   boolean.
+- **AI needs no key.** Every AI feature runs through AI Pulse (Powered by AI
+  Pulse) as the signed-in user; Pulse picks the model. Messaging holds no model
+  key and has no fallback model. `PULSE_API_ORIGIN` exists only to point at a
+  different Pulse.
 
 ## Deployment
 

@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Aicountly\Api\Controllers;
 
 use Aicountly\Api\Ai\AiClient;
-use Aicountly\Api\Ai\ConsoleCredentials;
 use Aicountly\Api\Ai\DraftAssistant;
 use Aicountly\Api\Domain\ConversationService;
 use Aicountly\Api\Http;
@@ -18,6 +17,9 @@ use Aicountly\Api\Http;
  * the caller must then save as a draft and a human must then approve — three
  * separate steps, deliberately, because collapsing them is how an AI ends up
  * messaging a customer unreviewed.
+ *
+ * The model behind them runs in AI Pulse (see Ai/AiClient); these are
+ * Messaging's own features, with Messaging's own prompts, checks and words.
  */
 final class AiController extends Controller
 {
@@ -25,13 +27,14 @@ final class AiController extends Controller
     {
         [$auth, $ctx] = self::enter('messaging.conversations.view');
 
-        $status = ConsoleCredentials::status();
+        $status = AiClient::status($auth);
         $settings = \Aicountly\Api\Domain\Settings::for($ctx);
 
         Http::data([
-            'available'  => AiClient::isAvailable(),
-            'provider'   => $status['provider'],
-            'model'      => $status['model'],
+            'available'  => $status['available'],
+            // Pulse picks the model (Console binds it to Pulse), so there is no
+            // provider or model of Messaging's own to report.
+            'powered_by' => 'AI Pulse',
             'reason'     => $status['reason'],
             // Only an administrator gets the configuration hint, because it
             // names environment variables.
