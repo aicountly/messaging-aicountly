@@ -19,7 +19,8 @@ distinction is not already clear.
 | **Drive / Vault** | A document and its malware-scan verdict | `DRIVE` | `DRIVE_SERVICE_KEY`, `DRIVE_API_BASE` |
 | **Reach** | Campaign context, so Messaging does not rebuild campaign planning | `REACH` | `REACH_SERVICE_KEY`, `REACH_API_BASE` |
 | **Billing** | Subscription and plan context | `BILLING` | `BILLING_SERVICE_KEY` |
-| **Console** | AI model configuration and a short-lived credential | `AI` | `CONSOLE_SERVICE_KEY`, `CONSOLE_API_URL` |
+| **AI Pulse** | Every AI task — drafts, translation, rewrites, summaries, classification, journey proposals, narration — on the model Console binds to Pulse | `AI` (on by default) | `PULSE_API_ORIGIN` (optional); `PULSE_SERVICE_KEY` only for service-key callers |
+| **Console** | A channel secret kept by reference (`console:<name>`), optional | *none* | `CONSOLE_API_URL`, `CONSOLE_SERVICE_KEY` |
 
 Manage has no feature flag because it is the tenant boundary. A deployment
 without it cannot safely serve anybody, so "turning it off" is not a state this
@@ -33,7 +34,11 @@ deployment sets only the service keys.
 **As the user** — `withSession($auth->sesKey())`. Used for everything a screen
 shows a person. Books then applies *its own* permissions to its own data, so a
 user who cannot read a ledger in Books cannot read it through Messaging either.
-This is why `Auth` keeps the caller's `ses_key` at all.
+This is why `Auth` keeps the caller's `ses_key` at all. AI Pulse is called the
+same way: the user's session as Bearer, the company as `cmp_id`, and Pulse
+checks both with Manage before any model runs. Only a sibling product calling
+Messaging with its service key (nobody signed in) makes Messaging use the
+estate service key with Pulse, naming the person as `actor_uuid`.
 
 **As the product** — `withService($actorUuid)`. Used for background work with no
 person behind it: a journey tick, a dispatch worker re-reading an invoice before
@@ -207,4 +212,4 @@ the fleet:
 | A telephony engine | **Voice** |
 | A second address book | **Contacts** |
 | A receivables table | **Books** |
-| An unsolicited central AI service | **Console** governs; Messaging consumes |
+| A model key, a model choice or an AI service of its own | **AI Pulse** runs the model Console binds; Messaging keeps its prompts and checks |

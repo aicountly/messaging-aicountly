@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Aicountly\Api\Controllers;
 
 use Aicountly\Api\Ai\AiClient;
-use Aicountly\Api\Ai\ConsoleCredentials;
 use Aicountly\Api\Ai\DraftAssistant;
 use Aicountly\Api\Audit;
 use Aicountly\Api\Auth;
@@ -35,6 +34,7 @@ final class SettingsController extends Controller
 
         $granted = Permissions::granted($ctx, $auth);
         $settings = Settings::for($ctx);
+        $ai = AiClient::status($auth);
 
         $features = [];
         foreach (Features::all() as $flag => $enabled) {
@@ -70,7 +70,7 @@ final class SettingsController extends Controller
             ],
             'features'    => $features,
             'ai'          => [
-                'available' => AiClient::isAvailable(),
+                'available' => $ai['available'],
                 'permitted' => [
                     'draft'     => (bool) $settings['ai_draft_allowed'],
                     'translate' => (bool) $settings['ai_translate_allowed'],
@@ -78,7 +78,7 @@ final class SettingsController extends Controller
                     'suggest'   => (bool) $settings['ai_suggest_allowed'],
                     'autosend'  => (bool) $settings['ai_autosend_allowed'],
                 ],
-                'reason'    => ConsoleCredentials::status()['reason'],
+                'reason'    => $ai['reason'],
             ],
             'channels'    => self::channelSummary($ctx),
         ]);

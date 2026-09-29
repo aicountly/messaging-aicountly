@@ -300,17 +300,21 @@ jobs:
           # include has to come before the broader .env.* exclude or it would
           # never be reached.
           #
-          # tests/ is excluded for a sharper reason than tidiness:
-          # tests/run.sh WRITES A TEST .env, overwriting whatever is there.
-          # On a production server that would replace the live configuration
-          # with placeholders pointed at a throwaway database. It has no
-          # business being deployed at all.
+          # tests/ is dev-only and must never ship, for a sharper reason than
+          # tidiness: over HTTP its scripts run with the live api/.env —
+          # integration.php DELETEs every messaging_* row for its fixture company
+          # and tests/run.sh REWRITES .env with a throwaway database. It is a
+          # sender-side hide (H), not an --exclude: an --exclude would also
+          # protect a copy an earlier deploy already left on the server, whereas
+          # H leaves that stale copy exposed to --delete, so this deploy removes
+          # it. bin/ and database/ still ship (the migration step and cron need
+          # them); the deployed .htaccess 404s them over HTTP.
           rsync -avz --delete \
             --exclude='.env' \
             --include='.env.example' \
             --exclude='.env.*' \
             --exclude='.git*' \
-            --exclude='tests/' \
+            --filter='H /tests/' \
             --chmod=D755,F644 \
             -e ssh \
             server-php/ "deploy-target:$REMOTE_ROOT/api/"

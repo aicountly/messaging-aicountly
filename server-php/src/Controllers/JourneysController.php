@@ -295,7 +295,8 @@ final class JourneysController extends Controller
      * and returns a definition for somebody to review. The natural-language
      * input cannot reach past the caller's permissions — it selects from a
      * closed vocabulary of OUR starters and OUR templates, and anything outside
-     * that is discarded in AiClient::interpret().
+     * that is discarded in AiClient::interpret(). The model runs in AI Pulse,
+     * as the signed-in user.
      */
     public static function propose(): void
     {
@@ -305,8 +306,8 @@ final class JourneysController extends Controller
         if ($instruction === '') {
             Http::validationFailed('Describe what the journey should do.');
         }
-        if (!AiClient::isAvailable()) {
-            Http::error(503, 'ai_unavailable', 'The assistant is not configured, so an instruction cannot be '
+        if (!AiClient::isAvailable($auth)) {
+            Http::error(503, 'ai_unavailable', 'The assistant is not available, so an instruction cannot be '
                 . 'interpreted. You can still build a journey from one of the starters.', ['retryable' => false]);
         }
 
@@ -336,6 +337,9 @@ final class JourneysController extends Controller
         ];
 
         $interpreted = AiClient::interpret(
+            $ctx,
+            $auth,
+            AiClient::FEATURE_PROPOSE_JOURNEY,
             $instruction,
             array_filter($vocabulary, static fn (array $values) => $values !== []),
             'Choose the journey kind, channel, template and language this instruction describes.',

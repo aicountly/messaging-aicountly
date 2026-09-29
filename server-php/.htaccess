@@ -20,6 +20,17 @@
   RewriteCond %{HTTP:Authorization} .
   RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
 
+  # Only the front controller may answer. Any other real file or folder here
+  # (src/, bin/, tests/, database/, a stray error_log) would otherwise be served
+  # as text or run as PHP with the live .env, so it is a 404. There is no public/
+  # under the API, so the only exceptions are index.php and .well-known/, the
+  # latter kept reachable for certificate renewal. The pattern is relative, with
+  # no RewriteBase like the rules around it, so it holds at <docroot>/api and at
+  # a dedicated vhost root alike; it sits ahead of the front-controller rule.
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule !^(index\.php|\.well-known/.*)?$ - [R=404,L]
+
   # Everything that is not a real file goes to the front controller.
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
@@ -52,3 +63,10 @@
 # The API's .env sits inside the document root, so without this it would be
 # fetchable over HTTP at https://messaging.aicountly.com/api/.env.
 RedirectMatch 404 /\.(?!well-known)
+
+# PHP writes its log to a file literally named error_log in whatever directory a
+# script runs in; on cPanel it is served as plain text and leaks stack traces
+# and any secret an error printed. Refuse it at every depth. Like the dotfile
+# rule above this is mod_alias, so it keeps applying even inside a subdirectory
+# that ships its own .htaccess — where the mod_rewrite guard above would not.
+RedirectMatch 404 /error_log$

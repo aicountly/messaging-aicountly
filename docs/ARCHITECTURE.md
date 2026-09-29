@@ -35,7 +35,7 @@ src/CrossServiceCallContext.php   the re-entry guard
 src/Clients/               one client per sibling product, all live reads
 src/Channels/              one adapter per provider, plus the registry
 src/Domain/                consent, conversations, messages, dispatch, journeys, outcomes
-src/Ai/                    Console credentials, grounding, verification
+src/Ai/                    the AI Pulse client, grounding, verification
 src/Controllers/           thin: authorise, call a service, answer
 database/migrations/       numbered .sql, forward-only, idempotent
 bin/migrate.php            apply pending migrations
@@ -244,10 +244,32 @@ See `books-react-app/docs/CROSS_SERVICE_CALL_RULES.md`.
 
 ## AI
 
-Messaging holds no model provider key. It asks **Console** for the model
-configuration and a short-lived credential, which is what makes AI governable
-in one place for the whole fleet. With Console unconfigured, every AI feature
-reports itself unavailable and names that as the reason.
+Messaging's AI runs through **AI Pulse**. `Ai/AiClient` sends each task to the
+Pulse gateway (`POST /api/ai/v1/generate`, via `Ai/PulseAiClient`) with the
+signed-in user's own session, the company (and branch, when one is selected),
+a stable feature id and a model tier. Pulse picks the model Console binds to
+it, enforces the daily allowances, validates JSON answers and reports usage to
+Console per feature. Messaging holds no model key, chooses no model and has no
+fallback model; when Pulse cannot answer — or `MESSAGING_AI_ENABLED=0` — every
+AI panel says the assistant is unavailable and why, and the inbox works as
+before. Availability comes from Pulse (`GET /api/ai/v1/status`), held for a
+minute.
+
+| Feature | Pulse `feature` | Tier |
+| --- | --- | --- |
+| Draft a reply | `inbox.draft_reply` | economy |
+| Summarise a conversation | `inbox.summarise` | economy |
+| Translate | `inbox.translate` | economy |
+| Shorten / adjust tone | `inbox.rewrite_shorten`, `inbox.rewrite_tone` | economy |
+| Classify intent, sentiment, urgency | `inbox.analyse` | economy |
+| Command Centre narration | `command_centre.narrate_actions` | economy |
+| Journey from an instruction | `journeys.propose` | economy |
+
+Every feature was built on a fast, low-cost model, hence `economy`; the tiers
+are one map in `AiClient::TIERS`. The Command Centre re-reads its narration
+every minute, so identical counts are answered from Pulse's cache for five
+minutes (`cache_ttl_seconds`). Each call is logged in `messaging_ai_runs` —
+content-free, with Pulse's id for the call in `pulse_task_id`.
 
 Three properties:
 
@@ -258,9 +280,11 @@ Three properties:
   `blocks_send` are the same ones `DispatchGuard` will refuse, so the UI can
   disable Send for the reason the backend would give.
 - **Inbound content is data.** `AiClient::untrusted()` strips delimiters, and
-  `interpret()` discards anything outside the vocabulary the prompt offered. A
-  customer message or an attached document cannot redefine system
-  instructions, reveal configuration or reach a tool.
+  `interpret()` discards anything outside the vocabulary the prompt offered —
+  Pulse also checks the answer against that vocabulary as a JSON Schema, but
+  the product's own filter is the boundary. A customer message or an attached
+  document cannot redefine system instructions, reveal configuration or reach
+  a tool.
 - **No invented predictions.** "Next best actions" are SQL counts of
   Messaging's own records, labelled `verified_fact`, each saying what it
   counted. Outcome insights return `predictions: []` with a note, because a

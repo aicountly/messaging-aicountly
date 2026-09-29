@@ -75,6 +75,9 @@ final class DraftAssistant
         $system = self::systemPrompt($language, $tone);
 
         $result = AiClient::complete(
+            $ctx,
+            $auth,
+            AiClient::FEATURE_DRAFT_REPLY,
             $system,
             self::factBlock($grounding) . "\n\n" . AiClient::untrusted('conversation', $thread['transcript']),
             500,
@@ -232,7 +235,14 @@ final class DraftAssistant
         - No preamble, no headings.
         PROMPT;
 
-        $result = AiClient::complete($system, AiClient::untrusted('conversation', $thread['transcript']), 300);
+        $result = AiClient::complete(
+            $ctx,
+            $auth,
+            AiClient::FEATURE_SUMMARISE,
+            $system,
+            AiClient::untrusted('conversation', $thread['transcript']),
+            300,
+        );
 
         $aiRunUuid = Uuid::v4();
         AiClient::logRun($ctx, $auth, $aiRunUuid, 'summarise', (string) $conversation['conversation_uuid'], $result);
@@ -291,7 +301,7 @@ final class DraftAssistant
           alternatives.
         PROMPT;
 
-        $result = AiClient::complete($system, AiClient::untrusted('text', $text), 800);
+        $result = AiClient::complete($ctx, $auth, AiClient::FEATURE_TRANSLATE, $system, AiClient::untrusted('text', $text), 800);
 
         $aiRunUuid = Uuid::v4();
         AiClient::logRun($ctx, $auth, $aiRunUuid, 'translate', $conversationUuid, $result);
@@ -358,7 +368,14 @@ final class DraftAssistant
         - Answer with the rewritten text only.
         PROMPT;
 
-        $result = AiClient::complete($system, AiClient::untrusted('text', $text), 600);
+        $result = AiClient::complete(
+            $ctx,
+            $auth,
+            $mode === 'shorten' ? AiClient::FEATURE_REWRITE_SHORTEN : AiClient::FEATURE_REWRITE_TONE,
+            $system,
+            AiClient::untrusted('text', $text),
+            600,
+        );
 
         $aiRunUuid = Uuid::v4();
         AiClient::logRun($ctx, $auth, $aiRunUuid, 'rewrite_' . $mode, $conversationUuid, $result);
@@ -417,6 +434,9 @@ final class DraftAssistant
         ];
 
         $interpreted = AiClient::interpret(
+            $ctx,
+            $auth,
+            AiClient::FEATURE_ANALYSE,
             $thread['transcript'],
             $vocabulary,
             'Classify what this customer is asking for, how they sound, how urgent it is, and what information '
@@ -424,9 +444,7 @@ final class DraftAssistant
         );
 
         $aiRunUuid = Uuid::v4();
-        AiClient::logRun($ctx, $auth, $aiRunUuid, 'analyse', (string) $conversation['conversation_uuid'], [
-            'ok' => $interpreted['ok'], 'duration_ms' => 0,
-        ], $grounding['sources']);
+        AiClient::logRun($ctx, $auth, $aiRunUuid, 'analyse', (string) $conversation['conversation_uuid'], $interpreted['run'], $grounding['sources']);
 
         if (!$interpreted['ok']) {
             return ['ok' => false, 'message' => (string) $interpreted['error'], 'ai_run_uuid' => $aiRunUuid];

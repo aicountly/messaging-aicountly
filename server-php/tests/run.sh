@@ -30,7 +30,9 @@ DB_NAME=$DB_NAME
 DB_USER=$DB_USER
 DB_PASS=$DB_PASS
 
-# Every cross-product client points at the one stub.
+# Every cross-product client points at the one stub — AI Pulse included, so
+# no test ever reaches a real Pulse (or a real model).
+PULSE_API_ORIGIN=http://127.0.0.1:$STUB_PORT
 MANAGE_API_BASE=http://127.0.0.1:$STUB_PORT
 CONTACTS_API_BASE=http://127.0.0.1:$STUB_PORT
 BOOKS_API_BASE=http://127.0.0.1:$STUB_PORT
@@ -56,6 +58,10 @@ SERVICE_KEYS=appointments:test-appointments-inbound-key-0123456789,billing:test-
 # graceful-degradation paths on every screen.
 MESSAGING_WEBHOOK_BASE_URL=https://messaging.aicountly.test
 ENVEOF
+
+# The AI gateway client and the guard that no model provider comes back. No
+# database and no network, so it runs first and fails fast.
+php "$ROOT/tests/pulse.php"
 
 php "$ROOT/bin/migrate.php" > /dev/null
 

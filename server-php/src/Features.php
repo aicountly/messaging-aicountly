@@ -41,8 +41,10 @@ final class Features
      * @var array<string, list<string>>
      */
     private const REQUIREMENTS = [
-        // Ours.
-        'AI'          => ['CONSOLE_API_URL', 'CONSOLE_SERVICE_KEY'],
+        // Ours. AI runs through AI Pulse as the signed-in user, so there is no
+        // key to require here; whether Pulse can answer is asked of Pulse
+        // (Ai/AiClient::status), never assumed from configuration.
+        'AI'          => [],
         'JOURNEYS'    => [],
         'OUTCOMES'    => [],
         'REALTIME'    => [],
@@ -67,9 +69,14 @@ final class Features
      * INTEGRATION is on by default: an integration is on when somebody has
      * configured it, never because the code for it shipped.
      *
+     * AI is here because every Aicountly product's AI runs through AI Pulse and
+     * there is nothing left to configure per deployment. On does not mean
+     * available: the assistant still says so when Pulse cannot answer, and
+     * each company decides what AI may do in Channels & Trust.
+     *
      * @var list<string>
      */
-    private const ON_BY_DEFAULT = ['JOURNEYS', 'OUTCOMES', 'REALTIME'];
+    private const ON_BY_DEFAULT = ['AI', 'JOURNEYS', 'OUTCOMES', 'REALTIME'];
 
     /** @var array<string, bool>|null */
     private static ?array $memo = null;

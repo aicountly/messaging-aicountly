@@ -47,7 +47,7 @@ product is the authority for them:
 | Campaign planning | **Reach** |
 | Internal team chat, meetings, audio/video | **Connect** |
 | Telephony | **Voice** |
-| AI model configuration and provider credentials | **Console** |
+| AI models, model keys and AI usage | **AI Pulse** (models bound in **Console**) |
 | Identity itself | **my.aicountly.com** |
 
 ## A stored message is correspondence, not a record of the invoice
@@ -143,18 +143,26 @@ What it produces is a journey run — a Messaging record — holding a reference
 an invoice. That is the "configured scheduled operational check" the product
 needs, and it is deliberately the only one.
 
-## The one thing that is cached, and why it is not a business record
+## The two things that are cached, and why neither is a business record
 
-`Ai/ConsoleCredentials` caches the short-lived AI credential Console issues, in
-**APCu shared memory**, with a TTL — never on disk, so a provider key does not
-come to rest on the product host.
+- `Channels/ConsoleSecrets` caches a channel secret a deployment keeps in
+  Console (a `console:<name>` credential reference), in process memory and
+  **APCu shared memory**, for the TTL Console gives — never on disk, so a
+  provider token does not come to rest on the product host.
+- `Ai/AiClient` caches AI Pulse's answer to "can AI run for Messaging right
+  now?" — a yes or no and a sentence — for a minute, so the shell, the inbox and
+  the Command Centre do not each ask Pulse on every request.
 
-That is a credential, not a business record. The prohibition above is on
-persisting other products' *business data*: an invoice, a balance, a contact, an
-order. A short-lived token, held in process memory for less time than it is
-valid for, so that every AI call does not re-authenticate, is ordinary
-credential handling. Nothing is inferred from it, no screen renders it, and it
-disappears when the process does.
+Neither is a business record. The prohibition above is on persisting other
+products' *business data*: an invoice, a balance, a contact, an order. A
+short-lived secret held in memory for less time than it is valid for is
+ordinary credential handling, and an availability flag is not anybody's data.
+Nothing is inferred from either, and both disappear when the process does.
+
+Pulse may keep an AI answer for a few minutes when Messaging asks it to
+(`cache_ttl_seconds`, used only for the Command Centre narration, whose input
+is Messaging's own counts). That is Pulse's cache, scoped to this product and
+company, and it holds no other product's records.
 
 Nothing else is cached anywhere. There is no Redis, no memcached, no
 disk-backed cache and no service worker in this product.

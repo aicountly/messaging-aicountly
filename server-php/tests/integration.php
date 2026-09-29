@@ -39,15 +39,17 @@ namespace Aicountly\Api;
 require __DIR__ . '/../src/Env.php';
 require __DIR__ . '/../src/Autoload.php';
 require __DIR__ . '/support/RecordingAdapter.php';
+require __DIR__ . '/support/FakePulseTransport.php';
 
 Env::load(__DIR__ . '/../.env');
 
-use Aicountly\Api\Ai\ConsoleCredentials;
+use Aicountly\Api\Ai\AiClient;
 use Aicountly\Api\Ai\DraftAssistant;
 use Aicountly\Api\Ai\NextBestActions;
 use Aicountly\Api\Channels\Capability;
 use Aicountly\Api\Channels\ChannelConnection;
 use Aicountly\Api\Channels\ChannelRegistry;
+use Aicountly\Api\Channels\ConsoleSecrets;
 use Aicountly\Api\Channels\RcsAdapter;
 use Aicountly\Api\Channels\OutboundMessage;
 use Aicountly\Api\Channels\SendResult;
@@ -72,6 +74,7 @@ use Aicountly\Api\Domain\TemplateService;
 use Aicountly\Api\Domain\WebhookService;
 use Aicountly\Api\Support\Clock;
 use Aicountly\Api\Support\Uuid;
+use Aicountly\Api\Tests\FakePulseTransport;
 use Aicountly\Api\Tests\RecordingAdapter;
 
 // ---------------------------------------------------------------------------
@@ -103,7 +106,8 @@ function check(string $name, callable $fn): void
         // and every later test would run against a deployment it never asked
         // for — one failure cascading into six.
         Features::overrideForTesting(null);
-        ConsoleCredentials::overrideForTesting(null);
+        AiClient::overrideForTesting(null);
+        ConsoleSecrets::forgetForTesting();
         ChannelRegistry::overrideForTesting('test_provider', null);
         CrossServiceCallContext::resetForTesting();
     }
@@ -1395,15 +1399,207 @@ check('an unpublished journey cannot run', static function (): void {
 
 section('AI');
 
-check('AI is off unless Console has configured it', static function (): void {
-    reset();
-    ConsoleCredentials::overrideForTesting(null);
+/** A customer message in a conversation, for the assistant to read. */
+function inbound(string $conversationUuid, string $body): void
+{
+    Db::insert('messaging_messages', [
+        'message_uuid'      => Uuid::v4(),
+        'cmp_id'            => CMP,
+        'bo_id'             => 0,
+        'conversation_uuid' => $conversationUuid,
+        'connection_uuid'   => CONNECTION,
+        'channel'           => 'whatsapp',
+        'direction'         => 'inbound',
+        'status'            => 'delivered',
+        'body'              => $body,
+        'origin'            => 'CUSTOMER',
+        'created_at'        => Clock::nowSql(),
+    ], 'message_uuid');
+}
 
-    $status = ConsoleCredentials::status();
-    assertFalse((bool) $status['available'], 'with nothing configured, AI is not available');
+/** Stand a fake AI Pulse in for the real one. */
+function fakePulse(array ...$answers): FakePulseTransport
+{
+    $fake = new FakePulseTransport(...$answers);
+    AiClient::overrideForTesting($fake->client());
+
+    return $fake;
+}
+
+/** @return array<string, mixed> */
+function aiRun(string $aiRunUuid): array
+{
+    $row = Db::first('SELECT * FROM messaging_ai_runs WHERE ai_run_uuid = :uuid', ['uuid' => $aiRunUuid]);
+    assertTrue($row !== null, 'the run should be logged');
+
+    return $row;
+}
+
+check('AI says why it is unavailable when AI Pulse has no model', static function (): void {
+    reset();
+    fakePulse(FakePulseTransport::status(false));
+
+    $status = AiClient::status(owner());
+    assertFalse((bool) $status['available'], 'with no model bound in Pulse, AI is not available');
     assertTrue((string) $status['reason'] !== '', 'and the reason is stated rather than the feature vanishing');
-    assertContains('CONSOLE_', (string) $status['admin_hint'],
-        'and the remedy names the environment keys — for an administrator, never a customer');
+    assertContains('PULSE_API_ORIGIN', (string) $status['admin_hint'],
+        'and the remedy names the setting — for an administrator, never a customer');
+});
+
+check('a draft is written in AI Pulse as the signed-in user, grounded, and logged without content', static function (): void {
+    reset();
+    connection();
+    $conversationUuid = conversation();
+    inbound($conversationUuid, 'Can you resend my invoice and payment link? My PAN is ABCDE1234F.');
+    $fake = fakePulse(FakePulseTransport::generated(
+        'Here is a draft: We will resend your invoice. A payment link is not available yet.',
+    ));
+
+    $result = DraftAssistant::draft(ctx(), owner(), (array) ConversationService::find(ctx(), $conversationUuid), ['tone' => 'friendly']);
+
+    assertTrue((bool) $result['ok'], 'the draft should come back: ' . (string) ($result['message'] ?? ''));
+    $body = $fake->last()['body'];
+    assertSame('inbox.draft_reply', $body['feature'] ?? null, 'as the draft feature');
+    assertSame('economy', $body['tier'] ?? null, 'on the tier it was built for');
+    assertSame(CMP, $body['cmp_id'] ?? null, 'for this company');
+    assertSame(500, $body['max_output_tokens'] ?? null, 'with the draft\'s own answer budget');
+    assertSame('Bearer ' . owner()->sesKey(), $fake->header('Authorization'), 'as the signed-in user');
+    assertContains('THE FACTS RULE', (string) $body['system'], 'with Messaging\'s own instructions');
+    assertContains('<VERIFIED_FACTS>', (string) $body['input'], 'grounded in what Messaging read');
+    assertContains('Payment link: NOT AVAILABLE', (string) $body['input'], 'including what it could not');
+    assertContains('<UNTRUSTED_CONVERSATION>', (string) $body['input'], 'and the customer\'s words labelled as data');
+
+    assertSame('We will resend your invoice. A payment link is not available yet.', $result['draft'],
+        'the preamble a model adds is still stripped');
+    assertSame('suggestion', $result['kind'], 'and it is still labelled a suggestion');
+    assertTrue((bool) $result['verification']['checked'], 'and still checked before anybody can send it');
+
+    $run = aiRun((string) $result['ai_run_uuid']);
+    assertSame('ok', $run['status'], 'the run is logged as ok');
+    assertSame('draft_reply', $run['task'], 'under the task it always had');
+    assertSame('5d7c1a3e-9b2f-4c61-8e0a-3f4b5c6d7e8f', $run['pulse_task_id'], 'with Pulse\'s id for the call');
+    assertSame('stub-flash', $run['model'], 'the model Pulse chose');
+    assertSame(812, (int) $run['input_tokens'], 'and the tokens Pulse reported');
+    assertFalse(str_contains((string) json_encode($run), 'ABCDE1234F'), 'and NOT the customer\'s message');
+    assertFalse(str_contains((string) json_encode($run), 'resend your invoice'), 'nor the draft');
+});
+
+check('when AI Pulse cannot draft, the panel says so and nothing is invented', static function (): void {
+    reset();
+    connection();
+    $conversationUuid = conversation();
+    inbound($conversationUuid, 'Where is my order?');
+    fakePulse(FakePulseTransport::error(503, 'ai_unavailable', true));
+
+    $result = DraftAssistant::draft(ctx(), owner(), (array) ConversationService::find(ctx(), $conversationUuid));
+
+    assertFalse((bool) $result['ok'], 'no draft');
+    assertContains('AI Pulse has no model available', (string) $result['message'], 'and the reason, in Messaging\'s words');
+    $run = aiRun((string) $result['ai_run_uuid']);
+    assertSame('unavailable', $run['status'], 'logged as unavailable, not as a failed model call');
+    assertSame(null, $run['pulse_task_id'], 'with no Pulse id, because nothing ran');
+});
+
+check('a draft the model declined is logged as refused, not as a failure', static function (): void {
+    reset();
+    connection();
+    $conversationUuid = conversation();
+    inbound($conversationUuid, 'Something the model will not touch.');
+    fakePulse(FakePulseTransport::generated('', ['stop_reason' => 'refused']));
+
+    $result = DraftAssistant::draft(ctx(), owner(), (array) ConversationService::find(ctx(), $conversationUuid));
+
+    assertFalse((bool) $result['ok'], 'a refusal is not a draft');
+    assertContains('declined to answer', (string) $result['message'], 'and says so');
+    $run = aiRun((string) $result['ai_run_uuid']);
+    assertSame('refused', $run['status'], 'the run log can tell a refusal from an outage');
+    assertSame('5d7c1a3e-9b2f-4c61-8e0a-3f4b5c6d7e8f', $run['pulse_task_id'], 'and matches Pulse\'s record');
+});
+
+check('classifying a conversation keeps only intents from our own list', static function (): void {
+    reset();
+    connection();
+    $conversationUuid = conversation();
+    inbound($conversationUuid, 'Please resend my invoice, this is the third time I am asking!');
+    $fake = fakePulse(FakePulseTransport::generatedJson([
+        'intent'              => 'invoice_request',
+        'sentiment'           => 'furious',            // not on the list
+        'urgency'             => 'high',
+        'missing_information' => 'payment_provider',
+    ]));
+
+    $result = DraftAssistant::analyse(ctx(), owner(), (array) ConversationService::find(ctx(), $conversationUuid));
+
+    assertTrue((bool) $result['ok'], 'the classification comes back');
+    assertSame('inbox.analyse', $fake->last()['body']['feature'] ?? null, 'as the analyse feature');
+    assertTrue(in_array('complaint', (array) ($fake->last()['body']['response_format']['schema']['properties']['intent']['enum'] ?? []), true),
+        'with our intents as the schema Pulse checks the answer against');
+    assertSame('invoice_request', $result['intent'], 'an intent from our list is kept');
+    assertSame(null, $result['sentiment'], 'an invented sentiment is discarded, not stored');
+    assertSame('high', $result['urgency'], 'the rest is kept');
+    assertSame('payment_provider', $result['missing_information'], 'and the missing piece is named');
+
+    $run = aiRun((string) $result['ai_run_uuid']);
+    assertSame('ok', $run['status'], 'the run is logged');
+    assertSame('5d7c1a3e-9b2f-4c61-8e0a-3f4b5c6d7e8f', $run['pulse_task_id'], 'with Pulse\'s id, which it never had before');
+});
+
+check('a translation that drops an amount is still refused', static function (): void {
+    reset();
+    $fake = fakePulse(FakePulseTransport::generated('आपका भुगतान बाकी है।'));
+
+    $result = DraftAssistant::translate(ctx(), owner(), 'Your balance of ₹4,800 on INV-2048 is due.', 'hi');
+
+    assertSame('inbox.translate', $fake->last()['body']['feature'] ?? null, 'as the translate feature');
+    assertFalse((bool) $result['ok'], 'a translation that lost the figures is not offered');
+    assertTrue(in_array('INV-2048', (array) $result['missing'], true), 'and says what it lost');
+});
+
+check('the Command Centre narration asks AI Pulse to reuse its answer for the same counts', static function (): void {
+    reset();
+    $fake = fakePulse(FakePulseTransport::status(true), FakePulseTransport::generated('Review the drafts first.'));
+
+    $narrative = NextBestActions::narrate(ctx(), owner(), [[
+        'key' => 'drafts_awaiting_approval', 'title' => '3 drafts need review', 'detail' => 'Nothing sends until somebody reads them.',
+    ]]);
+
+    assertSame('Review the drafts first.', $narrative['text'] ?? null, 'the narration is shown');
+    $body = $fake->last()['body'];
+    assertSame('command_centre.narrate_actions', $body['feature'] ?? null, 'as the narration feature');
+    assertSame(300, $body['cache_ttl_seconds'] ?? null, 'and the same counts are answered from Pulse\'s cache for five minutes');
+});
+
+check('with suggestions switched off, the narration never asks AI Pulse anything', static function (): void {
+    reset();
+    Db::insert('messaging_settings', ['cmp_id' => CMP, 'ai_suggest_allowed' => false, 'updated_at' => Clock::nowSql()], 'cmp_id');
+    Settings::forget();
+    $fake = fakePulse(FakePulseTransport::status(true), FakePulseTransport::generated('should not be used'));
+
+    $narrative = NextBestActions::narrate(ctx(), owner(), [['key' => 'k', 'title' => 't', 'detail' => 'd']]);
+
+    assertSame(null, $narrative, 'no narration');
+    assertSame([], $fake->requests, 'and not even a status question left this server');
+});
+
+check('a channel secret kept in Console still resolves — channels are not AI', static function (): void {
+    reset();
+    putenv('CONSOLE_API_URL=' . Env::get('MANAGE_API_BASE'));
+    putenv('CONSOLE_SERVICE_KEY=test-console-service-key-0123456789');
+
+    try {
+        connection();
+        Db::run(
+            'UPDATE messaging_channel_connections SET credential_ref = :ref WHERE cmp_id = :cmp AND connection_uuid = :uuid',
+            ['ref' => 'console:wa_main', 'cmp' => CMP, 'uuid' => CONNECTION],
+        );
+
+        assertSame('stub-secret-for-wa_main', ChannelConnection::find(CMP, CONNECTION)->credential(),
+            'a console:<name> credential is resolved from Console at the moment of use');
+        assertSame('', ConsoleSecrets::get(''), 'and an empty name resolves nothing');
+    } finally {
+        putenv('CONSOLE_API_URL');
+        putenv('CONSOLE_SERVICE_KEY');
+    }
 });
 
 check('a draft that invents an amount is flagged', static function (): void {

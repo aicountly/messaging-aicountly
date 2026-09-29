@@ -469,15 +469,15 @@ function PolicyTab() {
                 title="What AI may do"
                 subtitle={
                   session?.ai.available
-                    ? 'Each of these is a separate permission for the AI itself, not for the people using it.'
-                    : undefined
+                    ? 'Powered by AI Pulse. Each of these is a separate permission for the AI itself, not for the '
+                      + 'people using it.'
+                    : 'Powered by AI Pulse.'
                 }
               >
                 {!session?.ai.available && (
-                  <Notice tone="info" title="AI is not configured for this deployment">
-                    {session?.ai.reason ??
-                      'Aicountly Console holds the model configuration and credentials. These switches can be set '
-                        + 'now and take effect once it is connected.'}
+                  <Notice tone="info" title="AI is not available right now">
+                    {session?.ai.reason ?? 'Messaging\'s AI runs through AI Pulse, which did not say it can answer.'}{' '}
+                    These switches can be set now and take effect once AI Pulse can answer.
                   </Notice>
                 )}
 
