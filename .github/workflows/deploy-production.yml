@@ -369,30 +369,26 @@ jobs:
             exit 1
           fi
 
-      # A deployed API that cannot answer is worth knowing about now rather
-      # than from the app's login screen. /health needs no credentials.
-      - name: Smoke-test the deployed API
+      # Is the live site really Messaging, and the build just deployed? The host's
+      # anti-bot page ("One moment, please...") answers some requests from
+      # GitHub's runners with HTTP 200, so a status code proves nothing. These
+      # checks need the app's real answer: its health JSON (no credentials needed)
+      # and this build's entry script on the web root. When the runner is shown
+      # the anti-bot page, the request is repeated from the server over SSH
+      # (deploy-target, still configured here). A wrong answer fails the deploy.
+      - name: Verify the live app
+        env:
+          VERIFY_SSH: ssh deploy-target
+          EXPECTED_REVISION: ${{ github.sha }}
         run: |
-          url="https://messaging.aicountly.com/api/health"
-          code=$(curl -fsS -o /tmp/health.json -w '%{http_code}' --max-time 20 "$url" || echo "000")
-          if [ "$code" != "200" ]; then
-            echo "::warning::GET $url returned $code. If this is the first deploy, check that the subdomain's document root is the one in PROD_SSH_REMOTE_ROOT and that api/.env exists."
-            exit 0
+          EXPECTED_ENTRY="$(grep -o 'assets/index-[^"]*\.js' web/dist/index.html | head -n 1 || true)"
+          if [ -z "$EXPECTED_ENTRY" ]; then
+            echo "::warning::No assets/index-*.js in web/dist/index.html; checking the page title instead of this build's entry script."
           fi
-
-          echo "GET $url → 200"
-          cat /tmp/health.json
-          echo ""
-
-          # `usable` is the one field worth reading: it means the database is
-          # reachable AND the schema is present. A channel is deliberately NOT
-          # part of it — Messaging with nothing connected is up, usable, and
-          # honest about not being able to send yet, which is the correct state
-          # for a fresh deploy.
-          if grep -q '"usable":true' /tmp/health.json; then
-            echo "Database reachable and schema present."
-          else
-            echo "::warning::/api/health reports usable:false — the database is unreachable or the schema is missing. Check the DB_* values in api/.env and the migration step above."
+          export EXPECTED_ENTRY
+          if ! bash scripts/ci/post-deploy-checks.sh production; then
+            echo "If this is the first deploy, check that the subdomain's document root is the one in PROD_SSH_REMOTE_ROOT and that api/.env exists."
+            exit 1
           fi
 
       - name: Clean up SSH credentials
