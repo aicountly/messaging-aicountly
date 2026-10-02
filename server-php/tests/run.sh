@@ -81,6 +81,10 @@ done
 
 php "$ROOT/tests/integration.php"
 
+# The cross-product service contract (Appointments' client notices), including
+# the exchange fixtures Appointments replays. See docs/APPOINTMENTS_MESSAGING_CONTRACT.md.
+php "$ROOT/tests/service.php"
+
 # The HTTP layer, twice: once with the sibling products answering and once
 # without.
 #

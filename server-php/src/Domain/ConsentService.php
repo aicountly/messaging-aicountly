@@ -217,21 +217,26 @@ final class ConsentService
                 ], 'consent_uuid');
             }
 
-            Db::insert('messaging_consent_events', [
-                'cmp_id'          => $ctx->cmpId,
-                'consent_uuid'    => $consentUuid,
-                'channel'         => $channel,
-                'address'         => $address,
-                'purpose'         => $purpose,
-                'event'           => $state === 'granted' ? 'granted' : 'withdrawn',
-                'evidence_source' => $evidenceSource,
-                'evidence_detail' => $evidenceDetail,
-                'message_uuid'    => $messageUuid,
-                'actor_uuid'      => $auth->uuid,
-                'actor_kind'      => $actorKind,
-                'occurred_at'     => $occurredAt,
-                'created_at'      => $now,
-            ], 'consent_event_id');
+            // A `pending` record is a claim nobody has confirmed yet, not a
+            // decision, so it is not a history event: logging it as a
+            // withdrawal would make "how many people opted out?" wrong.
+            if ($state !== 'pending') {
+                Db::insert('messaging_consent_events', [
+                    'cmp_id'          => $ctx->cmpId,
+                    'consent_uuid'    => $consentUuid,
+                    'channel'         => $channel,
+                    'address'         => $address,
+                    'purpose'         => $purpose,
+                    'event'           => $state === 'granted' ? 'granted' : 'withdrawn',
+                    'evidence_source' => $evidenceSource,
+                    'evidence_detail' => $evidenceDetail,
+                    'message_uuid'    => $messageUuid,
+                    'actor_uuid'      => $auth->uuid,
+                    'actor_kind'      => $actorKind,
+                    'occurred_at'     => $occurredAt,
+                    'created_at'      => $now,
+                ], 'consent_event_id');
+            }
 
             return $consentUuid;
         });

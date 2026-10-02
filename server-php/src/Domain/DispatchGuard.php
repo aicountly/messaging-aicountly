@@ -63,6 +63,25 @@ final class DispatchGuard
         $checks = [];
 
         // ------------------------------------------------------------------
+        // 0. Is it still worth sending?
+        //
+        // A calling product may say a message is not worth delivering after
+        // some moment (`not_after`): a reminder for an appointment that has
+        // started. Checked FIRST and on every attempt, because the usual way a
+        // message gets here late is a provider incident that kept it in the
+        // retry queue past that moment.
+        // ------------------------------------------------------------------
+        $notAfter = $message['not_after'] ?? null;
+        if ($notAfter !== null && $notAfter !== '') {
+            $limit = Clock::parse((string) $notAfter);
+            if ($limit !== null && Clock::now() >= $limit) {
+                return self::refuse($checks, 'expired',
+                    'This message was not delivered before its not_after time (' . $limit->format('c')
+                    . '), so it was not sent.', false);
+            }
+        }
+
+        // ------------------------------------------------------------------
         // 1. Connection and sender.
         // ------------------------------------------------------------------
         $adapter = ChannelRegistry::adapterFor($connection);

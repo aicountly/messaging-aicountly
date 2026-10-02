@@ -1,0 +1,93 @@
+{
+    "e164_pattern": "^\\+[1-9][0-9]{7,14}$",
+    "channels": [
+        "whatsapp",
+        "sms"
+    ],
+    "consent_bases": [
+        "public_form_checkbox",
+        "staff_attestation",
+        "existing_relationship"
+    ],
+    "kinds": [
+        "confirmation",
+        "reminder",
+        "cancellation",
+        "reschedule"
+    ],
+    "templates": {
+        "confirmation": {
+            "name": "appointment_confirmation",
+            "variables": [
+                "client_name",
+                "service_name",
+                "when",
+                "reference",
+                "sender_name"
+            ]
+        },
+        "reminder": {
+            "name": "appointment_reminder",
+            "variables": [
+                "client_name",
+                "service_name",
+                "when",
+                "reference",
+                "sender_name"
+            ]
+        },
+        "cancellation": {
+            "name": "appointment_cancellation",
+            "variables": [
+                "client_name",
+                "service_name",
+                "when",
+                "reference",
+                "sender_name"
+            ]
+        },
+        "reschedule": {
+            "name": "appointment_reschedule",
+            "variables": [
+                "client_name",
+                "service_name",
+                "old_when",
+                "when",
+                "reference",
+                "sender_name"
+            ]
+        }
+    },
+    "built_in_variables": [
+        "sender_name"
+    ],
+    "required_request_fields": [
+        "cmp_id",
+        "channel",
+        "to",
+        "template",
+        "kind",
+        "reference",
+        "scheduled_for",
+        "not_after",
+        "variables"
+    ],
+    "idempotency_key_pattern": "^[A-Za-z0-9._:-]{8,200}$",
+    "delivery_states": [
+        "queued",
+        "sent",
+        "delivered",
+        "failed",
+        "suppressed",
+        "expired",
+        "cancelled",
+        "unknown"
+    ],
+    "terminal_states": [
+        "delivered",
+        "failed",
+        "suppressed",
+        "expired",
+        "cancelled"
+    ]
+}

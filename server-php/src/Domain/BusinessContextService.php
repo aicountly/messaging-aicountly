@@ -361,13 +361,20 @@ final class BusinessContextService
             if (!is_array($row)) {
                 continue;
             }
+            $booking = SourceReader::normaliseAppointmentsBooking($row);
+            // "Upcoming" means a booking that is still going to happen. A
+            // cancelled or moved one is history, and showing it as upcoming
+            // sends an agent to confirm an appointment that is not there.
+            if (!in_array($booking['status'], ['PENDING', 'CONFIRMED', 'ARRIVED', 'IN_PROGRESS'], true)) {
+                continue;
+            }
             $bookings[] = [
-                'reference' => (string) ($row['reference'] ?? ''),
-                'status'    => strtoupper((string) ($row['status'] ?? '')),
+                'reference' => $booking['reference'],
+                'status'    => $booking['status'],
                 // Read from Appointments every time. Messaging keeps no copy.
-                'starts_at' => (string) ($row['starts_at'] ?? ''),
-                'timezone'  => (string) ($row['timezone'] ?? ''),
-                'service'   => (string) ($row['service_name'] ?? ''),
+                'starts_at' => $booking['starts_at'],
+                'timezone'  => $booking['timezone'],
+                'service'   => $booking['service'],
             ];
         }
 

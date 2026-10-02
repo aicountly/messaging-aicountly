@@ -1,0 +1,66 @@
+{
+    "scenario": "unknown",
+    "request": {
+        "cmp_id": 9301,
+        "channel": "whatsapp",
+        "to": "+919000000003",
+        "template": "appointment_reminder",
+        "language": "en",
+        "kind": "reminder",
+        "reference": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01",
+        "reference_label": "AP-1042",
+        "scheduled_for": "{{timestamp}}",
+        "not_after": "{{timestamp}}",
+        "variables": {
+            "client_name": "Priya Nair",
+            "service_name": "Initial consultation",
+            "when": "Wed 14 Oct 2026, 10:00 IST",
+            "reference": "AP-1042"
+        },
+        "consent": {
+            "basis": "staff_attestation",
+            "source": "staff:user-0001",
+            "captured_at": "{{timestamp}}",
+            "contact_verified": true,
+            "evidence_ref": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01"
+        }
+    },
+    "response": {
+        "status": 202,
+        "body": {
+            "data": {
+                "message_uuid": "{{message_uuid}}",
+                "message_id": "{{message_id}}",
+                "conversation_uuid": "{{conversation_uuid}}",
+                "status": "submission_unknown",
+                "status_label": "Submission unknown — needs investigation",
+                "delivery_state": "unknown",
+                "reason_code": "submission_unknown",
+                "reason": "The provider did not answer in time.",
+                "delivered": false,
+                "terminal": false,
+                "channel": "whatsapp",
+                "kind": "reminder",
+                "reference": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01",
+                "reference_label": "AP-1042",
+                "scheduled_for": "{{timestamp}}",
+                "not_after": "{{timestamp}}",
+                "queued_at": "{{timestamp}}",
+                "provider_accepted_at": null,
+                "delivered_at": null,
+                "failed_at": null,
+                "provider_message_id": null,
+                "failure_code": "submission_unknown",
+                "failure_detail": "The provider did not answer in time.",
+                "outcome": "unknown",
+                "detail": "The provider did not answer in time.",
+                "delivery_note": "Provider acceptance is not delivery. Read GET /api/v1/messages/{message_uuid} until delivery_state is delivered, failed, suppressed, expired or cancelled.",
+                "consent": {
+                    "action": "granted",
+                    "state": "granted"
+                }
+            },
+            "message": "The provider did not answer in time."
+        }
+    }
+}
