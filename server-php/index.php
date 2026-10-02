@@ -155,6 +155,14 @@ if ($method === 'OPTIONS') {
     exit;
 }
 
+// The environment is configuration (Environment); the Host header only gets
+// to make us REFUSE, never to choose. A sandbox name on a production server is
+// a probe or a mis-copied .env, and either way nothing here should answer it.
+if (Environment::hostContradicts((string) ($_SERVER['HTTP_HOST'] ?? ''))) {
+    send_json(503, ['error' => ['code' => 'environment_mismatch', 'message' => 'This server is not configured for the host it was asked for.'],
+        'message' => 'This server is not configured for the host it was asked for.']);
+}
+
 $uri = (string) (parse_url((string) ($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?: '/');
 
 // Strip the directory this front controller is mounted under, so the same file
@@ -177,7 +185,8 @@ if ($path === '' || $path === 'health') {
     send_json(200, [
         'status'   => 'ok',
         'app'      => 'Messaging',
-        'env'      => Env::get('APP_ENV', 'unknown'),
+        // From configuration (Environment), never this request's Host.
+        'env'      => Environment::current() ?? 'not_configured',
         'time'     => gmdate('c'),
         'database' => $database,
         // Booleans and counts only. This endpoint is public: no sender

@@ -444,13 +444,8 @@ final class BusinessContextService
 
     private static function isSandbox(): bool
     {
-        $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
-        if (Env::get('APP_ENV') === 'production') {
-            return false;
-        }
-
-        return $host === '' || str_contains($host, '.gh.aicountly.com')
-            || str_contains($host, 'localhost') || str_starts_with($host, '127.');
+        // Configuration only (Environment), never the request's Host.
+        return \Aicountly\Api\Environment::siblingTier() !== 'production';
     }
 
     /** @param array<string, mixed> $data @return array<string, mixed> */

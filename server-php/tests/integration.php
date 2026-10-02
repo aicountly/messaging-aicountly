@@ -1689,6 +1689,48 @@ check('a delivery rate with no denominator is null, not zero', static function (
         'and wherever a rate IS shown, its denominator travels with it');
 });
 
+section('Environment (X-09, G18#25 class)');
+
+/** A sibling client whose *_API_BASE the test .env does not set, so the environment alone decides. */
+function probeClient(): \Aicountly\Api\Clients\ApiClient
+{
+    return new class () extends \Aicountly\Api\Clients\ApiClient {
+        public function service(): string { return 'drive'; }
+        protected function productionBase(): string { return 'https://drive.aicountly.com'; }
+        protected function sandboxBase(): string { return 'https://drive.gh.aicountly.com'; }
+        protected function baseEnvKey(): string { return 'NO_SUCH_SIBLING_API_BASE'; }
+    };
+}
+
+check('sibling hosts follow the configured environment, never the Host or its absence', static function (): void {
+    $base = static function (string $env, ?string $host): string {
+        putenv('AIC_ENVIRONMENT=' . $env);
+        if ($host === null) {
+            unset($_SERVER['HTTP_HOST']);
+        } else {
+            $_SERVER['HTTP_HOST'] = $host;
+        }
+
+        return probeClient()->base();
+    };
+    try {
+        assertSame('https://drive.aicountly.com', $base('production', null), 'a production CLI worker (no Host) talks to production, not sandbox');
+        assertSame('https://drive.aicountly.com', $base('production', 'messaging.gh.aicountly.com'), 'a forged sandbox Host changes nothing');
+        assertSame('https://drive.gh.aicountly.com', $base('sandbox', 'messaging.aicountly.com'), 'sandbox talks to sandbox');
+        assertSame('', $base('bogus', null), 'an unrecognised environment resolves to nothing');
+        $refused = probeClient()->request('GET', 'health');
+        assertSame('environment_not_configured', (string) $refused['error'], 'and a request is refused without being sent');
+        assertTrue(\Aicountly\Api\Environment::hostContradicts('messaging.aicountly.com') === false, 'the bogus environment contradicts nothing');
+        putenv('AIC_ENVIRONMENT=production');
+        assertTrue(\Aicountly\Api\Environment::hostContradicts('messaging.gh.aicountly.com'), 'a production server refuses a sandbox Host');
+        $out = (string) shell_exec('AIC_ENVIRONMENT=bogus php ' . escapeshellarg(__DIR__ . '/../bin/journey-tick.php') . ' 2>&1; echo "exit=$?"');
+        assertContains('exit=1', $out, 'journey-tick refuses to run with no configured environment');
+    } finally {
+        putenv('AIC_ENVIRONMENT');
+        unset($_SERVER['HTTP_HOST']);
+    }
+});
+
 // ===========================================================================
 // Summary
 // ===========================================================================
