@@ -112,6 +112,8 @@ function service(Router $router, string $method, string $path, ?array $body, ?st
 
     $_SERVER['REQUEST_METHOD'] = $method;
     $_SERVER['HTTP_X_SERVICE_KEY'] = $app;
+    // A service call names the environment it is for, and it must be this one (G19#7).
+    $_SERVER['HTTP_X_AIC_ENVIRONMENT'] = 'local';
     $_GET = $query;
     Http::setBodyForTesting($body);
     if ($key === null) {
@@ -132,7 +134,7 @@ function service(Router $router, string $method, string $path, ?array $body, ?st
         return ['status' => 500, 'body' => ['error' => ['message' => $e->getMessage() . ' @ ' . basename($e->getFile()) . ':' . $e->getLine()]]];
     } finally {
         Http::setBodyForTesting(null);
-        unset($_SERVER['HTTP_X_SERVICE_KEY'], $_SERVER['HTTP_IDEMPOTENCY_KEY']);
+        unset($_SERVER['HTTP_X_SERVICE_KEY'], $_SERVER['HTTP_X_AIC_ENVIRONMENT'], $_SERVER['HTTP_IDEMPOTENCY_KEY']);
         Auth::adopt($previous ?? Auth::forTesting('user-svc', 'user', 'messaging', ['acs_type' => 1]));
     }
 }
@@ -281,6 +283,10 @@ foreach ([[CONN_WA, 'whatsapp', '+919800000011', 'Sharma & Co'], [CONN_SMS, 'sms
 
 $ctx = Context::forCompany(CMP);
 $provider = Auth::forProvider('service-test');
+
+// The company allows these products to send for it with nobody signed in (G19#7):
+// what an administrator does in Settings. Without it the contract refuses.
+Domain\Settings::save($ctx, $owner, ['service_products' => ['appointments', 'billing']]);
 
 // The catalogue creates the templates, drafts; the provider "approves" the
 // WhatsApp ones. SMS stays unapproved on purpose (template_not_approved).

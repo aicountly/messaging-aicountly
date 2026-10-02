@@ -37,6 +37,10 @@ final class ServicePolicy
         ['POST', 'v1/messages', ['messaging.messages.send']],
         ['GET', 'v1/messages/stats', ['messaging.outcomes.view']],
         ['GET', 'v1/messages/{message}', ['messaging.outcomes.view']],
+        // Withdraw a message this product sent that has not gone yet: the same
+        // authority as sending it, and ServiceController scopes it to the
+        // calling product's own messages.
+        ['POST', 'v1/messages/{message}/cancel', ['messaging.messages.send']],
     ];
 
     /**
