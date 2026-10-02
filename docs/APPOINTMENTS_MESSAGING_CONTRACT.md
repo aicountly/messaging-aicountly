@@ -349,16 +349,47 @@ All from `BookingService::lifecycle()`, once per event.
 
 | Event | Notice |
 | --- | --- |
-| `created` | schedule the rule's reminders (offsets before the start; one already past is not scheduled) and, if the booking is **CONFIRMED**, the confirmation (due now). A **PENDING** booking gets no confirmation (“confirmed” would be false) — a step may say `send_while_pending` for a template that does not claim confirmation. A booking made by a **reschedule** gets reminders but **no** second confirmation |
-| `confirmed` | the confirmation, if the booking has none yet |
+| `created` | schedule the rule's reminders (offsets before the start; one already past is not scheduled) and, if the booking is **CONFIRMED**, the confirmation (due now, but **sent only once the diary entry is settled**, below). A **PENDING** booking gets no confirmation (“confirmed” would be false) — a step may say `send_while_pending` for a template that does not claim confirmation. A booking made by a **reschedule** gets reminders but **no** second confirmation |
+| `confirmed` | the confirmation, if the booking has none yet (sent once the diary entry is settled, below) |
 | `cancelled`, `auto_released` | withdraw scheduled confirmation/reminders (and withdraw at Messaging any message it still holds); **one cancellation notice** per channel (a declined pending request is told too) |
-| `voided` | withdraw; **no notice** — a voided booking (Calendar refused the slot, a move that did not complete) was never promised to the client |
+| `voided` | withdraw; **no notice** — a voided booking (Calendar refused the slot, a move that did not complete) was never promised to the client. This is why the confirmation waits for the diary: a Calendar `409` after “confirmed” was sent would leave a client holding a promise nobody can keep |
 | `rescheduled` | withdraw the old booking's pending notices; **one reschedule notice** on the **new** booking with the **new time** (`when`) and the old (`old_when`), on the consent the booking was made under |
 | `completed`, `no_show` | withdraw pending reminders; no notice |
 
 A DRAFT is never messaged. A reminder is judged **when it is due**: pending/inactive/unconfirmed
 conditions are re-read from the booking then (`skipped`/`cancelled` with the
-reason). Calendar's sync state is independent and never gates a client message.
+reason).
+
+**Calendar's sync state gates only the confirmation.** “Confirmed” is a statement the diary
+must back, so a confirmation is sent only when the booking's `calendar_sync_state` is
+**settled**: `synced`, or `not_required` (no diary to ask). A reminder, a cancellation
+notice and a reschedule notice are never gated by it (a reminder for a booking Calendar has
+not yet verified is still fine: it asks the client to keep the time).
+
+* While the state is `pending`, `unknown`, `failed` (or `config_error`,
+  `contract_unsupported`, `rejected`) the confirmation stays **`scheduled`**, carrying
+  `delivery_reason_code = withheld_calendar` (a code of this product's own, never one of
+  Messaging's) and a `status_detail` that says why. The reminders worker looks at it again
+  **every cycle** and sends it the moment the entry settles, bounded by its own `not_after`
+  (the appointment's start), after which it is `expired`, unsent.
+* If the booking is **voided** (Calendar `409`) or cancelled first, the confirmation is
+  `cancelled` and **nothing is said**: nothing was promised. A cancellation notice follows a
+  confirmation that was actually sent, so a booking whose confirmation was withheld and
+  withdrawn gets **no** cancellation notice either (a pending request that is declined, whose
+  confirmation was never due, is still told, as above).
+* If the booking is CONFIRMED but the entry has not settled within
+  `APPOINTMENTS_CONFIRMATION_GRACE_MINUTES` (default 30, 1–1440) of the moment the
+  confirmation was due, nothing is sent and staff are shown **“Confirmation waiting for
+  calendar verification”** — Overview → Needs attention, the Appointments list filter
+  `notice=confirmation_waiting`, and Live Operations. The grace controls that flag only, not
+  the sending: a confirmation is never sent while the entry is unsettled, and is sent as soon
+  as it settles, if that is before the appointment.
+* The wait is judged only for a confirmation that **could** be sent: with messaging off, a
+  channel Messaging does not deliver, or no usable number, the outcome (`not_sent`) is
+  recorded at once, whatever the diary says — and staff are never asked to fix a diary
+  entry for a message that would not go.
+* A `send_while_pending` confirmation on a **PENDING** booking is not gated (its template
+  does not claim confirmation).
 
 **Which channels.** The company's reminder rule: its steps (`kind` =
 confirmation|reminder|cancellation|reschedule, `offset_minutes`, `channel`,
@@ -403,16 +434,18 @@ this file, to the fixtures in **both** repositories, and to `contract.json`.
 | Limits | — | `SERVICE_ADDRESS_DAILY_CAP`, `SERVICE_COMPANY_PER_MINUTE` |
 | Templates | — | `bin/seed-appointment-templates.php --cmp=N [--apply]`, then submit/approve |
 | Channel | — | a connected WhatsApp / SMS channel for the company |
+| Confirmation grace | `APPOINTMENTS_CONFIRMATION_GRACE_MINUTES` (default 30): how long a confirmation may wait for the diary before staff are shown it (§14) | — |
 | Cron | `bin/reminders.php` every 1–5 minutes | `bin/dispatch-worker.php` (its own retry queue) |
-| Migration | `008_messaging.sql` | `007_messaging_service_api.sql` |
+| Migration | `010_messaging.sql` | `007_messaging_service_api.sql` |
 
 ## 17. Known limits (decisions, not oversights)
 
 * No client reply handling (CONFIRM/RESCHEDULE keywords are not parsed); “confirmed
   after a reminder” on the dashboard means **staff** confirmed.
 * No email; no voice; no no-show message; no ICS/invitation.
-* A confirmation goes out within one worker cycle of the event (run the cron every
-  minute for a faster one); it is not sent inline in the booking request.
+* A confirmation goes out within one worker cycle of the event — and of its diary entry
+  being settled (§14) — (run the cron every minute for a faster one); it is not sent inline
+  in the booking request.
 * Messaging does not verify that `cmp_id` belongs to the key (keys are fleet-wide;
   `messaging-aicountly-F13`): Messaging reads only what a key itself sent, but a key can
   still post for any company it names.
