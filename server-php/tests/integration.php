@@ -1061,7 +1061,7 @@ check('an unconfigured integration is pending, not broken', static function (): 
     reset();
     Features::overrideForTesting(['BOOKS' => false]);
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->outstandingForContact(ctx(), 'c0ffee00-0000-4000-8000-000000000001');
+    $result = (new BooksClient())->withSession(owner()->sesKey())->outstandingForLedger(ctx(), '7001', 7);
 
     assertFalse((bool) $result['ok'], 'it did not answer');
     assertSame('pending', (string) $result['state'],
@@ -1076,7 +1076,7 @@ check('a refusal is forbidden and never unavailable', static function (): void {
     // THE DISTINCTION THAT MATTERS: "you may not see this" must not be shown as
     // "Books is having a bad minute", because the first is permanent and the
     // second invites a pointless retry.
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), ['stub' => 'forbidden']);
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01', ['stub' => 'forbidden']);
 
     assertSame('forbidden', (string) $result['state'], 'a 403 is forbidden');
     assertFalse((bool) $result['retryable'], 'and retrying it would achieve nothing');
@@ -1086,7 +1086,7 @@ check('an outage is unavailable and retryable', static function (): void {
     reset();
     Features::overrideForTesting(['BOOKS' => true]);
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), ['stub' => 'down']);
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01', ['stub' => 'down']);
 
     assertSame('unavailable', (string) $result['state'], 'a 503 is unavailable');
     assertTrue((bool) $result['retryable'], 'and worth retrying');
@@ -1125,11 +1125,56 @@ check('the orders panel shows the contact\'s own orders, in each order\'s curren
     assertSame('unsupported', (string) $nobody['state'], 'an unmatched conversation asks Sales nothing');
 });
 
+check('Sales rows tagged with another company are not this customer\'s (G19#4 delta)', static function (): void {
+    reset();
+    connection();
+    Features::overrideForTesting(['SALES' => true]);
+    $uuid = conversation(['contact_uuid' => 'c0ffee00-0000-4000-8000-000000000004', 'customer_address' => '+919812300044']);
+    $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+    $panel = BusinessContextService::for(ctx(), owner(), (array) $row)['orders'];
+    assertSame('unsupported', (string) $panel['state'], 'an order Sales tagged with cmp 1234 is not shown in this company');
+    assertSame([], (array) $panel['data'], 'and nothing from it reaches the panel (or the AI grounding, which reads ready panels only)');
+});
+
+check('a balance is shown only for the Books ledger Contacts links the contact to (G19#5)', static function (): void {
+    reset();
+    connection();
+    Features::overrideForTesting(['BOOKS' => true, 'CONTACTS' => true]);
+    $panelFor = static function (string $contactUuid, string $address, ?Auth $as = null): array {
+        $uuid = conversation(['contact_uuid' => $contactUuid, 'customer_address' => $address]);
+        $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+
+        return BusinessContextService::for(ctx(), $as ?? owner(), (array) $row)['financial'];
+    };
+
+    $linked = $panelFor('c0ffee00-0000-4000-8000-0000000000b1', '+919812300001');
+    assertSame('ready', (string) $linked['state'], 'read live: ' . (string) ($linked['message'] ?? ''));
+    assertSame('7001', $linked['data']['ledger']['acc_id'], 'for ledger 7001, the one Contacts links');
+    assertSame(7, $linked['data']['ledger']['fy_id'], 'in the financial year Manage lists for today');
+    assertSame(700000, $linked['data']['outstanding_by_currency'][0]['outstanding_minor'], '4,800 + 3,200 owed less a 1,000 advance');
+    assertSame(['INV-2026-0091', 'INV-2026-0104'], array_column($linked['data']['invoices'], 'reference'), 'the open bills, by Books\' bill_ref');
+
+    $unlinked = $panelFor('c0ffee00-0000-4000-8000-000000000001', '+919812300002');
+    assertSame('unsupported', (string) $unlinked['state'], 'a contact with no ledger reference');
+    assertContains('not linked to a Books ledger', (string) $unlinked['message'], 'is told why, and shown no figure');
+    assertSame([], (array) $unlinked['data'], 'with no data at all');
+
+    Context::trustForTesting(CMP, owner(), true, []);
+    $noYear = $panelFor('c0ffee00-0000-4000-8000-0000000000b1', '+919812300003');
+    assertContains('no financial year', (string) $noYear['message'], 'with no financial year from Manage, Books is not asked');
+
+    $nobody = (new BooksClient())->withService('scheduler')->overdueInvoices(ctx(), 7, '2026-06-01');
+    assertSame('books_needs_person', (string) $nobody['error'], 'with nobody signed in Books is not called with a key it does not accept');
+    assertSame('books_needs_financial_year', (string) (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), null, '2026-06-01')['error'],
+        'and without a financial year it is not called at all');
+    reset();
+});
+
 check('a missing route is unsupported, which is a deployment fact', static function (): void {
     reset();
     Features::overrideForTesting(['BOOKS' => true]);
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), ['stub' => 'missing']);
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01', ['stub' => 'missing']);
     assertSame('unsupported', (string) $result['state'],
         'a 404 means that deployment of Books does not offer this, not that it is broken');
 });
@@ -1142,7 +1187,7 @@ check('the re-entry guard refuses to call back into the product that called us',
     // second one of its workers on a request that is waiting on us.
     CrossServiceCallContext::adoptAuthenticatedOrigin('books');
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx());
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01');
 
     assertFalse((bool) $result['ok'], 'the call is suppressed');
     assertSame('unavailable', (string) $result['state'], 'and reported as unavailable rather than hanging');

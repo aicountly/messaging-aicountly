@@ -18,7 +18,7 @@ declare(strict_types=1);
  *
  *   Manage     /api/companyinfo, /api/companies
  *   Contacts   /api/companies/{cmp}/contacts[/lookup|/resolve|/{id}/resolve|/{id}/references] (contract v1)
- *   Books      /api/registers, /api/reports/bill-by-bill, /api/vouchers/{id}
+ *   Books      /api/registers, /api/reports/bill-by-bill (acc_id+fy_id), /api/reports/dues, /api/vouchers/{id}
  *   Sales      /api/v1/orders, /api/v1/orders/{id}
  *   Pay        /api/v1/payment-links, /api/v1/payments
  *   Appts      /api/v1/bookings
@@ -260,30 +260,41 @@ if (preg_match('#^/api/contacts(/.*)?$#', $path) === 1) {
 // Books — the only authority for a balance
 // ---------------------------------------------------------------------------
 
+// Books' REAL report shapes (ReportsController::billByBill / ::dues). Both
+// need a financial year; bill-by-bill needs the LEDGER (acc_id) — Books has no
+// idea what a Contacts id is, and answers 400 without one. Ledger 7001 is the
+// one Contacts links to contact …b1.
 if ($path === '/api/reports/bill-by-bill') {
-    send(200, [
-        'data' => [
-            [
-                'vch_txn_id'  => 55501,
-                'voucher_no'  => 'INV-2026-0091',
-                'date'        => '2026-05-02',
-                'amount'      => 1250000,
-                'outstanding' => 480000,
-                'currency'    => 'INR',
-                'days_overdue' => 14,
-            ],
-            [
-                'vch_txn_id'  => 55502,
-                'voucher_no'  => 'INV-2026-0104',
-                'date'        => '2026-05-20',
-                'amount'      => 320000,
-                'outstanding' => 320000,
-                'currency'    => 'INR',
-                'days_overdue' => 0,
-            ],
-        ],
-        'meta' => ['total' => 2, 'limit' => 50, 'offset' => 0, 'currency' => 'INR'],
-    ]);
+    if ((int) ($query['acc_id'] ?? 0) <= 0) {
+        send(400, ['status' => 400, 'error' => 400, 'messages' => ['error' => 'acc_id required']]);
+    }
+    if ((int) ($query['fy_id'] ?? 0) <= 0) {
+        send(400, ['status' => 400, 'error' => 400, 'messages' => ['error' => 'fy_id required']]);
+    }
+    $rows = (int) $query['acc_id'] === 7001 ? [
+        ['bill_id' => 1, 'bill_ref' => 'INV-2026-0091', 'bill_date' => '2026-05-02', 'due_date' => '2026-05-17', 'bill_amount' => '12500.0000',
+            'pending_amount' => '4800.0000', 'dr_cr' => 1, 'overdue_days' => 14, 'source_vch_number' => 'INV-2026-0091'],
+        ['bill_id' => 2, 'bill_ref' => 'INV-2026-0104', 'bill_date' => '2026-05-20', 'due_date' => '2026-06-19', 'bill_amount' => '3200.0000',
+            'pending_amount' => '3200.0000', 'dr_cr' => 1, 'overdue_days' => 0, 'source_vch_number' => 'INV-2026-0104'],
+        ['bill_id' => 3, 'bill_ref' => 'On Account', 'bill_date' => null, 'due_date' => null, 'bill_amount' => '1000.0000',
+            'pending_amount' => '1000.0000', 'dr_cr' => 2, 'overdue_days' => 0, 'is_on_account' => 1],
+    ] : [];
+    send(200, ['data' => ['report' => 'bill_by_bill', 'acc_id' => (int) $query['acc_id'], 'rows' => $rows,
+        'totals' => ['pending' => 9000.0, 'overdue' => 4800.0]]]);
+}
+
+if ($path === '/api/reports/dues') {
+    foreach (['party_type', 'as_on', 'fy_id'] as $required) {
+        if (trim((string) ($query[$required] ?? '')) === '') {
+            send(422, ['status' => 422, 'error' => 422, 'messages' => [$required => $required . ' is required']]);
+        }
+    }
+    send(200, ['data' => ['as_on' => $query['as_on'], 'party_type' => 'debtor', 'group_by' => 'bill', 'rows' => [
+        ['bill_id' => 1, 'acc_id' => 7001, 'acc_name' => 'Ledger Linked', 'bill_ref' => 'INV-2026-0091', 'due_date' => '2026-05-17',
+            'pending_amount' => '4800.0000', 'dr_cr' => 1, 'days_overdue' => 14],
+        ['bill_id' => 9, 'acc_id' => 7999, 'acc_name' => 'Nobody In Contacts', 'bill_ref' => 'INV-2026-0120', 'due_date' => '2026-05-10',
+            'pending_amount' => '700.0000', 'dr_cr' => 1, 'days_overdue' => 21],
+    ], 'totals' => ['outstanding' => 5500.0]]]);
 }
 
 if ($path === '/api/registers') {
@@ -333,6 +344,9 @@ if ($path === '/api/v1/orders') {
             'total_amount' => '6400.0000', 'currency_code' => 'USD', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000001'],
         ['order_id' => 2, 'order_uuid' => 'aa000000-0000-4000-8000-000000000002', 'order_no' => 'SO-8842', 'status' => 'DRAFT', 'order_date' => '2026-05-30',
             'total_amount' => '1200.0000', 'currency_code' => 'INR', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000002'],
+        // Another company's order (cmp_id 1234) for a contact id: never shown in this company.
+        ['order_id' => 3, 'order_uuid' => 'aa000000-0000-4000-8000-000000000003', 'order_no' => 'SO-9001', 'status' => 'CONFIRMED', 'order_date' => '2026-05-31',
+            'total_amount' => '999.0000', 'currency_code' => 'INR', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000004', 'cmp_id' => 1234],
     ];
     $known = ['status', 'customer_account_id', 'contact_uuid', 'contact_id', 'salesperson_id', 'territory_id', 'channel_id', 'from', 'to', 'as_of', 'q',
         'open_only', 'committed', 'late', 'limit', 'offset', 'page', 'sort', 'order', 'cmp_id', 'fy_id', 'bo_id'];

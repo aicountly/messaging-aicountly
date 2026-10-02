@@ -201,6 +201,22 @@ final class ContactsClient extends ApiClient
     }
 
     /**
+     * The company contact a Books ledger account is explicitly linked to in
+     * Contacts (by-reference books/ledger_account), as {contact_uuid} — or
+     * null when none, or more than one, is (G19#5).
+     */
+    public function contactForLedger(int $cmpId, string $accId): array
+    {
+        return $this->run(function (ContactsApiClient $c) use ($cmpId, $accId): array {
+            $rows = array_values(array_filter($c->findByReference($cmpId, 'books', 'ledger_account', $accId), 'is_array'));
+            $ids = array_values(array_unique(array_map(static fn (array $r): string => (string) ($r['contactId'] ?? $r['id'] ?? ''), $rows)));
+            $ids = array_values(array_filter($ids, static fn (string $id) => $id !== ''));
+
+            return [count($ids) === 1 ? ['contact_uuid' => $ids[0]] : null, ['matchCount' => count($ids)]];
+        });
+    }
+
+    /**
      * A Contacts contact (contract v1) in the shape Messaging shows.
      *
      * @param array<string, mixed> $row

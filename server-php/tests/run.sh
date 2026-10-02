@@ -46,7 +46,6 @@ REACH_API_BASE=http://127.0.0.1:$STUB_PORT
 
 # Placeholder service keys. The tests assert on behaviour, never on a value.
 MANAGE_SERVICE_KEY=test-manage-service-key-0123456789
-BOOKS_SERVICE_KEY=test-books-service-key-0123456789
 MESSAGING_SERVICE_KEY=test-messaging-service-key-0123456789
 
 # app:key pairs for the inbound service contract. Placeholders, and the only

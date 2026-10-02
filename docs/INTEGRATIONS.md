@@ -11,7 +11,7 @@ distinction is not already clear.
 | --- | --- | --- | --- |
 | **Manage** | Whether this session may open this company; the company and branch masters | *none — not optional* | `MANAGE_SERVICE_KEY`, `MANAGE_API_BASE` |
 | **Contacts** | Who a phone number belongs to (company lookup, attributed only on exactly one match); a contact's details | `CONTACTS` | `CONTACTS_API_BASE` (no key: read with the person's own session) |
-| **Books** | Invoices, outstanding balances, overdue lists, receipts | `BOOKS` | `BOOKS_SERVICE_KEY`, `BOOKS_API_BASE` |
+| **Books** | Outstanding bills for the ledger a contact is linked to in Contacts (books/ledger_account), overdue dues, receipts — as the signed-in person, per Manage's financial year | `BOOKS` | `BOOKS_API_BASE` (no key: Books has no product-key access) |
 | **Sales** | Orders and their fulfilment state | `SALES` | `SALES_SERVICE_KEY`, `SALES_API_BASE` |
 | **Pay** | A payment link, and whether it has been paid | `PAY` | `PAY_SERVICE_KEY`, `PAY_API_BASE` |
 | **Appointments** | Bookings for a customer | `APPOINTMENTS` | `APPOINTMENTS_SERVICE_KEY`, `APPOINTMENTS_API_BASE` |

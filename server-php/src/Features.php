@@ -53,7 +53,9 @@ final class Features
         // Contacts is read only as the signed-in person (their own session),
         // so there is no key to require: one would be a phantom gate (G19#12).
         'CONTACTS'     => [],
-        'BOOKS'        => ['BOOKS_SERVICE_KEY'],
+        // Books too is read only as the signed-in person: it has no
+        // product-key access, so a key here would be another phantom gate.
+        'BOOKS'        => [],
         'SALES'        => ['SALES_SERVICE_KEY'],
         'PAY'          => ['PAY_SERVICE_KEY'],
         'APPOINTMENTS' => ['APPOINTMENTS_SERVICE_KEY'],

@@ -79,11 +79,10 @@ final class BooksClient extends ApiClient
     }
 
     /**
-     * Act as this product on behalf of a named human.
-     *
-     * For a journey step, where there is no browser session to borrow. The
-     * actor uuid travels so Books can record who the action was for; it is not
-     * a way to read something the actor could not.
+     * Nobody signed in (a journey step, the scheduler). Books has no
+     * product-key access, so a client built this way reads nothing: every call
+     * answers `books_needs_person` instead of being refused over there and
+     * read as "nothing owed" (G19#5).
      */
     public function withService(string $actorUuid): self
     {
@@ -97,36 +96,32 @@ final class BooksClient extends ApiClient
     /** @return array<string, string> */
     private function authHeaders(): array
     {
-        if ($this->authorization !== '') {
-            return ['Authorization' => $this->authorization];
-        }
-
-        return [
-            'X-Service-Key' => \Aicountly\Api\Env::get('BOOKS_SERVICE_KEY'),
-            'X-Actor-Uuid'  => $this->actorUuid,
-        ];
+        // Only ever the person's own session: every call above refuses first
+        // when there is none (needsPerson), because Books accepts no key.
+        return ['Authorization' => $this->authorization];
     }
 
     /**
-     * Bill-by-bill outstanding for one party.
+     * Bill-by-bill outstanding for one Books LEDGER ACCOUNT (G19#5).
      *
-     * THIS is the receivables report, and it lives in Books. There is no
-     * `messaging_receivables` table and there never will be.
-     *
-     * @param array<string, mixed> $filters
+     * THIS is the receivables report, and it lives in Books. Books answers it
+     * for an `acc_id` in a financial year (`fy_id`) — it has no idea what a
+     * Contacts id is, and the old call that sent `contact_uuid` without either
+     * was a 400 every time. The acc_id comes from an EXPLICIT reference in
+     * Contacts (ContactsClient::ledgerAccount), never from a name match.
      */
-    public function outstandingForContact(Context $ctx, string $contactUuid, array $filters = []): array
+    public function outstandingForLedger(Context $ctx, string $accId, int $fyId): array
     {
         if (!$this->configured()) {
             return $this->pendingResult();
         }
+        if ($this->authorization === '') {
+            return $this->needsPerson();
+        }
 
         return $this->request(
             'GET',
-            'reports/bill-by-bill' . self::query(
-                ['contact_uuid' => $contactUuid, 'nature' => 'receivable', 'limit' => 50]
-                + $filters + $ctx->asQuery(),
-            ),
+            'reports/bill-by-bill' . self::query(['acc_id' => $accId, 'fy_id' => $fyId] + $ctx->asQuery()),
             null,
             $this->authHeaders(),
         );
@@ -138,6 +133,9 @@ final class BooksClient extends ApiClient
         if (!$this->configured()) {
             return $this->pendingResult();
         }
+        if ($this->authorization === '') {
+            return $this->needsPerson();
+        }
 
         return $this->request(
             'GET',
@@ -148,29 +146,48 @@ final class BooksClient extends ApiClient
     }
 
     /**
-     * Overdue invoices, for the payment-reminder journey's scheduled check.
+     * Overdue receivables across the company (Books `reports/dues`, debtors,
+     * overdue on `as_on`), for a journey simulation run by a person.
      *
      * A bounded live query with an explicit limit, processed in memory, and not
-     * written down. This is the "configured scheduled operational check" the
-     * brief permits: it calls a live API and acts on the result, and it does
-     * not copy a single row into this product.
+     * written down. Each row names a Books ledger (acc_id); who that is in
+     * Contacts is only what an explicit reference says (G19#5).
      *
      * @param array<string, mixed> $filters
      */
-    public function overdueInvoices(Context $ctx, array $filters = []): array
+    public function overdueInvoices(Context $ctx, ?int $fyId, string $asOn, array $filters = []): array
     {
         if (!$this->configured()) {
             return $this->pendingResult();
         }
+        if ($this->authorization === '') {
+            return $this->needsPerson();
+        }
+        if ($fyId === null) {
+            return $this->envelope(false, 0, null, 'books_needs_financial_year', 'unsupported', false,
+                'Manage lists no financial year covering ' . $asOn . ' for this company, so Books cannot be asked.');
+        }
 
         return $this->request(
             'GET',
-            'reports/bill-by-bill' . self::query(
-                ['nature' => 'receivable', 'overdue' => 1, 'limit' => 200] + $filters + $ctx->asQuery(),
+            'reports/dues' . self::query(
+                ['party_type' => 'debtor', 'as_on' => $asOn, 'status' => 'overdue', 'limit' => 200, 'fy_id' => $fyId]
+                + $filters + $ctx->asQuery(),
             ),
             null,
             $this->authHeaders(),
         );
+    }
+
+    /**
+     * Books is read as a signed-in person. It has no product-key access, so a
+     * call with nobody signed in would only ever be refused there — and a
+     * refusal must not read as "nothing is owed".
+     */
+    private function needsPerson(): array
+    {
+        return $this->envelope(false, 0, null, 'books_needs_person', 'unsupported', false,
+            'Aicountly Books is read as the signed-in person; with nobody signed in it is not read.');
     }
 
     /**
@@ -186,6 +203,9 @@ final class BooksClient extends ApiClient
     {
         if (!$this->configured()) {
             return $this->pendingResult();
+        }
+        if ($this->authorization === '') {
+            return $this->needsPerson();
         }
 
         return $this->request(
@@ -211,6 +231,9 @@ final class BooksClient extends ApiClient
     {
         if (!$this->configured()) {
             return $this->pendingResult();
+        }
+        if ($this->authorization === '') {
+            return $this->needsPerson();
         }
 
         return $this->request(

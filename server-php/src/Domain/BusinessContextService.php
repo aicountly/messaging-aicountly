@@ -13,6 +13,7 @@ use Aicountly\Api\Clients\SalesClient;
 use Aicountly\Api\Context;
 use Aicountly\Api\Env;
 use Aicountly\Api\Permissions;
+use Aicountly\Api\Support\Clock;
 
 /**
  * The Unified Inbox's right-hand panel: live business context.
@@ -186,58 +187,86 @@ final class BusinessContextService
         ];
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * What this customer owes, from Books — ONLY for the Books ledger the
+     * company contact is explicitly linked to in Contacts (G19#5). No link, two
+     * links, no financial year: the panel says which, and shows no figure.
+     *
+     * @return array<string, mixed>
+     */
     private static function financialPanel(Context $ctx, Auth $auth, string $contactUuid, string $sesKey): array
     {
         $client = new BooksClient();
         if (!$client->configured()) {
             return self::pending('books', $client->unavailableMessage());
         }
+        $hidden = static fn (string $message): array => [
+            'state' => 'unsupported', 'source' => 'books', 'fetched_at' => gmdate('c'), 'message' => $message, 'data' => [],
+        ];
         if ($contactUuid === '') {
-            return [
-                'state' => 'unsupported', 'source' => 'books', 'fetched_at' => gmdate('c'),
-                'message' => 'This conversation is not matched to a contact yet, so Books cannot be asked what they owe.',
-                'data' => [],
-            ];
+            return $hidden('This conversation is not matched to a contact yet, so Books cannot be asked what they owe.');
+        }
+        if ($sesKey === '') {
+            return $hidden('Balances are read from Aicountly Books as the signed-in person; nobody is signed in.');
         }
 
-        $client = $sesKey !== '' ? $client->withSession($sesKey) : $client->withService($auth->uuid);
-        $result = $client->outstandingForContact($ctx, $contactUuid);
+        $ledger = (new ContactsClient())->withSession($sesKey)->ledgerAccount($ctx->cmpId, $contactUuid);
+        if (!$ledger['ok']) {
+            return self::fromEnvelope($ledger);
+        }
+        $accId = (string) ($ledger['body']['data']['acc_id'] ?? '');
+        if ($accId === '') {
+            return $hidden(($ledger['body']['meta']['ambiguous'] ?? false)
+                ? 'This contact is linked to more than one Books ledger in Aicountly Contacts, so no balance is shown.'
+                : 'This contact is not linked to a Books ledger in Aicountly Contacts, so no balance is shown. '
+                    . 'Link the ledger on the contact in Contacts.');
+        }
+        $today = Clock::now()->setTimezone(Settings::timezone($ctx))->format('Y-m-d');
+        $fyId = $ctx->fyFor($auth, $today);
+        if ($fyId === null) {
+            return $hidden('Manage lists no financial year covering ' . $today . ' for this company, so Books cannot be asked.');
+        }
 
+        $result = $client->withSession($sesKey)->outstandingForLedger($ctx, $accId, $fyId);
         if (!$result['ok']) {
             return self::fromEnvelope($result);
         }
+        $report = (array) ($result['body']['data'] ?? []);
+        if ((string) ($report['acc_id'] ?? '') !== $accId) {
+            // An answer about another ledger is not this customer's.
+            return $hidden('Books answered about a different ledger, so nothing from it is shown.');
+        }
 
-        $rows = (array) ($result['body']['data'] ?? []);
-
-        // Grouped by currency, never summed across them.
-        $byCurrency = [];
+        // Books reports one company in its base currency; amounts are major
+        // units. Dr bills are what the customer owes; a Cr row (an advance or
+        // credit note) reduces it.
+        $currency = Settings::currency($ctx);
+        $net = 0;
         $invoices = [];
-        foreach ($rows as $row) {
+        $count = 0;
+        foreach ((array) ($report['rows'] ?? []) as $row) {
             if (!is_array($row)) {
                 continue;
             }
-            $currency = strtoupper((string) ($row['currency'] ?? Settings::currency($ctx)));
-            $outstanding = isset($row['outstanding_amount'])
-                ? (int) round((float) $row['outstanding_amount'] * 100)
-                : (int) ($row['outstanding_minor'] ?? 0);
-
-            $byCurrency[$currency] = ($byCurrency[$currency] ?? 0) + $outstanding;
-
+            $pending = (int) round((float) ($row['pending_amount'] ?? 0) * 100);
+            if ($pending === 0) {
+                continue;
+            }
+            $credit = (int) ($row['dr_cr'] ?? 1) === 2;
+            $net += $credit ? -$pending : $pending;
+            if ($credit) {
+                continue;
+            }
+            $count++;
             if (count($invoices) < 10) {
                 $invoices[] = [
-                    'reference'         => (string) ($row['voucher_no'] ?? $row['reference'] ?? ''),
-                    'outstanding_minor' => $outstanding,
+                    'reference'         => (string) (($row['bill_ref'] ?? '') !== '' ? $row['bill_ref'] : ($row['source_vch_number'] ?? '')),
+                    'outstanding_minor' => $pending,
                     'currency'          => $currency,
                     'due_date'          => (string) ($row['due_date'] ?? ''),
                     'overdue_days'      => isset($row['overdue_days']) ? (int) $row['overdue_days'] : null,
                 ];
             }
-        }
-
-        $totals = [];
-        foreach ($byCurrency as $currency => $minor) {
-            $totals[] = ['currency' => $currency, 'outstanding_minor' => $minor];
         }
 
         return [
@@ -246,14 +275,12 @@ final class BusinessContextService
             'fetched_at' => $result['fetched_at'],
             'message'    => '',
             'data'       => [
-                'outstanding_by_currency' => $totals,
-                'invoice_count'           => count($rows),
+                'outstanding_by_currency' => [['currency' => $currency, 'outstanding_minor' => $net]],
+                'invoice_count'           => $count,
                 'invoices'                => $invoices,
                 'combined_total'          => null,
-                'combined_note'           => count($totals) > 1
-                    ? 'This customer has balances in more than one currency. They are shown separately because no '
-                        . 'conversion source is configured.'
-                    : null,
+                'combined_note'           => null,
+                'ledger'                  => ['acc_id' => $accId, 'fy_id' => $fyId, 'linked_in' => 'contacts'],
             ],
         ];
     }
@@ -358,6 +385,14 @@ final class BusinessContextService
             // ignored `contact_uuid` answered with the company's latest orders,
             // and an agent read them out as this customer's.
             if (strcasecmp(trim((string) ($row['contact_id'] ?? '')), $contactUuid) !== 0) {
+                $others++;
+                continue;
+            }
+            // And this company's: a row Sales tagged with another cmp_id is
+            // not shown either, whatever contact it names (G19#4 delta; the
+            // contact itself was confirmed in this company's directory when the
+            // conversation was matched).
+            if (isset($row['cmp_id']) && (int) $row['cmp_id'] !== $ctx->cmpId) {
                 $others++;
                 continue;
             }
