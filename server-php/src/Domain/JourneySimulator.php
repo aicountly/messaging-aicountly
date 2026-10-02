@@ -7,6 +7,7 @@ namespace Aicountly\Api\Domain;
 use Aicountly\Api\Auth;
 use Aicountly\Api\Context;
 use Aicountly\Api\Db;
+use Aicountly\Api\Support\Clock;
 
 /**
  * Test a journey without sending anything.
@@ -345,9 +346,16 @@ final class JourneySimulator
 
         // Another product owns the subjects. Ask it, with a bound.
         if ($source === 'books_overdue_invoices' || $source === 'books_invoice') {
+            // Books is read as the person running the simulation (it has no
+            // product-key access), for this company's financial year per
+            // Manage, and reports dues per Books LEDGER. A ledger is a
+            // customer only where Contacts holds an explicit reference (G19#5).
             $client = new \Aicountly\Api\Clients\BooksClient();
-            $client = $auth->sesKey() !== '' ? $client->withSession($auth->sesKey()) : $client->withService($auth->uuid);
-            $result = $client->overdueInvoices($ctx, ['limit' => $count]);
+            if ($auth->sesKey() !== '') {
+                $client = $client->withSession($auth->sesKey());
+            }
+            $today = Clock::now()->setTimezone(Settings::timezone($ctx))->format('Y-m-d');
+            $result = $client->overdueInvoices($ctx, $ctx->fyFor($auth, $today), $today, ['limit' => $count]);
 
             if (!$result['ok']) {
                 return [
@@ -361,36 +369,51 @@ final class JourneySimulator
                 ];
             }
 
-            $rows = (array) ($result['body']['data'] ?? []);
+            $rows = array_values(array_filter((array) ($result['body']['data']['rows'] ?? []), 'is_array'));
+            $contacts = (new \Aicountly\Api\Clients\ContactsClient())->withSession($auth->sesKey());
+            $byLedger = [];
             $subjects = [];
+            $unlinked = 0;
             foreach (array_slice($rows, 0, $count) as $row) {
-                if (!is_array($row)) {
+                if ((int) ($row['dr_cr'] ?? 1) === 2) {
                     continue;
                 }
-                $outstanding = isset($row['outstanding_amount']) ? (int) round((float) $row['outstanding_amount'] * 100) : 0;
+                $accId = (string) ($row['acc_id'] ?? '');
+                if ($accId !== '' && !array_key_exists($accId, $byLedger) && count($byLedger) < 25) {
+                    $linked = $contacts->contactForLedger($ctx->cmpId, $accId);
+                    $byLedger[$accId] = $linked['ok'] ? (string) ($linked['body']['data']['contact_uuid'] ?? '') : '';
+                }
+                $contactUuid = $byLedger[$accId] ?? '';
+                if ($contactUuid === '') {
+                    $unlinked++;
+                }
+                $reference = (string) ($row['bill_ref'] ?? '');
                 $subjects[] = [
-                    'label'          => (string) ($row['voucher_no'] ?? ''),
-                    'reference'      => (string) ($row['voucher_no'] ?? $row['voucher_id'] ?? ''),
+                    'label'          => $reference . ' · ' . (string) ($row['acc_name'] ?? ''),
+                    'reference'      => $reference,
                     'channel'        => '',
                     'address'        => '',
-                    'contact_uuid'   => (string) ($row['contact_uuid'] ?? ''),
+                    'contact_uuid'   => $contactUuid,
                     'source_product' => 'books',
                     'source_data'    => [
-                        'label'             => (string) ($row['voucher_no'] ?? ''),
-                        'status'            => strtoupper((string) ($row['status'] ?? 'OUTSTANDING')),
-                        'outstanding_minor' => $outstanding,
-                        'currency'          => strtoupper((string) ($row['currency'] ?? Settings::currency($ctx))),
+                        'label'             => $reference,
+                        'status'            => 'OVERDUE',
+                        'outstanding_minor' => (int) round((float) ($row['pending_amount'] ?? 0) * 100),
+                        'currency'          => Settings::currency($ctx),
                     ],
                 ];
             }
 
             return [
                 'subjects'     => $subjects,
-                'source'       => 'Aicountly Books, overdue invoices (live, read-only)',
+                'source'       => 'Aicountly Books, overdue receivables (live, read-only)',
                 'completeness' => count($rows) >= $count ? 'partial' : 'complete',
-                'note'         => count($rows) >= $count
+                'note'         => (count($rows) >= $count
                     ? 'Evaluated ' . count($subjects) . ' invoices, which is the query limit. There may be more.'
-                    : 'Evaluated all ' . count($subjects) . ' overdue invoices Books reported.',
+                    : 'Evaluated all ' . count($subjects) . ' overdue invoices Books reported.')
+                    . ($unlinked > 0
+                        ? ' ' . $unlinked . ' belong to a Books ledger not linked to a contact in Aicountly Contacts, so they have no recipient.'
+                        : ''),
             ];
         }
 

@@ -30,10 +30,11 @@ use Aicountly\Api\Env;
  *
  * Configuration (server-php/.env):
  *   PULSE_API_ORIGIN   https://pulse.aicountly.com (sandbox https://pulse.gh.aicountly.com).
- *                      Unset: picked from this API's host the way the sibling
- *                      clients pick theirs — *.gh.aicountly.com, gh-*.aicountly.com,
- *                      localhost and 127.* are sandbox — and, with no host at all
- *                      (the CLI), from APP_ENV. A trailing /api is ignored.
+ *                      Unset: production Pulse for AIC_ENVIRONMENT (else APP_ENV)
+ *                      production, the sandbox for sandbox/local — from configuration
+ *                      only, never the request's Host and never a guess for a CLI
+ *                      with no Host (X-09). Unconfigured: no call. A trailing /api
+ *                      is ignored.
  *   PULSE_SERVICE_KEY  only for calls with no signed-in user.
  *
  * Never throws, never logs content. Every method returns
@@ -120,6 +121,9 @@ final class PulseAiClient
             return self::result(false, 0, 'not_configured', 'No user session and no PULSE_SERVICE_KEY to ask AI Pulse with.', false);
         }
         $headers = ['Accept: application/json', 'X-Pulse-Product: ' . $this->product, $caller];
+        if ($this->origin() === '') {
+            return self::result(false, 0, 'not_configured', \Aicountly\Api\Environment::explainUnconfigured(), false);
+        }
         $res = ($this->transport)('GET', $this->origin() . '/api/ai/v1/status', $headers, null, 4.0, 2.0);
         if ($res['error'] !== null) {
             return self::result(false, 0, $res['error'] === 'timeout' ? 'timeout' : 'pulse_unreachable', 'AI Pulse did not answer.', true);
@@ -137,6 +141,9 @@ final class PulseAiClient
         $origin = $this->origin !== null && trim($this->origin) !== '' ? trim($this->origin) : self::env('PULSE_API_ORIGIN');
         if ($origin === '') {
             $origin = self::defaultOrigin();
+        }
+        if ($origin === '') {
+            return '';
         }
         $origin = rtrim($origin, '/');
 
@@ -163,6 +170,9 @@ final class PulseAiClient
             return self::result(false, 0, 'invalid_request', 'The request could not be encoded as JSON.', false);
         }
 
+        if ($this->origin() === '') {
+            return self::result(false, 0, 'not_configured', \Aicountly\Api\Environment::explainUnconfigured(), false);
+        }
         $res = ($this->transport)('POST', $this->origin() . $path, $headers, $encoded, $this->timeoutSeconds, $this->connectTimeoutSeconds);
         if ($res['error'] !== null) {
             // The outcome is unknown: retry only with the same Idempotency-Key.
@@ -193,19 +203,13 @@ final class PulseAiClient
 
     private static function defaultOrigin(): string
     {
-        $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
-        $host = explode(':', preg_replace('/^www\./', '', $host) ?? '')[0];
-
-        if ($host === '') {
-            // The CLI has no host to go by; the deployment's own APP_ENV does.
-            return in_array(strtolower(self::env('APP_ENV')), ['sandbox', 'local'], true) ? self::SANDBOX : self::PRODUCTION;
-        }
-        if (preg_match('/\.gh\.aicountly\.com$|^gh-[a-z0-9-]+\.aicountly\.com$/', $host) === 1
-            || $host === 'localhost' || str_starts_with($host, '127.')) {
-            return self::SANDBOX;
-        }
-
-        return self::PRODUCTION;
+        // From the configured environment only (Environment) — never the
+        // request's Host, and never a guess for a CLI with no Host (X-09).
+        return match (\Aicountly\Api\Environment::siblingTier()) {
+            'production' => self::PRODUCTION,
+            'sandbox'    => self::SANDBOX,
+            default      => '',
+        };
     }
 
     /**

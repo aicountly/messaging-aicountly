@@ -17,8 +17,8 @@ declare(strict_types=1);
  * ## What it serves
  *
  *   Manage     /api/companyinfo, /api/companies
- *   Contacts   /api/contacts, /api/contacts/{uuid}
- *   Books      /api/registers, /api/reports/bill-by-bill, /api/vouchers/{id}
+ *   Contacts   /api/companies/{cmp}/contacts[/lookup|/resolve|/{id}/resolve|/{id}/references] (contract v1)
+ *   Books      /api/registers, /api/reports/bill-by-bill (acc_id+fy_id), /api/reports/dues, /api/vouchers/{id}
  *   Sales      /api/v1/orders, /api/v1/orders/{id}
  *   Pay        /api/v1/payment-links, /api/v1/payments
  *   Appts      /api/v1/bookings
@@ -100,23 +100,53 @@ if ($path === '/api/health') {
 // Manage — the tenant boundary
 // ---------------------------------------------------------------------------
 
-if ($path === '/api/companyinfo' || preg_match('#^/api/companies/(\d+)$#', $path, $m) === 1) {
-    $cmpId = (int) ($query['cmp_id'] ?? $m[1] ?? 0);
+// The portal's validatesession, in its REAL shape (my-aicountly-com
+// AuthController::validateSession): status, uuid_aictly and the key — no
+// name, no acs_type. A test session "test-ses-key-<uuid>" is that user.
+if ($path === '/api/validatesession') {
+    $bearer = preg_match('/Bearer\s+(.+)/i', (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? ''), $b) === 1 ? trim($b[1]) : '';
+    if (!str_starts_with($bearer, 'test-ses-key-')) {
+        send(401, ['status' => 0, 'message' => 'Invalid session']);
+    }
+    send(200, ['status' => 1, 'uuid_aictly' => substr($bearer, strlen('test-ses-key-')), 'ses_key' => $bearer]);
+}
 
-    // A company id the tests use to prove the boundary holds: Manage says it
-    // is a DIFFERENT company, which must produce a 403 rather than a silent
-    // cross-tenant read.
+// Manage's REAL companyinfo shape (manage-aicountly CompanyModel::companyInfo):
+// asked with the caller's own ses_key and `comp_id`; 404 "not found or access
+// denied" for a company the session cannot open. Ownership is in THIS answer
+// (ownership / is_creator / access_type) — the portal session carries none.
+if ($path === '/api/companyinfo' || preg_match('#^/api/companies/(\d+)$#', $path, $m) === 1) {
+    $cmpId = (int) ($query['comp_id'] ?? $query['cmp_id'] ?? $m[1] ?? 0);
+    $bearer = preg_match('/Bearer\s+(.+)/i', (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? ''), $b) === 1 ? trim($b[1]) : '';
+
+    // 9999: Manage answers about a DIFFERENT company — never read as a yes (503).
     if ($cmpId === 9999) {
-        send(200, ['data' => ['cmp_id' => 1234, 'cmp_name' => 'Somebody Else Pvt Ltd']]);
+        send(200, ['success' => '1', 'data' => ['comp_id' => 1234, 'cmp_id' => 1234, 'comp_name' => 'Somebody Else Pvt Ltd']]);
+    }
+    // 9998: this session may not open it — Manage's 404 (→ 403 here).
+    if ($cmpId === 9998) {
+        send(404, ['success' => false, 'message' => 'Company not found or access denied']);
+    }
+    // 9997: Manage itself failing (→ 503, never an allow).
+    if ($cmpId === 9997) {
+        send(502, ['message' => 'Bad gateway']);
     }
 
+    // The suites' owners own every stub company; everybody else is a member.
+    $owner = in_array($bearer, ['test-ses-key-user-owner', 'test-ses-key-user-http'], true);
     send(200, [
+        'success' => '1',
         'data' => [
-            'cmp_id'    => $cmpId,
-            'cmp_name'  => 'Stub Trading Co',
-            'currency'  => 'INR',
-            'timezone'  => 'Asia/Kolkata',
-            'branches'  => [['bo_id' => 0, 'bo_name' => 'All locations']],
+            'comp_id'     => $cmpId,
+            'cmp_id'      => $cmpId,
+            'comp_name'   => 'Stub Trading Co',
+            'currency'    => 'INR',
+            'timezone'    => 'Asia/Kolkata',
+            'branch_list' => [['bo_id' => 0, 'bo_name' => 'All locations']],
+            'fy_list'     => [['fy_id' => 7, 'fy_start' => '2026-04-01', 'fy_end' => '2027-03-31', 'fy_name' => '2026-27']],
+            'is_creator'  => $owner,
+            'ownership'   => $owner ? 'owner' : 'shared',
+            'access_type' => $owner ? 1 : 2,
         ],
     ]);
 }
@@ -135,68 +165,136 @@ if ($path === '/api/companies') {
 // Contacts — identity. Messaging holds a reference; this is the record.
 // ---------------------------------------------------------------------------
 
-if (preg_match('#^/api/contacts/([^/]+)$#', $path, $m) === 1) {
-    send(200, [
-        'data' => [
-            'contact_uuid' => $m[1],
-            'name'         => 'Priya Sharma',
-            'mobile'       => '+919812345678',
-            'email'        => 'priya@example.test',
-            'city'         => 'Pune',
-            'tags'         => ['retail'],
-        ],
-    ]);
+// Contract v1 COMPANY endpoints, in the shape the real serializer emits
+// (ContactApiSerializer::companyContactToApi: displayName, phones[{value}],
+// emails[{value}], cmpId). The run against the REAL Contacts handlers is
+// tests/contacts-conformance.php (e2e harness); this only lets the suite run.
+//   +919812345678  Priya Sharma (c0ffee…01) — exactly one match
+//   +919812399999  two contacts share it — ambiguous
+//   anything else  nobody
+function stub_contact(string $id, string $name, array $phones, int $cmp, array $emails = []): array
+{
+    return [
+        'id' => $id, 'displayName' => $name, 'organizationName' => '', 'contactKind' => 'person',
+        'phones' => array_map(static fn ($p) => ['value' => $p], $phones),
+        'emails' => array_map(static fn ($e) => ['value' => $e], $emails),
+        'state' => 'active', 'mergedIntoId' => null, 'archivedAt' => null, 'cmpId' => $cmp, 'visibility' => 'company',
+    ];
 }
 
-if ($path === '/api/contacts') {
-    $wanted = (string) ($query['mobile'] ?? $query['q'] ?? '');
+if (preg_match('#^/api/companies/(\d+)/contacts(/.*)?$#', $path, $cm) === 1) {
+    $cmp = (int) $cm[1];
+    $rest = trim((string) ($cm[2] ?? ''), '/');
+    $priya = stub_contact('c0ffee00-0000-4000-8000-000000000001', 'Priya Sharma', ['+919812345678'], $cmp, ['priya@example.test']);
+    $directory = [
+        $priya['id'] => $priya,
+        'c0ffee00-0000-4000-8000-000000000002' => stub_contact('c0ffee00-0000-4000-8000-000000000002', 'Shared Desk A', ['+919812399999'], $cmp),
+        'c0ffee00-0000-4000-8000-000000000003' => stub_contact('c0ffee00-0000-4000-8000-000000000003', 'Shared Desk B', ['09812399999'], $cmp),
+        // Books knows this one: an explicit ledger link in Contacts.
+        'c0ffee00-0000-4000-8000-0000000000b1' => stub_contact('c0ffee00-0000-4000-8000-0000000000b1', 'Ledger Linked', ['+919812300001'], $cmp),
+    ];
+    $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 
-    // An address nobody has matched to a contact. NULL is the normal, permanent
-    // answer for a walk-in number and the tests assert the UI copes with it
-    // rather than inventing a name.
-    if (str_contains($wanted, '900000')) {
-        send(200, ['data' => [], 'meta' => ['total' => 0, 'limit' => 20, 'offset' => 0]]);
+    if ($rest === 'lookup') {
+        $unknown = array_diff(array_keys($query), ['email', 'phone', 'tax_id']);
+        if ($unknown !== []) {
+            send(400, ['status' => 0, 'error' => ['code' => 'unsupported_parameter', 'message' => implode(', ', $unknown)]]);
+        }
+        $digits = substr(preg_replace('/\D/', '', (string) ($query['phone'] ?? '')) ?? '', -10);
+        $hits = array_values(array_filter($directory, static function (array $c) use ($digits): bool {
+            foreach ($c['phones'] as $p) {
+                if ($digits !== '' && substr(preg_replace('/\D/', '', $p['value']) ?? '', -10) === $digits) {
+                    return true;
+                }
+            }
+
+            return false;
+        }));
+        send(200, ['status' => 1, 'data' => $hits, 'meta' => ['matchCount' => count($hits)]]);
     }
+    if ($rest === 'resolve' && $method === 'POST') {
+        $ids = (array) (json_decode((string) file_get_contents('php://input'), true)['ids'] ?? []);
+        $out = [];
+        foreach ($ids as $id) {
+            $out[] = isset($directory[$id])
+                ? ['id' => $id, 'state' => 'active', 'survivorId' => $id, 'contact' => $directory[$id]]
+                : ['id' => $id, 'state' => 'not_found', 'survivorId' => null, 'contact' => null];
+        }
+        send(200, ['status' => 1, 'data' => $out]);
+    }
+    if (preg_match('#^([^/]+)/resolve$#', $rest, $rm) === 1) {
+        // Merged: …0099 was merged into Priya.
+        if ($rm[1] === 'c0ffee00-0000-4000-8000-000000000099') {
+            send(200, ['status' => 1, 'data' => ['id' => $rm[1], 'state' => 'merged', 'survivorId' => $priya['id'], 'contact' => $priya]]);
+        }
+        if (!isset($directory[$rm[1]])) {
+            send(404, ['status' => 0, 'error' => ['code' => 'not_found', 'message' => 'Contact not found.']]);
+        }
+        send(200, ['status' => 1, 'data' => ['id' => $rm[1], 'state' => 'active', 'survivorId' => $rm[1], 'contact' => $directory[$rm[1]]]]);
+    }
+    if (preg_match('#^([^/]+)/references$#', $rest, $rm) === 1) {
+        $refs = $rm[1] === 'c0ffee00-0000-4000-8000-0000000000b1'
+            ? [['id' => 'ref-1', 'contactId' => $rm[1], 'cmpId' => $cmp, 'product' => 'books', 'refType' => 'ledger_account', 'ref' => '7001']]
+            : [];
+        send(200, ['status' => 1, 'data' => $refs]);
+    }
+    if ($rest === '') {
+        $unknown = array_diff(array_keys($query), ['q', 'email', 'phone', 'type', 'category', 'source', 'tags', 'scope', 'page', 'per_page', 'include_archived', 'product', 'ecosystem_role', 'company_id', 'company', 'ids', 'sort', 'tax_id']);
+        if ($unknown !== []) {
+            send(400, ['status' => 0, 'error' => ['code' => 'unsupported_parameter', 'message' => implode(', ', $unknown)]]);
+        }
+        $q = strtolower(trim((string) ($query['q'] ?? '')));
+        $rows = array_values(array_filter($directory, static fn (array $c) => $q === '' || str_contains(strtolower($c['displayName']), $q)
+            || str_contains(preg_replace('/\D/', '', json_encode($c['phones'])) ?? '', preg_replace('/\D/', '', $q) ?: '#')));
+        send(200, ['status' => 1, 'data' => $rows, 'meta' => ['total' => count($rows), 'page' => (int) ($query['page'] ?? 1), 'perPage' => (int) ($query['per_page'] ?? 25)]]);
+    }
+    send(404, ['status' => 0, 'error' => ['code' => 'not_found', 'message' => 'Contact not found.']]);
+}
 
-    send(200, [
-        'data' => [[
-            'contact_uuid' => 'c0ffee00-0000-4000-8000-000000000001',
-            'name'         => 'Priya Sharma',
-            'mobile'       => '+919812345678',
-            'email'        => 'priya@example.test',
-        ]],
-        'meta' => ['total' => 1, 'limit' => 20, 'offset' => 0],
-    ]);
+// The personal book is NOT the inbox's directory: a call here is a bug (G19#3).
+if (preg_match('#^/api/contacts(/.*)?$#', $path) === 1) {
+    send(410, ['status' => 0, 'error' => ['code' => 'personal_book_not_for_messaging', 'message' => 'Messaging reads the company directory.']]);
 }
 
 // ---------------------------------------------------------------------------
 // Books — the only authority for a balance
 // ---------------------------------------------------------------------------
 
+// Books' REAL report shapes (ReportsController::billByBill / ::dues). Both
+// need a financial year; bill-by-bill needs the LEDGER (acc_id) — Books has no
+// idea what a Contacts id is, and answers 400 without one. Ledger 7001 is the
+// one Contacts links to contact …b1.
 if ($path === '/api/reports/bill-by-bill') {
-    send(200, [
-        'data' => [
-            [
-                'vch_txn_id'  => 55501,
-                'voucher_no'  => 'INV-2026-0091',
-                'date'        => '2026-05-02',
-                'amount'      => 1250000,
-                'outstanding' => 480000,
-                'currency'    => 'INR',
-                'days_overdue' => 14,
-            ],
-            [
-                'vch_txn_id'  => 55502,
-                'voucher_no'  => 'INV-2026-0104',
-                'date'        => '2026-05-20',
-                'amount'      => 320000,
-                'outstanding' => 320000,
-                'currency'    => 'INR',
-                'days_overdue' => 0,
-            ],
-        ],
-        'meta' => ['total' => 2, 'limit' => 50, 'offset' => 0, 'currency' => 'INR'],
-    ]);
+    if ((int) ($query['acc_id'] ?? 0) <= 0) {
+        send(400, ['status' => 400, 'error' => 400, 'messages' => ['error' => 'acc_id required']]);
+    }
+    if ((int) ($query['fy_id'] ?? 0) <= 0) {
+        send(400, ['status' => 400, 'error' => 400, 'messages' => ['error' => 'fy_id required']]);
+    }
+    $rows = (int) $query['acc_id'] === 7001 ? [
+        ['bill_id' => 1, 'bill_ref' => 'INV-2026-0091', 'bill_date' => '2026-05-02', 'due_date' => '2026-05-17', 'bill_amount' => '12500.0000',
+            'pending_amount' => '4800.0000', 'dr_cr' => 1, 'overdue_days' => 14, 'source_vch_number' => 'INV-2026-0091'],
+        ['bill_id' => 2, 'bill_ref' => 'INV-2026-0104', 'bill_date' => '2026-05-20', 'due_date' => '2026-06-19', 'bill_amount' => '3200.0000',
+            'pending_amount' => '3200.0000', 'dr_cr' => 1, 'overdue_days' => 0, 'source_vch_number' => 'INV-2026-0104'],
+        ['bill_id' => 3, 'bill_ref' => 'On Account', 'bill_date' => null, 'due_date' => null, 'bill_amount' => '1000.0000',
+            'pending_amount' => '1000.0000', 'dr_cr' => 2, 'overdue_days' => 0, 'is_on_account' => 1],
+    ] : [];
+    send(200, ['data' => ['report' => 'bill_by_bill', 'acc_id' => (int) $query['acc_id'], 'rows' => $rows,
+        'totals' => ['pending' => 9000.0, 'overdue' => 4800.0]]]);
+}
+
+if ($path === '/api/reports/dues') {
+    foreach (['party_type', 'as_on', 'fy_id'] as $required) {
+        if (trim((string) ($query[$required] ?? '')) === '') {
+            send(422, ['status' => 422, 'error' => 422, 'messages' => [$required => $required . ' is required']]);
+        }
+    }
+    send(200, ['data' => ['as_on' => $query['as_on'], 'party_type' => 'debtor', 'group_by' => 'bill', 'rows' => [
+        ['bill_id' => 1, 'acc_id' => 7001, 'acc_name' => 'Ledger Linked', 'bill_ref' => 'INV-2026-0091', 'due_date' => '2026-05-17',
+            'pending_amount' => '4800.0000', 'dr_cr' => 1, 'days_overdue' => 14],
+        ['bill_id' => 9, 'acc_id' => 7999, 'acc_name' => 'Nobody In Contacts', 'bill_ref' => 'INV-2026-0120', 'due_date' => '2026-05-10',
+            'pending_amount' => '700.0000', 'dr_cr' => 1, 'days_overdue' => 21],
+    ], 'totals' => ['outstanding' => 5500.0]]]);
 }
 
 if ($path === '/api/registers') {
@@ -246,6 +344,9 @@ if ($path === '/api/v1/orders') {
             'total_amount' => '6400.0000', 'currency_code' => 'USD', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000001'],
         ['order_id' => 2, 'order_uuid' => 'aa000000-0000-4000-8000-000000000002', 'order_no' => 'SO-8842', 'status' => 'DRAFT', 'order_date' => '2026-05-30',
             'total_amount' => '1200.0000', 'currency_code' => 'INR', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000002'],
+        // Another company's order (cmp_id 1234) for a contact id: never shown in this company.
+        ['order_id' => 3, 'order_uuid' => 'aa000000-0000-4000-8000-000000000003', 'order_no' => 'SO-9001', 'status' => 'CONFIRMED', 'order_date' => '2026-05-31',
+            'total_amount' => '999.0000', 'currency_code' => 'INR', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000004', 'cmp_id' => 1234],
     ];
     $known = ['status', 'customer_account_id', 'contact_uuid', 'contact_id', 'salesperson_id', 'territory_id', 'channel_id', 'from', 'to', 'as_of', 'q',
         'open_only', 'committed', 'late', 'limit', 'offset', 'page', 'sort', 'order', 'cmp_id', 'fy_id', 'bo_id'];

@@ -47,6 +47,7 @@ import { useUrlFilters } from '../hooks/useUrlState'
 import { ApiError, api } from '../services/api'
 import type {
   BusinessContext,
+  ContactSummary,
   Conversation,
   ConversationDetail,
   DraftSuggestion,
@@ -1355,16 +1356,16 @@ function BusinessContextPanel({
                       <dd className="msg-truncate">{data.email}</dd>
                     </>
                   )}
-                  {data.language && (
-                    <>
-                      <dt>Prefers</dt>
-                      <dd>{data.language.toUpperCase()}</dd>
-                    </>
-                  )}
                 </dl>
               </>
             ) : (
-              <MatchContact conversationUuid={conversationUuid} address={data.address} onMatched={onChanged} />
+              <MatchContact
+                conversationUuid={conversationUuid}
+                address={data.address}
+                suggestion={data.suggestion}
+                candidates={data.candidates}
+                onMatched={onChanged}
+              />
             )
           }
         </SourcePanelState>
@@ -1554,10 +1555,16 @@ function BusinessContextPanel({
 function MatchContact({
   conversationUuid,
   address,
+  suggestion,
+  candidates,
   onMatched,
 }: {
   conversationUuid: string
   address: string
+  /** The one contact holding this number (Contacts' matchCount was 1). */
+  suggestion?: ContactSummary
+  /** Several hold it: listed, none assumed. */
+  candidates?: ContactSummary[]
   onMatched: () => void
 }) {
   const [open, setOpen] = useState(false)
@@ -1580,15 +1587,50 @@ function MatchContact({
     api.post(`v1/conversations/${conversationUuid}/match-contact`, { contact_uuid: contactUuid }),
   )
 
+  const offered = suggestion ? [suggestion] : (candidates ?? [])
+
   return (
     <>
       <p className="msg-muted msg-small" style={{ margin: 0, lineHeight: 1.5 }}>
-        No contact matches <strong>{address}</strong> yet, so this customer's invoices, orders and appointments
-        cannot be shown.
+        {suggestion ? (
+          <>
+            <strong>{suggestion.name || suggestion.mobile}</strong> in Aicountly Contacts holds{' '}
+            <strong>{address}</strong>. Link them to show this customer's invoices, orders and appointments.
+          </>
+        ) : (candidates ?? []).length > 1 ? (
+          <>
+            {(candidates ?? []).length} contacts share <strong>{address}</strong>, so none is assumed. Choose the
+            right one.
+          </>
+        ) : (
+          <>
+            No contact in this company's Aicountly Contacts holds <strong>{address}</strong>, so this customer's
+            invoices, orders and appointments cannot be shown.
+          </>
+        )}
       </p>
+      {match.error && <Notice tone="danger">{match.error.message}</Notice>}
+      {offered.map((contact) => (
+        <div key={contact.contact_uuid} className="msg-row msg-row-tight">
+          <div className="msg-row-body">
+            <strong>{contact.name || contact.mobile}</strong>
+            <small>{[contact.organization, contact.mobile, contact.email].filter(Boolean).join(' · ')}</small>
+          </div>
+          <Button
+            small
+            pending={match.pending}
+            onClick={async () => {
+              const result = await match.run(contact.contact_uuid)
+              if (result !== null) onMatched()
+            }}
+          >
+            Link
+          </Button>
+        </div>
+      ))}
       <Button small onClick={() => setOpen(true)} >
         <UserPlus size={13} aria-hidden />
-        Match to a contact
+        {offered.length > 0 ? 'Someone else' : 'Match to a contact'}
       </Button>
 
       {open && (

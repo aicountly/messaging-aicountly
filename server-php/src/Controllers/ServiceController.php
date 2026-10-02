@@ -98,6 +98,9 @@ final class ServiceController
         // cmp_id is read from the JSON body (or the query string). A service
         // call without it is a 400, not a guess: there is no company a key maps to.
         $ctx = Context::fromRequest();
+        // The company must be bound to this product, or be one the forwarded
+        // person belongs to per Manage — never just the cmp_id it names (G19#7).
+        $ctx->assertAllowed($auth);
 
         $idempotencyKey = Http::idempotencyKey();
         if ($idempotencyKey === '') {
@@ -665,6 +668,9 @@ final class ServiceController
         }
 
         $ctx = Context::fromRequest();
+        // The company must be bound to this product, or be one the forwarded
+        // person belongs to per Manage — never just the cmp_id it names (G19#7).
+        $ctx->assertAllowed($auth);
         $period = Period::fromRequest($ctx, '30d');
 
         [$scope, $params] = $ctx->scopeClause('m');
@@ -768,6 +774,9 @@ final class ServiceController
         }
 
         $ctx = Context::fromRequest();
+        // The company must be bound to this product, or be one the forwarded
+        // person belongs to per Manage — never just the cmp_id it names (G19#7).
+        $ctx->assertAllowed($auth);
         $message = MessageService::find($ctx, $messageUuid);
 
         // Not-yours and not-there are the same answer, so a key cannot probe

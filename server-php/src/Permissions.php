@@ -83,9 +83,9 @@ final class Permissions
      *
      * Without this, the first person into a brand-new company sees a working
      * sign-in and a wall of refusals, which reads as a broken product rather
-     * than as an administrative step nobody has taken yet. The owner (portal
-     * acs_type 1) holds everything regardless; this is for everybody else on
-     * day one.
+     * than as an administrative step nobody has taken yet. The company owner
+     * (per Manage's companyinfo — Context::isOwner) holds everything
+     * regardless; this is for everybody else on day one.
      *
      * READ THE OMISSIONS. No `context.financial`, so a new member does not see
      * balances by default. No `messages.send` and no `drafts.approve`, so
@@ -131,9 +131,10 @@ final class Permissions
     public static function allows(Context $ctx, Auth $auth, string $permission): bool
     {
         if ($auth->isService()) {
-            return true;
+            // Only what ServicePolicy lists for this product on this route.
+            return in_array($permission, ServicePolicy::grants($auth->sourceApp) ?? [], true);
         }
-        if ($auth->accessType() === 1) {
+        if ($ctx->isOwner($auth)) {
             return true;
         }
 
@@ -148,7 +149,11 @@ final class Permissions
             return self::$cache[$key];
         }
 
-        if ($auth->isService() || $auth->accessType() === 1) {
+        if ($auth->isService()) {
+            // Per route, so never cached.
+            return ServicePolicy::grants($auth->sourceApp) ?? [];
+        }
+        if ($ctx->isOwner($auth)) {
             return self::$cache[$key] = self::all();
         }
 
@@ -216,7 +221,10 @@ final class Permissions
      */
     public static function grantable(Context $ctx, Auth $auth): array
     {
-        if ($auth->isService() || $auth->accessType() === 1) {
+        if ($auth->isService()) {
+            return [];
+        }
+        if ($ctx->isOwner($auth)) {
             return self::all();
         }
 

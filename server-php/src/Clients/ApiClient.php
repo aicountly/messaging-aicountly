@@ -173,9 +173,14 @@ abstract class ApiClient
     /**
      * Where this product's sibling lives.
      *
-     * Derived from our own hostname so sandbox talks to sandbox without a second
-     * set of environment variables to keep in step — an explicit env override
-     * still wins, for local development and for a one-off cutover.
+     * From CONFIGURATION ONLY: an explicit `*_API_BASE`, else the sibling's
+     * production or sandbox host for the environment this server is configured
+     * as (see Environment). Never from the request's Host header, and never
+     * "sandbox because a CLI worker has no Host" — that is how production
+     * customer data would flow to sandbox from journey-tick (X-09).
+     *
+     * Returns '' when the environment is not configured; request() then
+     * refuses without calling anybody.
      */
     public function base(): string
     {
@@ -184,14 +189,11 @@ abstract class ApiClient
             return rtrim($configured, '/');
         }
 
-        $host = strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''));
-        $host = explode(':', preg_replace('/^www\./', '', $host) ?? '')[0];
-
-        if (str_contains($host, '.gh.aicountly.com') || str_starts_with($host, 'gh-') || $host === '' || str_contains($host, 'localhost') || str_starts_with($host, '127.')) {
-            return $this->sandboxBase();
-        }
-
-        return $this->productionBase();
+        return match (\Aicountly\Api\Environment::siblingTier()) {
+            'production' => $this->productionBase(),
+            'sandbox'    => $this->sandboxBase(),
+            default      => '',
+        };
     }
 
     /** The API root. A configured base may already include /api, and a local spark origin serves it at the root. */
@@ -233,6 +235,15 @@ abstract class ApiClient
                 'Context from ' . $this->service() . ' is not shown here, because ' . $this->service()
                     . ' is waiting on this request.',
             );
+        }
+
+        if ($this->base() === '') {
+            // Fail closed: with no configured environment there is no right
+            // answer to "which Books?", and a guess can be the other one.
+            $this->log('refused', $path, 0, 0.0, 'environment_not_configured');
+
+            return $this->envelope(false, 0, null, 'environment_not_configured', 'unavailable', false,
+                \Aicountly\Api\Environment::explainUnconfigured());
         }
 
         $url = $this->apiRoot() . '/' . ltrim($path, '/');

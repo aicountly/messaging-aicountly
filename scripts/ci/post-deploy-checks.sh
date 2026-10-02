@@ -60,6 +60,13 @@ check_with_hint "usable is false: the database is unreachable or the schema is m
   '.app == "Messaging"' \
   '.usable == true'
 
+# The server says it is the environment this workflow deployed to (fatal). Sibling hosts — the
+# Manage tenant check included, and every CLI worker's — follow AIC_ENVIRONMENT in api/.env and
+# never a Host header, so a sandbox .env copied from the production template would talk to
+# production (X-09).
+check json "Messaging API environment (${target})" "${base}/api/health" \
+  ".env == \"${target}\""
+
 # The web root serves the build just deployed, or at least the Messaging page (fatal).
 if [ -n "$entry" ]; then
   check page "Messaging web (${target})" "${base}/" "$entry"

@@ -37,7 +37,7 @@ $failed = 0;
 $failures = [];
 
 /** Every variable a test may set, cleared after each one. */
-const ENV_KEYS = ['PULSE_API_ORIGIN', 'PULSE_SERVICE_KEY', 'CONSOLE_SERVICE_KEY', 'APP_ENV', 'MESSAGING_AI_ENABLED'];
+const ENV_KEYS = ['PULSE_API_ORIGIN', 'PULSE_SERVICE_KEY', 'CONSOLE_SERVICE_KEY', 'APP_ENV', 'AIC_ENVIRONMENT', 'MESSAGING_AI_ENABLED'];
 
 function check(string $name, callable $fn): void
 {
@@ -99,7 +99,7 @@ function section(string $name): void
 
 function user(): Auth
 {
-    return Auth::forTesting('user-alice', 'user', 'messaging', ['acs_type' => 1]);
+    return Auth::forTesting('user-alice', 'user', 'messaging');
 }
 
 /** A sibling product calling Messaging with its service key, for a named person. */
@@ -235,23 +235,31 @@ check('status() is a GET with the session and short timeouts', static function (
     assertTrue($fake->last()['timeout'] <= 4.0, 'bounded tightly, because a screen is rendering while it is asked');
 });
 
-check('Pulse\'s origin: PULSE_API_ORIGIN, else the host, else APP_ENV', static function (): void {
+check('Pulse\'s origin: PULSE_API_ORIGIN, else the CONFIGURED environment — never the Host (X-09)', static function (): void {
     putenv('PULSE_API_ORIGIN=https://pulse.example.test/api/');
     assertSame('https://pulse.example.test', (new PulseAiClient())->origin(), 'the setting wins, and a trailing /api is ignored');
     putenv('PULSE_API_ORIGIN');
 
-    $_SERVER['HTTP_HOST'] = 'messaging.gh.aicountly.com';
-    assertSame(PulseAiClient::SANDBOX, (new PulseAiClient())->origin(), 'the sandbox host uses sandbox Pulse');
+    putenv('AIC_ENVIRONMENT=sandbox');
+    $_SERVER['HTTP_HOST'] = 'messaging.aicountly.com';
+    assertSame(PulseAiClient::SANDBOX, (new PulseAiClient())->origin(), 'a sandbox deployment uses sandbox Pulse whatever the Host says');
     assertSame('https://pulse.gh.aicountly.com', PulseAiClient::SANDBOX, 'which is pulse.gh.aicountly.com');
 
-    $_SERVER['HTTP_HOST'] = 'messaging.aicountly.com';
-    assertSame(PulseAiClient::PRODUCTION, (new PulseAiClient())->origin(), 'the production host uses production Pulse');
+    putenv('AIC_ENVIRONMENT=production');
+    $_SERVER['HTTP_HOST'] = 'messaging.gh.aicountly.com';
+    assertSame(PulseAiClient::PRODUCTION, (new PulseAiClient())->origin(), 'a production deployment asked with a sandbox Host still uses production Pulse');
 
     unset($_SERVER['HTTP_HOST']);
+    assertSame(PulseAiClient::PRODUCTION, (new PulseAiClient())->origin(), 'and so does its CLI, with no Host at all');
+
+    putenv('AIC_ENVIRONMENT');
     putenv('APP_ENV=sandbox');
-    assertSame(PulseAiClient::SANDBOX, (new PulseAiClient())->origin(), 'with no host, a sandbox deployment uses sandbox Pulse');
-    putenv('APP_ENV=production');
-    assertSame(PulseAiClient::PRODUCTION, (new PulseAiClient())->origin(), 'and a production one uses production Pulse');
+    assertSame(PulseAiClient::SANDBOX, (new PulseAiClient())->origin(), 'with AIC_ENVIRONMENT unset, APP_ENV decides');
+
+    putenv('AIC_ENVIRONMENT=not-an-environment');
+    assertSame('', (new PulseAiClient())->origin(), 'an unrecognised environment picks no Pulse');
+    $refused = (new PulseAiClient())->status('a-session');
+    assertSame('not_configured', $refused['code'], 'and nothing is called');
 });
 
 // ===========================================================================

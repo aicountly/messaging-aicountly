@@ -35,7 +35,11 @@ use Aicountly\Api\Clients\ManageClient;
  */
 final class Context
 {
-    /** @var array<string, bool> */
+    /**
+     * Manage's verdict per company and session, for this request.
+     *
+     * @var array<string, array{owner: bool, fy_list: list<array<string, mixed>>}>
+     */
     private static array $verified = [];
 
     private function __construct(
@@ -65,20 +69,33 @@ final class Context
     }
 
     /**
-     * Confirm this session may open this company, per Manage.
+     * Confirm this session may open this company, per Manage — and learn
+     * whether it OWNS the company, from the same answer.
      *
-     * Memoised per request because it runs on every scoped endpoint; a failure
-     * to reach Manage is a 503 and not an allow, because the alternative is
-     * serving one tenant's appointments to another whenever Manage has a bad
-     * minute.
+     * Memoised per request because it runs on every scoped endpoint. Manage's
+     * companyinfo is asked with the caller's OWN ses_key and read by
+     * ManageCompanyAnswer (the rule Contacts uses): 401/403/404 → 403; no
+     * answer, 5xx, or an answer about another company → 503, never an allow.
+     * Ownership comes from that answer's flags (ownership / is_creator /
+     * access_type), never from validatesession — which has no such field — and
+     * never from the request (I-18, G19#8).
      */
     public function assertAllowed(Auth $auth): void
     {
-        if ($auth->isService()) {
-            // A service key is issued to a product, not to a person, and the
-            // owning product has already checked the human behind it.
+        if ($auth->isService() && !$auth->hasVerifiedActor()) {
+            // A product acting as itself may act only for companies bound to
+            // it (ServicePolicy). Naming a cmp_id is not enough (G19#7).
+            if (!ServicePolicy::companyBound($auth->sourceApp, $this->cmpId)) {
+                Http::error(403, 'service_company_not_bound',
+                    'This product is not allowed to act for this company without a signed-in person. '
+                    . 'An administrator can allow it in Messaging settings.');
+            }
+
             return;
         }
+
+        // A person — directly, or through a product that forwarded their own
+        // session — is checked with Manage, with that session.
 
         $key = $this->cmpId . ':' . $auth->fingerprint();
         if (isset(self::$verified[$key])) {
@@ -86,31 +103,66 @@ final class Context
         }
 
         $result = (new ManageClient())->withSession($auth->sesKey())->companyInfo($this->cmpId);
+        $answer = ManageCompanyAnswer::interpret(
+            (int) $result['status'],
+            is_array($result['body'] ?? null) ? $result['body'] : null,
+            $this->cmpId,
+        );
 
-        if (!$result['ok']) {
+        if ($answer['outcome'] === ManageCompanyAnswer::DENIED) {
+            Http::forbidden('You do not have access to this company.');
+        }
+        if ($answer['outcome'] !== ManageCompanyAnswer::ALLOWED) {
             // Unreachable is not "allowed". A tenant check that fails open is
             // not a tenant check.
             Http::error(503, 'context_unavailable', 'Cannot confirm company access right now. Please retry.', ['retryable' => true]);
         }
 
-        $body = $result['body'] ?? [];
-        $company = $body['data'] ?? $body['company'] ?? $body;
-        $resolved = (int) ($company['cmp_id'] ?? $company['comp_id'] ?? $company['id'] ?? 0);
+        self::$verified[$key] = ['owner' => $answer['isOwner'], 'fy_list' => $answer['fyList']];
+    }
 
-        if ($resolved !== $this->cmpId) {
-            Http::forbidden('You do not have access to this company.');
+    /** Does Manage say this caller owns this company? False until asked, and for every service caller. */
+    public function isOwner(Auth $auth): bool
+    {
+        if ($auth->isService()) {
+            return false;
         }
 
-        self::$verified[$key] = true;
+        return (self::$verified[$this->cmpId . ':' . $auth->fingerprint()]['owner'] ?? false) === true;
+    }
+
+    /**
+     * The financial year covering $date in Manage's answer for this company,
+     * for products (Books) that scope by fy_id. Null when Manage listed none.
+     */
+    public function fyFor(Auth $auth, string $date): ?int
+    {
+        foreach (self::$verified[$this->cmpId . ':' . $auth->fingerprint()]['fy_list'] ?? [] as $fy) {
+            $start = (string) ($fy['fy_start'] ?? '');
+            $end = (string) ($fy['fy_end'] ?? '');
+            if ($start !== '' && $end !== '' && $start <= $date && $date <= $end && (int) ($fy['fy_id'] ?? 0) > 0) {
+                return (int) $fy['fy_id'];
+            }
+        }
+
+        return null;
     }
 
     /** CLI only — the test suite stands in for Manage rather than reaching it. */
-    public static function trustForTesting(int $cmpId, Auth $auth): void
+    public static function trustForTesting(int $cmpId, Auth $auth, bool $owner = false, array $fyList = []): void
     {
         if (PHP_SAPI !== 'cli') {
             return;
         }
-        self::$verified[$cmpId . ':' . $auth->fingerprint()] = true;
+        self::$verified[$cmpId . ':' . $auth->fingerprint()] = ['owner' => $owner, 'fy_list' => $fyList];
+    }
+
+    /** CLI only — forget every verdict, so one test cannot vouch for the next. */
+    public static function resetForTesting(): void
+    {
+        if (PHP_SAPI === 'cli') {
+            self::$verified = [];
+        }
     }
 
     /** @return array{cmp_id:int, bo_id:int} */

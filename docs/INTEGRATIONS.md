@@ -10,8 +10,8 @@ distinction is not already clear.
 | Product | What Messaging asks it for | Flag | Keys |
 | --- | --- | --- | --- |
 | **Manage** | Whether this session may open this company; the company and branch masters | *none — not optional* | `MANAGE_SERVICE_KEY`, `MANAGE_API_BASE` |
-| **Contacts** | Who a phone number belongs to; a contact's details | `CONTACTS` | `CONTACTS_SERVICE_KEY`, `CONTACTS_API_BASE` |
-| **Books** | Invoices, outstanding balances, overdue lists, receipts | `BOOKS` | `BOOKS_SERVICE_KEY`, `BOOKS_API_BASE` |
+| **Contacts** | Who a phone number belongs to (company lookup, attributed only on exactly one match); a contact's details | `CONTACTS` | `CONTACTS_API_BASE` (no key: read with the person's own session) |
+| **Books** | Outstanding bills for the ledger a contact is linked to in Contacts (books/ledger_account), overdue dues, receipts — as the signed-in person, per Manage's financial year | `BOOKS` | `BOOKS_API_BASE` (no key: Books has no product-key access) |
 | **Sales** | Orders and their fulfilment state | `SALES` | `SALES_SERVICE_KEY`, `SALES_API_BASE` |
 | **Pay** | A payment link, and whether it has been paid | `PAY` | `PAY_SERVICE_KEY`, `PAY_API_BASE` |
 | **Appointments** | Bookings for a customer (read live, by booking **uuid**, for the inbox panel and outcomes) | `APPOINTMENTS` | `APPOINTMENTS_SERVICE_KEY`, `APPOINTMENTS_API_BASE` |
@@ -173,8 +173,11 @@ POST /api/v1/messages                     send (202 accepted, never "sent")
 GET  /api/v1/messages/{message_uuid}      delivery_state, reason, events      ?cmp_id=
 POST /api/v1/messages/{message_uuid}/cancel   withdraw one Messaging still holds
 GET  /api/v1/messages/stats               counts of what THIS product sent    ?cmp_id=
-  X-Service-Key: <the calling product's key>
-  Idempotency-Key: <8–200 chars of [A-Za-z0-9._:-]>        (POST only)
+  X-Service-Key:     <the calling product's key>
+  X-AIC-Environment: production | sandbox | local   (must equal this server's)
+  Authorization:     Bearer <the person's own ses_key>   (when a person is present)
+  X-Actor-Uuid:      <optional; must match that session, else only recorded as a claim>
+  Idempotency-Key:   <8–200 chars of [A-Za-z0-9._:-]>        (POST only)
 
   { "cmp_id": 7,                          // required, in the body (or the query)
     "channel": "whatsapp",                // whatsapp | sms (| rcs); never email or voice
@@ -187,6 +190,21 @@ GET  /api/v1/messages/stats               counts of what THIS product sent    ?c
     "consent": { "basis": "staff_attestation", "source": "staff:1001",
                  "captured_at": "…", "contact_verified": true, "evidence_ref": "<booking uuid>" } }
 ```
+
+What a service key may do (G19#7, `server-php/src/ServicePolicy.php`):
+
+- **Routes:** only those listed for the product (the four above for
+  appointments, billing, books, sales, pos, reach, crm, advisor, voice; Helpdesk
+  may read `GET v1/conversations` and `GET v1/conversations/{uuid}/messages`).
+  Anything else is `403 service_route_not_allowed`.
+- **Environment:** `X-AIC-Environment` must equal the server's `AIC_ENVIRONMENT`
+  (else `401 service_environment_mismatch`); a server with none accepts no key.
+- **Company:** with a forwarded Bearer, Manage decides with that person's session.
+  With nobody present, the company must have allowed the product in Settings
+  (`service_products`, needs `messaging.access.manage`) or ops must list it in
+  `SERVICE_KEY_COMPANIES` — else `403 service_company_not_bound`.
+- **Actor:** a bare `X-Actor-Uuid` is recorded as a claim and never acted on;
+  one that disagrees with the forwarded session is `401 actor_mismatch`.
 
 What this endpoint insists on:
 

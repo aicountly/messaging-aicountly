@@ -38,6 +38,14 @@ require __DIR__ . '/../src/Autoload.php';
 
 Env::load(__DIR__ . '/../.env');
 
+// X-09: a CLI worker has no Host, and "no Host" used to mean sandbox — so a
+// production worker read sandbox siblings. The environment now comes from
+// AIC_ENVIRONMENT (else APP_ENV) only, and with neither this refuses to run.
+if (Environment::current() === null) {
+    fwrite(STDERR, Environment::explainUnconfigured() . "\n");
+    exit(1);
+}
+
 use Aicountly\Api\Domain\DispatchService;
 
 $args = array_slice($argv, 1);

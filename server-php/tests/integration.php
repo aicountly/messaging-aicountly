@@ -177,13 +177,14 @@ function ctx(int $boId = 0): Context
 
 function owner(): Auth
 {
-    // acs_type 1 is the company owner, which is the shortcut in Permissions.
-    return Auth::forTesting('user-owner', 'user', 'messaging', ['acs_type' => 1]);
+    // The company owner: Manage's companyinfo says so (trusted below with
+    // owner = true), never the portal session, which has no such field.
+    return Auth::forTesting('user-owner', 'user', 'messaging');
 }
 
 function agent(): Auth
 {
-    return Auth::forTesting('user-agent', 'user', 'messaging', ['acs_type' => 2]);
+    return Auth::forTesting('user-agent', 'user', 'messaging');
 }
 
 /**
@@ -238,7 +239,8 @@ function reset(): void
     // Manage is stubbed rather than reached for the tenant check, because the
     // check itself is tested separately and every other test should not pay an
     // HTTP round trip for it.
-    Context::trustForTesting(CMP, owner());
+    Context::resetForTesting();
+    Context::trustForTesting(CMP, owner(), true, [['fy_id' => 7, 'fy_start' => '2026-04-01', 'fy_end' => '2027-03-31']]);
     Context::trustForTesting(CMP, agent());
 }
 
@@ -972,30 +974,94 @@ check('nobody can grant a permission they do not hold', static function (): void
 
 section('Cross-product reads');
 
-check('Contacts is read live and a miss is a miss', static function (): void {
+check('Contacts is the company directory, looked up by number, attributed only on exactly one match (G19#1-3)', static function (): void {
     reset();
+    putenv('MESSAGING_CONTACTS_ENABLED=1');
+    Features::overrideForTesting(null);
+    assertTrue(Features::enabled('CONTACTS'), 'Contacts switches on with no key — Messaging holds none (G19#12)');
+    putenv('MESSAGING_CONTACTS_ENABLED');
     Features::overrideForTesting(['CONTACTS' => true]);
 
     $client = (new ContactsClient())->withSession(owner()->sesKey());
 
-    $found = $client->findByPhone('+919812345678');
-    assertTrue((bool) $found['ok'], 'the stub answers: ' . (string) $found['message']);
-    assertSame('ready', (string) $found['state'], 'a successful read is ready');
-    assertTrue((string) $found['fetched_at'] !== '', 'and carries the time it was read, for the freshness note');
+    $one = $client->lookupPhone(CMP, '+919812345678');
+    assertTrue((bool) $one['ok'], 'the stub answers: ' . (string) $one['message']);
+    assertSame('ready', (string) $one['state'], 'a successful read is ready');
+    assertTrue((string) $one['fetched_at'] !== '', 'and carries the time it was read');
+    assertSame(1, $one['body']['meta']['matchCount'], 'exactly one contact holds the number');
+    assertTrue($one['body']['meta']['attributable'] === true, 'so it is attributable');
+    assertSame('Priya Sharma', $one['body']['data'][0]['name'], 'named from displayName, not a field Contacts never sent (G19#2)');
+    assertSame('+919812345678', $one['body']['data'][0]['mobile'], 'with the phone from phones[{value}] in E.164');
 
-    // An address nobody has matched. An empty answer is the normal, permanent
-    // result for a walk-in number, and there is no local address book to fall
-    // back to — which is exactly why contact_name is nullable everywhere.
-    $missing = $client->findByPhone('+919000000001');
-    assertTrue((bool) $missing['ok'], 'the call still succeeds');
-    assertCount(0, (array) ($missing['body']['data'] ?? []), 'it is simply empty');
+    $two = $client->lookupPhone(CMP, '+919812399999');
+    assertSame(2, $two['body']['meta']['matchCount'], 'two contacts share a number (one stored nationally)');
+    assertFalse($two['body']['meta']['attributable'], 'so neither is assumed');
+
+    $none = $client->lookupPhone(CMP, '+919000000001');
+    assertTrue((bool) $none['ok'], 'an unknown number still answers');
+    assertSame(0, $none['body']['meta']['matchCount'], 'and matches nobody — no first-row fallback');
+
+    $merged = $client->contact(CMP, 'c0ffee00-0000-4000-8000-000000000099');
+    assertSame('c0ffee00-0000-4000-8000-000000000001', $merged['body']['data']['id'] ?? null, 'a merged id is read as its survivor');
+    $gone = $client->contact(CMP, 'c0ffee00-0000-4000-8000-00000000dead');
+    assertSame('unsupported', (string) $gone['state'], 'a contact not in this company is not-found');
+    assertSame('contact_gone', (string) $gone['error'], 'labelled as such, not as an outage');
+
+    $names = $client->resolveMany(CMP, ['c0ffee00-0000-4000-8000-000000000001', 'c0ffee00-0000-4000-8000-00000000dead']);
+    assertSame(['c0ffee00-0000-4000-8000-000000000001'], array_column((array) $names['body']['data'], 'requested_id'), 'resolve-many returns the readable ones by stored id');
+
+    $search = $client->search(CMP, 'priya', 10, 0);
+    assertSame(1, (int) $search['body']['meta']['total'], 'search reads the company list with its real total');
+
+    // Distinct failure labels: down is not "no such contact".
+    $down = (new ContactsClient())->withSession(owner()->sesKey());
+    putenv('CONTACTS_API_BASE=http://127.0.0.1:9');
+    $outage = $down->lookupPhone(CMP, '+919812345678');
+    putenv('CONTACTS_API_BASE');
+    \Aicountly\Api\Env::load(__DIR__ . '/../.env');
+    assertSame('unavailable', (string) $outage['state'], 'Contacts not answering is unavailable');
+    assertTrue((bool) $outage['retryable'], 'and retryable');
+    assertSame('contacts_unavailable', (string) $outage['error'], 'labelled as an outage');
+
+    $nobody = (new ContactsClient())->lookupPhone(CMP, '+919812345678');
+    assertSame('contacts_needs_person', (string) $nobody['error'], 'with nobody signed in Contacts is not read at all');
+});
+
+check('the customer panel offers one match, lists an ambiguous number, and never picks the first row (G19#1)', static function (): void {
+    reset();
+    connection();
+    Features::overrideForTesting(['CONTACTS' => true]);
+    $panel = static function (array $overrides): array {
+        $uuid = conversation($overrides);
+        $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+
+        return BusinessContextService::for(ctx(), owner(), (array) $row)['contact'];
+    };
+
+    $suggested = $panel(['customer_address' => '+919812345678']);
+    assertFalse($suggested['data']['matched'], 'an unlinked conversation is not presented as matched');
+    assertSame('Priya Sharma', $suggested['data']['suggestion']['name'] ?? null, 'the one contact holding the number is offered');
+
+    $ambiguous = $panel(['customer_address' => '+919812399999']);
+    assertSame(2, $ambiguous['data']['match_count'] ?? null, 'two holders');
+    assertSame(2, count($ambiguous['data']['candidates'] ?? []), 'are both listed for the agent to choose');
+    assertFalse(isset($ambiguous['data']['suggestion']), 'and neither is suggested');
+
+    $unknown = $panel(['customer_address' => '+919000000001']);
+    assertSame(0, $unknown['data']['match_count'] ?? null, 'an unknown number stays unknown');
+    assertFalse(isset($unknown['data']['name']), 'with no name invented');
+
+    $linked = $panel(['contact_uuid' => 'c0ffee00-0000-4000-8000-000000000001', 'customer_address' => '+919812300077']);
+    assertTrue($linked['data']['matched'] && $linked['data']['linked'], 'a linked conversation shows its contact');
+    assertSame('Priya Sharma', $linked['data']['name'], 'by displayName');
+    assertSame(['priya@example.test'], $linked['data']['emails'], 'with emails[{value}]');
 });
 
 check('an unconfigured integration is pending, not broken', static function (): void {
     reset();
     Features::overrideForTesting(['BOOKS' => false]);
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->outstandingForContact(ctx(), 'c0ffee00-0000-4000-8000-000000000001');
+    $result = (new BooksClient())->withSession(owner()->sesKey())->outstandingForLedger(ctx(), '7001', 7);
 
     assertFalse((bool) $result['ok'], 'it did not answer');
     assertSame('pending', (string) $result['state'],
@@ -1010,7 +1076,7 @@ check('a refusal is forbidden and never unavailable', static function (): void {
     // THE DISTINCTION THAT MATTERS: "you may not see this" must not be shown as
     // "Books is having a bad minute", because the first is permanent and the
     // second invites a pointless retry.
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), ['stub' => 'forbidden']);
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01', ['stub' => 'forbidden']);
 
     assertSame('forbidden', (string) $result['state'], 'a 403 is forbidden');
     assertFalse((bool) $result['retryable'], 'and retrying it would achieve nothing');
@@ -1020,7 +1086,7 @@ check('an outage is unavailable and retryable', static function (): void {
     reset();
     Features::overrideForTesting(['BOOKS' => true]);
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), ['stub' => 'down']);
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01', ['stub' => 'down']);
 
     assertSame('unavailable', (string) $result['state'], 'a 503 is unavailable');
     assertTrue((bool) $result['retryable'], 'and worth retrying');
@@ -1059,11 +1125,56 @@ check('the orders panel shows the contact\'s own orders, in each order\'s curren
     assertSame('unsupported', (string) $nobody['state'], 'an unmatched conversation asks Sales nothing');
 });
 
+check('Sales rows tagged with another company are not this customer\'s (G19#4 delta)', static function (): void {
+    reset();
+    connection();
+    Features::overrideForTesting(['SALES' => true]);
+    $uuid = conversation(['contact_uuid' => 'c0ffee00-0000-4000-8000-000000000004', 'customer_address' => '+919812300044']);
+    $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+    $panel = BusinessContextService::for(ctx(), owner(), (array) $row)['orders'];
+    assertSame('unsupported', (string) $panel['state'], 'an order Sales tagged with cmp 1234 is not shown in this company');
+    assertSame([], (array) $panel['data'], 'and nothing from it reaches the panel (or the AI grounding, which reads ready panels only)');
+});
+
+check('a balance is shown only for the Books ledger Contacts links the contact to (G19#5)', static function (): void {
+    reset();
+    connection();
+    Features::overrideForTesting(['BOOKS' => true, 'CONTACTS' => true]);
+    $panelFor = static function (string $contactUuid, string $address, ?Auth $as = null): array {
+        $uuid = conversation(['contact_uuid' => $contactUuid, 'customer_address' => $address]);
+        $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+
+        return BusinessContextService::for(ctx(), $as ?? owner(), (array) $row)['financial'];
+    };
+
+    $linked = $panelFor('c0ffee00-0000-4000-8000-0000000000b1', '+919812300001');
+    assertSame('ready', (string) $linked['state'], 'read live: ' . (string) ($linked['message'] ?? ''));
+    assertSame('7001', $linked['data']['ledger']['acc_id'], 'for ledger 7001, the one Contacts links');
+    assertSame(7, $linked['data']['ledger']['fy_id'], 'in the financial year Manage lists for today');
+    assertSame(700000, $linked['data']['outstanding_by_currency'][0]['outstanding_minor'], '4,800 + 3,200 owed less a 1,000 advance');
+    assertSame(['INV-2026-0091', 'INV-2026-0104'], array_column($linked['data']['invoices'], 'reference'), 'the open bills, by Books\' bill_ref');
+
+    $unlinked = $panelFor('c0ffee00-0000-4000-8000-000000000001', '+919812300002');
+    assertSame('unsupported', (string) $unlinked['state'], 'a contact with no ledger reference');
+    assertContains('not linked to a Books ledger', (string) $unlinked['message'], 'is told why, and shown no figure');
+    assertSame([], (array) $unlinked['data'], 'with no data at all');
+
+    Context::trustForTesting(CMP, owner(), true, []);
+    $noYear = $panelFor('c0ffee00-0000-4000-8000-0000000000b1', '+919812300003');
+    assertContains('no financial year', (string) $noYear['message'], 'with no financial year from Manage, Books is not asked');
+
+    $nobody = (new BooksClient())->withService('scheduler')->overdueInvoices(ctx(), 7, '2026-06-01');
+    assertSame('books_needs_person', (string) $nobody['error'], 'with nobody signed in Books is not called with a key it does not accept');
+    assertSame('books_needs_financial_year', (string) (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), null, '2026-06-01')['error'],
+        'and without a financial year it is not called at all');
+    reset();
+});
+
 check('a missing route is unsupported, which is a deployment fact', static function (): void {
     reset();
     Features::overrideForTesting(['BOOKS' => true]);
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), ['stub' => 'missing']);
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01', ['stub' => 'missing']);
     assertSame('unsupported', (string) $result['state'],
         'a 404 means that deployment of Books does not offer this, not that it is broken');
 });
@@ -1076,7 +1187,7 @@ check('the re-entry guard refuses to call back into the product that called us',
     // second one of its workers on a request that is waiting on us.
     CrossServiceCallContext::adoptAuthenticatedOrigin('books');
 
-    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx());
+    $result = (new BooksClient())->withSession(owner()->sesKey())->overdueInvoices(ctx(), 7, '2026-06-01');
 
     assertFalse((bool) $result['ok'], 'the call is suppressed');
     assertSame('unavailable', (string) $result['state'], 'and reported as unavailable rather than hanging');
@@ -1162,6 +1273,88 @@ check('the tenant comes from the connection, never from the payload', static fun
     assertTrue($conversation !== null, 'a conversation was opened');
     assertSame(CMP, (int) $conversation['cmp_id'],
         'THE POINT: a spoofed tenant identifier in the body is ignored');
+});
+
+check('ownership is Manage\'s companyinfo answer, never the portal session (I-18, G19#8)', static function (): void {
+    reset();
+    Context::resetForTesting();
+    Permissions::forget();
+    $refusal = static function (int $cmpId, Auth $auth): int {
+        try {
+            Context::forCompany($cmpId)->assertAllowed($auth);
+
+            return 200;
+        } catch (ResponseSent $e) {
+            return $e->status;
+        }
+    };
+
+    // The stub answers in Manage's real shape: user-owner owns, user-agent is a member.
+    $owner = owner();
+    assertSame(200, $refusal(CMP, $owner), 'the owner opens the company');
+    assertTrue(ctx()->isOwner($owner), 'and Manage\'s companyinfo says they own it');
+    assertSame(Permissions::all(), Permissions::granted(ctx(), $owner), 'so they hold every permission');
+    assertSame(7, ctx()->fyFor($owner, '2026-06-01'), 'the financial year comes from the same answer');
+
+    $agent = agent();
+    assertSame(200, $refusal(CMP, $agent), 'a member opens the company');
+    assertFalse(ctx()->isOwner($agent), 'but is not its owner');
+    assertFalse(Permissions::allows(ctx(), $agent, 'messaging.access.manage'), 'and does not manage access');
+
+    // A session that CLAIMS ownership the old way gets nothing for it.
+    $claimer = Auth::forTesting('user-claims', 'user', 'messaging', ['acs_type' => 1]);
+    assertSame(200, $refusal(CMP, $claimer), 'a member whose session says acs_type 1');
+    assertFalse(ctx()->isOwner($claimer), 'is still not the owner — validatesession has no such field to trust');
+
+    assertSame(403, $refusal(9998, $owner), 'Manage\'s 404 (not found or access denied) is a 403');
+    assertSame(503, $refusal(9999, $owner), 'an answer about a different company is a 503, never an allow');
+    assertSame(503, $refusal(9997, $owner), 'Manage failing is a 503, never an allow');
+    assertFalse(Context::forCompany(9997)->isOwner($owner), 'and nobody owns what Manage did not answer for');
+
+    $service = Auth::forTesting('actor-1', 'service', 'appointments');
+    assertFalse(ctx()->isOwner($service), 'a product key never owns a company');
+    reset();
+});
+
+check('a customer who writes in may be answered, and nothing more (G19#11)', static function (): void {
+    reset();
+    connection();
+    ChannelRegistry::overrideForTesting('test_provider', new RecordingAdapter());
+    $inbound = static function (string $id, string $from, string $body): void {
+        $payload = (string) json_encode(['events' => [[
+            'id' => $id, 'kind' => 'inbound_message', 'from' => $from, 'to' => '+919800000000', 'body' => $body,
+        ]]]);
+        WebhookService::receive('test_provider', CONNECTION, $payload, ['x-test-signature' => 'valid']);
+    };
+
+    $inbound('evt-g19-11-a', '+919812345601', 'Where is my order?');
+    $service = ConsentService::evaluate(ctx(), 'whatsapp', '+919812345601', 'service');
+    assertTrue($service['allowed'], 'an agent may reply to a customer who wrote in: ' . $service['detail']);
+    assertContains(ConsentService::EVIDENCE_WROTE_IN, $service['detail'], 'on the evidence that they wrote in');
+    assertFalse(ConsentService::evaluate(ctx(), 'whatsapp', '+919812345601', 'transactional')['allowed'],
+        'but writing in is not consent to invoices or reminders');
+    assertFalse(ConsentService::evaluate(ctx(), 'whatsapp', '+919812345601', 'promotional')['allowed'],
+        'nor to marketing');
+
+    // STOP stands: a later "hi" does not undo it.
+    $inbound('evt-g19-11-b', '+919812345602', 'STOP');
+    $inbound('evt-g19-11-c', '+919812345602', 'hi again');
+    assertFalse(ConsentService::evaluate(ctx(), 'whatsapp', '+919812345602', 'service')['allowed'],
+        'after STOP, writing again does not re-grant anything by itself');
+
+    // A decision an agent recorded is not overwritten.
+    ConsentService::record(ctx(), owner(), 'whatsapp', '+919812345603', 'service', 'withdrawn', 'agent_recorded', 'Asked not to be messaged.');
+    $inbound('evt-g19-11-d', '+919812345603', 'Hello?');
+    assertSame('withdrawn', ConsentService::evaluate(ctx(), 'whatsapp', '+919812345603', 'service')['reason'],
+        'an agent-recorded withdrawal stands');
+
+    // Nor a suppression.
+    ConsentService::suppress(ctx(), owner(), 'whatsapp', '+919812345604', 'manual', 'Number reported abusive.');
+    $inbound('evt-g19-11-e', '+919812345604', 'Hello?');
+    assertSame(0, (int) Db::scalar(
+        "SELECT COUNT(*) FROM messaging_consent_records WHERE cmp_id = :c AND address = :a AND evidence_source = :e",
+        ['c' => CMP, 'a' => '+919812345604', 'e' => ConsentService::EVIDENCE_WROTE_IN],
+    ), 'a suppressed address gets no implied grant');
 });
 
 check('a replayed webhook event is processed once', static function (): void {
@@ -1719,6 +1912,48 @@ check('a delivery rate with no denominator is null, not zero', static function (
     );
     assertTrue(isset($overview['delivery_rate_basis']['denominator']),
         'and wherever a rate IS shown, its denominator travels with it');
+});
+
+section('Environment (X-09, G18#25 class)');
+
+/** A sibling client whose *_API_BASE the test .env does not set, so the environment alone decides. */
+function probeClient(): \Aicountly\Api\Clients\ApiClient
+{
+    return new class () extends \Aicountly\Api\Clients\ApiClient {
+        public function service(): string { return 'drive'; }
+        protected function productionBase(): string { return 'https://drive.aicountly.com'; }
+        protected function sandboxBase(): string { return 'https://drive.gh.aicountly.com'; }
+        protected function baseEnvKey(): string { return 'NO_SUCH_SIBLING_API_BASE'; }
+    };
+}
+
+check('sibling hosts follow the configured environment, never the Host or its absence', static function (): void {
+    $base = static function (string $env, ?string $host): string {
+        putenv('AIC_ENVIRONMENT=' . $env);
+        if ($host === null) {
+            unset($_SERVER['HTTP_HOST']);
+        } else {
+            $_SERVER['HTTP_HOST'] = $host;
+        }
+
+        return probeClient()->base();
+    };
+    try {
+        assertSame('https://drive.aicountly.com', $base('production', null), 'a production CLI worker (no Host) talks to production, not sandbox');
+        assertSame('https://drive.aicountly.com', $base('production', 'messaging.gh.aicountly.com'), 'a forged sandbox Host changes nothing');
+        assertSame('https://drive.gh.aicountly.com', $base('sandbox', 'messaging.aicountly.com'), 'sandbox talks to sandbox');
+        assertSame('', $base('bogus', null), 'an unrecognised environment resolves to nothing');
+        $refused = probeClient()->request('GET', 'health');
+        assertSame('environment_not_configured', (string) $refused['error'], 'and a request is refused without being sent');
+        assertTrue(\Aicountly\Api\Environment::hostContradicts('messaging.aicountly.com') === false, 'the bogus environment contradicts nothing');
+        putenv('AIC_ENVIRONMENT=production');
+        assertTrue(\Aicountly\Api\Environment::hostContradicts('messaging.gh.aicountly.com'), 'a production server refuses a sandbox Host');
+        $out = (string) shell_exec('AIC_ENVIRONMENT=bogus php ' . escapeshellarg(__DIR__ . '/../bin/journey-tick.php') . ' 2>&1; echo "exit=$?"');
+        assertContains('exit=1', $out, 'journey-tick refuses to run with no configured environment');
+    } finally {
+        putenv('AIC_ENVIRONMENT');
+        unset($_SERVER['HTTP_HOST']);
+    }
 });
 
 // ===========================================================================

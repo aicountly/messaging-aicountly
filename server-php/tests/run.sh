@@ -34,6 +34,8 @@ DB_PASS=$DB_PASS
 # no test ever reaches a real Pulse (or a real model).
 PULSE_API_ORIGIN=http://127.0.0.1:$STUB_PORT
 MANAGE_API_BASE=http://127.0.0.1:$STUB_PORT
+# The portal's validatesession too: no test ever reaches my.aicountly.com.
+PORTAL_AUTH_BASE=http://127.0.0.1:$STUB_PORT
 CONTACTS_API_BASE=http://127.0.0.1:$STUB_PORT
 BOOKS_API_BASE=http://127.0.0.1:$STUB_PORT
 SALES_API_BASE=http://127.0.0.1:$STUB_PORT
@@ -44,8 +46,6 @@ REACH_API_BASE=http://127.0.0.1:$STUB_PORT
 
 # Placeholder service keys. The tests assert on behaviour, never on a value.
 MANAGE_SERVICE_KEY=test-manage-service-key-0123456789
-CONTACTS_SERVICE_KEY=test-contacts-service-key-0123456789
-BOOKS_SERVICE_KEY=test-books-service-key-0123456789
 MESSAGING_SERVICE_KEY=test-messaging-service-key-0123456789
 
 # app:key pairs for the inbound service contract. Placeholders, and the only

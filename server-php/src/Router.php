@@ -58,10 +58,20 @@ final class Router
         ], $this->routes);
     }
 
+    /** The route being served: [method, pattern], e.g. ['GET', 'v1/messages/{message}']. */
+    private static ?array $current = null;
+
+    /** @return array{0: string, 1: string}|null */
+    public static function current(): ?array
+    {
+        return self::$current;
+    }
+
     private function add(string $method, string $pattern, callable $handler): self
     {
         $this->routes[] = [
             'method'   => $method,
+            'pattern'  => trim($pattern, '/'),
             'segments' => array_values(array_filter(explode('/', trim($pattern, '/')), static fn ($s) => $s !== '')),
             'handler'  => $handler,
         ];
@@ -106,6 +116,9 @@ final class Router
                 continue;
             }
 
+            // ServicePolicy reads the matched PATTERN (not the raw path) to
+            // decide what a product's service key may do here.
+            self::$current = [$route['method'], $route['pattern']];
             ($route['handler'])(...$args);
 
             return true;

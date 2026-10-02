@@ -105,7 +105,7 @@ figure counted.
 | Caller | Credential | Origin recorded as |
 | --- | --- | --- |
 | A signed-in person | `Authorization: Bearer <ses_key>` | `AGENT` |
-| Another Aicountly product | `X-Service-Key` + `X-Actor-Uuid` | the product the key belongs to |
+| Another Aicountly product | `X-Service-Key` + `X-AIC-Environment` (+ the person's Bearer when present) | the product the key belongs to, on its ServicePolicy routes only |
 | A channel provider | the provider's own signature over the raw body | `PROVIDER` |
 
 `Auth::provenOrigin()` is decided by the credential presented, never by

@@ -199,20 +199,19 @@ final class SourceReader
             $client = $client->withSession($auth->sesKey());
         }
 
-        $result = $client->contact($reference);
+        $result = $client->contact($ctx->cmpId, $reference);
         if (!$result['ok']) {
             return self::fromEnvelope($result, 'contacts');
         }
 
-        $body = $result['body']['data'] ?? $result['body'] ?? [];
+        $view = (array) ($result['body']['data'] ?? []);
 
         return self::ready('contacts', $result['fetched_at'], $result['correlation_id'], [
-            'contact_uuid' => (string) ($body['contact_uuid'] ?? $reference),
-            'label'        => (string) ($body['name'] ?? ''),
-            'name'         => (string) ($body['name'] ?? ''),
-            'mobile'       => (string) ($body['mobile'] ?? ''),
-            'email'        => (string) ($body['email'] ?? ''),
-            'language'     => (string) ($body['preferred_language'] ?? ''),
+            'contact_uuid' => (string) ($view['id'] ?? $reference),
+            'label'        => (string) ($view['name'] ?? ''),
+            'name'         => (string) ($view['name'] ?? ''),
+            'mobile'       => (string) ($view['mobile'] ?? ''),
+            'email'        => (string) ($view['email'] ?? ''),
         ]);
     }
 

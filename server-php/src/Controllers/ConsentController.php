@@ -83,6 +83,11 @@ final class ConsentController extends Controller
 
         $evidenceSource = (string) ($body['evidence_source'] ?? 'agent_recorded');
         $evidenceDetail = trim((string) ($body['evidence_detail'] ?? ''));
+        if ($evidenceSource === ConsentService::EVIDENCE_WROTE_IN) {
+            // Only Messaging records this, from an actual inbound message.
+            Http::validationFailed('"customer_wrote_in" is recorded by Messaging when a customer writes in, not by hand.',
+                ['field' => 'evidence_source']);
+        }
 
         // Evidence is REQUIRED to record a grant. A consent row with no
         // provenance is worth nothing six months later in front of somebody

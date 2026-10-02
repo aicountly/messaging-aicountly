@@ -270,16 +270,36 @@ export interface InternalNote {
   created_at: string
 }
 
+export interface ContactSummary {
+  contact_uuid: string
+  name: string
+  organization?: string
+  mobile: string
+  email: string
+  phones?: string[]
+  emails?: string[]
+}
+
 export interface BusinessContext {
   contact: SourcePanel<{
+    /** True only when the conversation is LINKED to a company contact. */
     matched: boolean
+    linked?: boolean
     contact_uuid?: string
     name?: string
+    organization?: string
     mobile?: string
     email?: string
-    language?: string
+    phones?: string[]
+    emails?: string[]
     address: string
     provider_profile_name: string
+    /** Contacts' meta.matchCount for the number, when not linked. */
+    match_count?: number
+    /** Exactly one contact holds the number: offered, never assumed. */
+    suggestion?: ContactSummary
+    /** More than one holds it: the agent chooses. */
+    candidates?: ContactSummary[]
   }>
   financial: SourcePanel<{
     outstanding_by_currency?: Array<{ currency: string; outstanding_minor: number }>
@@ -753,6 +773,8 @@ export interface MessagingSettings {
   ai_suggest_allowed: boolean
   ai_autosend_allowed: boolean
   default_languages: string[]
+  /** Products that may send for this company with nobody signed in (G19#7). */
+  service_products?: string[]
   updated_at?: string | null
   updated_by?: string | null
 }
@@ -762,6 +784,8 @@ export interface SettingsResponse {
   /** Per-field explanations written by the backend, shown as field hints. */
   notes: Record<string, string>
   available_languages: Record<string, string>
+  /** Products whose service key this company may allow to act with nobody signed in. */
+  available_service_products?: string[]
 }
 
 export interface PermissionProfile {

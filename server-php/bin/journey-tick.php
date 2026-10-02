@@ -10,17 +10,14 @@ declare(strict_types=1);
  *
  * ## What the scheduled check does, and what it must not do
  *
- * `--checks` reads OVERDUE INVOICES FROM BOOKS, live, with an explicit limit,
- * and starts one journey run per invoice that has no run yet. The invoice rows
- * are processed IN MEMORY and are not written anywhere — see
- * docs/DATA_OWNERSHIP.md. This is the "configured scheduled
- * operational check" the brief permits, and it is deliberately the only one:
- * it calls a live API and acts on the result, and it copies nothing.
+ * `--checks` starts unanswered-enquiry follow-ups from Messaging's own data.
+ * Overdue-invoice reminders are NOT started here: Books is read only as a
+ * signed-in person (no product-key access) and per Books ledger, so the
+ * scheduler skips them and says so (G19#5).
  *
- * It is NOT a synchronisation job. It does not maintain a local table of
- * invoices, it does not run on a schedule of its own choosing, and nothing
- * downstream reads its output — each run re-fetches its own invoice before
- * drafting and again before sending.
+ * It is NOT a synchronisation job. It copies nothing from another product,
+ * does not run on a schedule of its own choosing, and nothing downstream
+ * reads its output (docs/DATA_OWNERSHIP.md).
  */
 
 namespace Aicountly\Api;
@@ -30,7 +27,14 @@ require __DIR__ . '/../src/Autoload.php';
 
 Env::load(__DIR__ . '/../.env');
 
-use Aicountly\Api\Clients\BooksClient;
+// X-09: a CLI worker has no Host, and "no Host" used to mean sandbox — so a
+// production worker read sandbox siblings. The environment now comes from
+// AIC_ENVIRONMENT (else APP_ENV) only, and with neither this refuses to run.
+if (Environment::current() === null) {
+    fwrite(STDERR, Environment::explainUnconfigured() . "\n");
+    exit(1);
+}
+
 use Aicountly\Api\Domain\JourneyEngine;
 use Aicountly\Api\Domain\JourneyService;
 use Aicountly\Api\Support\Clock;
@@ -104,65 +108,17 @@ foreach ($journeys as $journey) {
     $kind = (string) $journey['kind'];
 
     if ($kind === 'overdue_invoice_reminder') {
-        $client = (new BooksClient())->withService('scheduler');
-
-        if (!$client->configured()) {
-            echo "skipped {$journey['name']}: Aicountly Books is not connected.\n";
-            continue;
-        }
-
-        // A BOUNDED live query. The rows below live for this loop and nowhere
-        // else.
-        $result = $client->overdueInvoices($ctx, ['limit' => 200]);
-        if (!$result['ok']) {
-            // A source outage means no runs are started. It does NOT mean
-            // running from something stored earlier, because nothing was.
-            echo "skipped {$journey['name']}: " . (string) $result['message'] . "\n";
-            continue;
-        }
-
-        foreach ((array) ($result['body']['data'] ?? []) as $invoice) {
-            if (!is_array($invoice)) {
-                continue;
-            }
-            $reference = (string) ($invoice['voucher_no'] ?? $invoice['voucher_id'] ?? '');
-            $contactUuid = (string) ($invoice['contact_uuid'] ?? '');
-            if ($reference === '' || $contactUuid === '') {
-                continue;
-            }
-
-            // Idempotent per invoice per day: a daily check must not start a
-            // fresh run for the same invoice every morning.
-            $triggerKey = 'books:' . $reference . ':' . Clock::now()->format('Y-m-d');
-
-            $conversation = Db::first(
-                'SELECT conversation_uuid FROM messaging_conversations
-                 WHERE cmp_id = :cmp AND contact_uuid = :contact AND status <> :resolved
-                 ORDER BY COALESCE(last_inbound_at, created_at) DESC LIMIT 1',
-                ['cmp' => $ctx->cmpId, 'contact' => $contactUuid, 'resolved' => 'resolved'],
-            );
-
-            try {
-                $run = JourneyEngine::start($ctx, $auth, (string) $journey['journey_uuid'], [
-                    'subject_product'   => 'books',
-                    'subject_ref'       => $reference,
-                    'contact_uuid'      => $contactUuid,
-                    'conversation_uuid' => $conversation !== null ? (string) $conversation['conversation_uuid'] : '',
-                    'trigger_key'       => $triggerKey,
-                ], 'live', 'scheduled_check');
-
-                if ($run['ok'] && !$run['duplicate']) {
-                    $started++;
-                    printf("%s  started run=%s invoice=%s  %s\n", gmdate('c'),
-                        substr((string) $run['run_uuid'], 0, 8), $reference, $run['detail']);
-                }
-            } catch (\Throwable $e) {
-                error_log('[journey-tick] start for invoice ' . $reference . ' threw: ' . $e->getMessage());
-            }
-        }
-
-        // The fetched invoices go out of scope here. Nothing was written.
-        unset($result);
+        // G19#5: Books is read as a signed-in person — it has no product-key
+        // access — and it reports dues per Books ledger, which is a customer
+        // only where Contacts holds an explicit reference. The scheduler has
+        // neither a person nor a session, so it does not pretend: it used to
+        // ask Books with a key Books does not accept and no ledger, and read
+        // the refusal as "nobody is overdue". Overdue reminders are started by
+        // a person (journey simulation/run from the screen) until Books offers
+        // a delegated read.
+        echo "skipped {$journey['name']}: Aicountly Books is read as a signed-in person and has no product-key "
+            . "access, so the scheduler cannot list overdue invoices. Start this journey from Messaging while signed in.\n";
+        continue;
     }
 
     if ($kind === 'unanswered_enquiry_followup') {
