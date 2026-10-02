@@ -14,8 +14,7 @@ distinction is not already clear.
 | **Books** | Invoices, outstanding balances, overdue lists, receipts | `BOOKS` | `BOOKS_SERVICE_KEY`, `BOOKS_API_BASE` |
 | **Sales** | Orders and their fulfilment state | `SALES` | `SALES_SERVICE_KEY`, `SALES_API_BASE` |
 | **Pay** | A payment link, and whether it has been paid | `PAY` | `PAY_SERVICE_KEY`, `PAY_API_BASE` |
-| **Appointments** | Bookings for a customer | `APPOINTMENTS` | `APPOINTMENTS_SERVICE_KEY`, `APPOINTMENTS_API_BASE` |
-| **Calendar** | Events, read only | `CALENDAR` | `CALENDAR_SERVICE_KEY` |
+| **Appointments** | Bookings for a customer (read live, by booking **uuid**, for the inbox panel and outcomes) | `APPOINTMENTS` | `APPOINTMENTS_SERVICE_KEY`, `APPOINTMENTS_API_BASE` |
 | **Drive / Vault** | A document and its malware-scan verdict | `DRIVE` | `DRIVE_SERVICE_KEY`, `DRIVE_API_BASE` |
 | **Reach** | Campaign context, so Messaging does not rebuild campaign planning | `REACH` | `REACH_SERVICE_KEY`, `REACH_API_BASE` |
 | **Billing** | Subscription and plan context | `BILLING` | `BILLING_SERVICE_KEY` |
@@ -164,39 +163,63 @@ otherwise anybody who can set `Host` could make a forged signature verify.
 ## The published service contract
 
 Other Aicountly products send through Messaging rather than growing their own
-channel code. `appointments-aicountly` already calls this.
+channel code. **Appointments' client notices** (confirmation, reminder,
+cancellation, reschedule) are specified in full in
+[`APPOINTMENTS_MESSAGING_CONTRACT.md`](APPOINTMENTS_MESSAGING_CONTRACT.md) — the same
+file lives in `appointments-aicountly`; read that, not this summary.
 
 ```
-POST /api/v1/messages
+POST /api/v1/messages                     send (202 accepted, never "sent")
+GET  /api/v1/messages/{message_uuid}      delivery_state, reason, events      ?cmp_id=
+POST /api/v1/messages/{message_uuid}/cancel   withdraw one Messaging still holds
+GET  /api/v1/messages/stats               counts of what THIS product sent    ?cmp_id=
   X-Service-Key: <the calling product's key>
-  X-Actor-Uuid:  <the person or system the call is on behalf of>
-  Idempotency-Key: <8–200 chars of [A-Za-z0-9._:-]>
+  Idempotency-Key: <8–200 chars of [A-Za-z0-9._:-]>        (POST only)
 
-  { "channel": "whatsapp",
-    "to": "+919812345678",
-    "template": "appointment_reminder",
-    "variables": { "name": "Priya", "when": "Tuesday 3pm" },
-    "reference": { "product": "appointments", "id": "<booking uuid>" } }
-
-GET  /api/v1/messages/stats
-GET  /api/v1/messages/{message}
+  { "cmp_id": 7,                          // required, in the body (or the query)
+    "channel": "whatsapp",                // whatsapp | sms (| rcs); never email or voice
+    "to": "+919876543210",                // E.164 only — Messaging never guesses a country code
+    "template": "appointment_reminder",   // by name; only an approved version is sent
+    "kind": "reminder",
+    "reference": "<booking uuid>", "reference_label": "AP-1042",
+    "scheduled_for": "…Z", "not_after": "…+05:30",
+    "variables": { "client_name": "Priya", "when": "Wed 14 Oct 2026, 10:00 AM IST", … },
+    "consent": { "basis": "staff_attestation", "source": "staff:1001",
+                 "captured_at": "…", "contact_verified": true, "evidence_ref": "<booking uuid>" } }
 ```
 
-Four things this endpoint insists on:
+What this endpoint insists on:
 
-- **A service key, not a session.** A browser session is refused, because a
-  browser asking to send *as a product* is origin laundering. The `origin`
-  recorded on the message comes from the key.
-- **An `Idempotency-Key`.** Required, not optional. Without one a retry after a
-  timeout sends the customer a second message and the calling product cannot
-  tell. The same key replays the original answer and sends nothing.
-- **Consent still applies.** A product calling this API does not bypass consent,
-  suppression, quiet hours or the approval policy. Every gate runs.
-- **Voice is refused.** Placing a call is Receptionist's, and Messaging does not
-  grow a telephony engine to oblige a caller.
+- **A service key, not a session.** A browser session is refused (origin
+  laundering). The `origin` and `service_app` recorded on the message come from
+  the key, and a product reads **only the messages it sent** (another product's
+  message is a 404).
+- **A company.** `cmp_id` in the body or query; a key does not map to a company.
+- **An `Idempotency-Key`.** The same key replays the original message with its
+  *current* state and sends nothing. A refusal that created no message is **not**
+  stored, so the same key can succeed once the cause is fixed.
+- **A 2xx means accepted.** `data.delivery_state` says how far it got
+  (`queued`, `sent`, `unknown` → 202; `delivered` → 200). A message that did not go
+  is not a 2xx: `failed` → 502, `suppressed` / `expired` → 422, `cancelled` → 409 —
+  with `data.message_uuid` when a row exists.
+- **Consent is enforced at dispatch.** A product on the allow-list
+  (`CONSENT_SERVICE_APPS`) may *record* the consent it captured by sending it in
+  `consent`; that is audited (`service_booking`, actor kind `service`), never
+  overrides a withdrawal or a suppression, and an unverified public-form checkbox
+  is `pending` unless `CONSENT_ACCEPT_UNVERIFIED=1`. Suppression and the rest of the
+  gates still run.
+- **`not_after`.** A message that outlives it is cancelled `expired`, never sent late.
+- **Caps.** Per address per 24 h and per company per minute → `429`.
+- **Voice and email are refused.** Telephony is Lobby's/Voice's; email is Aicountly
+  Email's.
 
 Configure inbound keys with `SERVICE_KEYS=app:key,app:key` — see
-`server-php/.env.example`.
+`server-php/.env.example`. Create a company's appointment templates (as drafts, for
+an administrator to edit, submit and get approved) with
+`php bin/seed-appointment-templates.php --cmp=<id>` (add `--apply` to write).
+
+Reminder **timing** belongs to Appointments. The “Appointment nudge (manual)”
+journey is an agent-started one-off for one booking, not the reminder schedule.
 
 ## Deliberate non-goals
 

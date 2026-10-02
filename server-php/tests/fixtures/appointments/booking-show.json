@@ -1,1 +1,66 @@
-{"data":{"booking":{"booking_uuid":"7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01","reference":"AP-1042","status":"CONFIRMED","starts_at":"2026-10-14T04:30:00+00:00","timezone":"Asia/Kolkata","service":{"name":"Initial consultation"},"client":{"contact_uuid":"c0000000-0000-4000-8000-000000000001"}}}}
+{
+    "data": {
+        "booking": {
+            "booking_uuid": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01",
+            "reference": "AP-1042",
+            "status": "CONFIRMED",
+            "mode": "IN_PERSON",
+            "booking_source": "STAFF_BOOKING",
+            "starts_at": "2026-10-14T04:30:00Z",
+            "ends_at": "2026-10-14T05:30:00Z",
+            "timezone": "Asia/Kolkata",
+            "duration_minutes": 60,
+            "service": {
+                "service_uuid": "{{service_uuid}}",
+                "name": "HTTP Consultation",
+                "form_uuid": null
+            },
+            "member": {
+                "member_uuid": "{{member_uuid}}",
+                "label": "Dr Http"
+            },
+            "resource": null,
+            "client": {
+                "contact_uuid": "c0000000-0000-4000-8000-000000000001",
+                "name": "Priya Nair",
+                "email": "priya@example.com",
+                "phone": "+919876543210"
+            },
+            "bo_id": 0,
+            "notes": "",
+            "internal_notes": "",
+            "references": {
+                "calendar_event_uuid": null,
+                "payment_request_uuid": null,
+                "connect_room_uuid": null,
+                "connect_join_url": null,
+                "receptionist_session_uuid": null,
+                "crm_account_uuid": null,
+                "billing_document_uuid": null
+            },
+            "calendar": {
+                "state": "not_required",
+                "error": null,
+                "confirmed": false,
+                "drift": null,
+                "release_state": "none"
+            },
+            "payment_status": null,
+            "lifecycle": {
+                "confirmed_at": null,
+                "arrived_at": null,
+                "started_at": null,
+                "completed_at": null,
+                "cancelled_at": null,
+                "no_show_marked_at": null,
+                "cancellation_reason": null,
+                "cancellation_code": null,
+                "reschedule_count": 0,
+                "rescheduled_from": null
+            },
+            "rules_overridden": false,
+            "override_reason": null,
+            "created_at": "2026-06-01 04:00:00+00"
+        }
+    }
+}
