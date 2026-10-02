@@ -233,11 +233,33 @@ if (preg_match('#^/api/v1/orders/([^/]+)$#', $path, $m) === 1) {
     send(200, ['data' => ['order_uuid' => $m[1], 'order_no' => 'SO-8841', 'status' => 'packed', 'total' => 640000, 'currency' => 'INR']]);
 }
 
+// Sales' GET v1/orders (OrdersController::index → OrderService::search): rows
+// are sales_orders (order_no, status, order_date, total_amount, currency_code,
+// contact_id — the Contacts person the order is for). `contact_uuid` narrows
+// them to that contact, case-insensitively; a blank one, or a parameter Sales
+// does not know, is a 422 there — never the whole company's orders.
+// Contact c0ffee00-…-0000000000ff plays a Sales from before it read
+// contact_uuid: the company's latest orders, whoever they are for.
 if ($path === '/api/v1/orders') {
-    send(200, [
-        'data' => [['order_uuid' => 'aa000000-0000-4000-8000-000000000001', 'order_no' => 'SO-8841', 'status' => 'packed', 'total' => 640000, 'currency' => 'INR']],
-        'meta' => ['total' => 1, 'limit' => 20, 'offset' => 0],
-    ]);
+    $salesOrders = [
+        ['order_id' => 1, 'order_uuid' => 'aa000000-0000-4000-8000-000000000001', 'order_no' => 'SO-8841', 'status' => 'CONFIRMED', 'order_date' => '2026-05-28',
+            'total_amount' => '6400.0000', 'currency_code' => 'USD', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000001'],
+        ['order_id' => 2, 'order_uuid' => 'aa000000-0000-4000-8000-000000000002', 'order_no' => 'SO-8842', 'status' => 'DRAFT', 'order_date' => '2026-05-30',
+            'total_amount' => '1200.0000', 'currency_code' => 'INR', 'contact_id' => 'c0ffee00-0000-4000-8000-000000000002'],
+    ];
+    $known = ['status', 'customer_account_id', 'contact_uuid', 'contact_id', 'salesperson_id', 'territory_id', 'channel_id', 'from', 'to', 'as_of', 'q',
+        'open_only', 'committed', 'late', 'limit', 'offset', 'page', 'sort', 'order', 'cmp_id', 'fy_id', 'bo_id'];
+    $unknown = array_diff(array_keys($query), $known);
+    if ($unknown !== []) {
+        send(422, ['error' => ['code' => 'validation_failed', 'message' => 'Orders cannot be filtered by ' . implode(', ', $unknown) . '.']]);
+    }
+    if (array_key_exists('contact_uuid', $query) && strcasecmp((string) $query['contact_uuid'], 'c0ffee00-0000-4000-8000-0000000000ff') !== 0) {
+        if (trim((string) $query['contact_uuid']) === '') {
+            send(422, ['error' => ['code' => 'validation_failed', 'message' => 'Name the contact whose orders to list.']]);
+        }
+        $salesOrders = array_values(array_filter($salesOrders, static fn (array $o) => strcasecmp($o['contact_id'], (string) $query['contact_uuid']) === 0));
+    }
+    send(200, ['data' => $salesOrders, 'meta' => ['total' => count($salesOrders), 'limit' => (int) ($query['limit'] ?? 50), 'offset' => 0]]);
 }
 
 if ($path === '/api/v1/payment-links' && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
