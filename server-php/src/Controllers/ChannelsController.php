@@ -437,7 +437,6 @@ final class ChannelsController extends Controller
             'sales'        => ['label' => 'Sales', 'purpose' => 'Orders and fulfilment status.'],
             'pay'          => ['label' => 'Pay', 'purpose' => 'Payment links and payment status.'],
             'appointments' => ['label' => 'Appointments', 'purpose' => 'Appointments and confirmations.'],
-            'calendar'     => ['label' => 'Calendar', 'purpose' => 'Calendar events. Messaging stores none of its own.'],
             'drive'        => ['label' => 'Drive', 'purpose' => 'Document storage for attachments.'],
             'reach'        => ['label' => 'Reach', 'purpose' => 'Campaign planning. Messaging does not rebuild it.'],
             'billing'      => ['label' => 'Billing', 'purpose' => 'Dues and collection schedules.'],

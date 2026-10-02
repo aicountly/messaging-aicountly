@@ -103,6 +103,9 @@ jobs:
         env:
           TARGET: ${{ inputs.environment }}
           VERIFY_SSH: ssh deploy-target
+          # Ask the server as well, even when the runner gets through: proves the fallback
+          # a deploy relies on when the runner is shown the anti-bot page.
+          VERIFY_FORCE_SERVER: '1'
           # Nothing was deployed here, so there is no build or commit to compare.
           EXPECTED_ENTRY: ''
           EXPECTED_REVISION: ''

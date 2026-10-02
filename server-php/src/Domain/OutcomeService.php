@@ -436,8 +436,13 @@ final class OutcomeService
                 $unresolved++;
                 continue;
             }
-            $body = $result['body']['data'] ?? $result['body'] ?? [];
-            if (in_array(strtoupper((string) ($body['status'] ?? '')), ['CONFIRMED', 'ARRIVED', 'IN_PROGRESS', 'COMPLETED'], true)) {
+            $booking = SourceReader::normaliseAppointmentsBooking($result['body']['data'] ?? $result['body'] ?? []);
+            if ($booking['status'] === '') {
+                // An answer with no status cannot be counted either way.
+                $unresolved++;
+                continue;
+            }
+            if (in_array($booking['status'], ['CONFIRMED', 'ARRIVED', 'IN_PROGRESS', 'COMPLETED'], true)) {
                 $confirmed++;
             }
         }

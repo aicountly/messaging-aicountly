@@ -80,7 +80,7 @@ final class Health
     public static function integrations(): array
     {
         $out = [];
-        foreach (['contacts', 'books', 'sales', 'pay', 'appointments', 'calendar', 'drive', 'reach', 'billing', 'ai'] as $name) {
+        foreach (['contacts', 'books', 'sales', 'pay', 'appointments', 'drive', 'reach', 'billing', 'ai'] as $name) {
             $out[$name] = [
                 'required'   => false,
                 'configured' => Features::enabled($name),

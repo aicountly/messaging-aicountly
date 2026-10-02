@@ -205,6 +205,19 @@ Under **Cron Jobs** in cPanel, with `<root>` the document root:
 */15 * * * * /usr/local/bin/php /home/<user>/<root>/api/bin/dispatch-worker.php --requeue-stale >/dev/null 2>&1
 ```
 
+Appointments' client notices arrive on the service API and are dispatched inline,
+so they need no job of their own; the queue cron above is what retries a message
+the provider refused for now (and cancels one that outlived its `not_after`).
+
+Before Appointments is allowed to send, a company needs (see
+`APPOINTMENTS_MESSAGING_CONTRACT.md` §16): a connected WhatsApp/SMS channel; the four
+appointment templates, created with
+`php api/bin/seed-appointment-templates.php --cmp=<id>` (a dry run until `--apply`),
+edited, submitted and **approved by the provider**; and `SERVICE_KEYS=appointments:<key>`.
+Optional settings: `CONSENT_SERVICE_APPS`, `CONSENT_ACCEPT_UNVERIFIED`,
+`SERVICE_ADDRESS_DAILY_CAP`, `SERVICE_COMPANY_PER_MINUTE`. The migration is
+`007_messaging_service_api.sql` (additive; run `php api/bin/migrate.php`).
+
 Check `/usr/local/bin/php` against the account's actual PHP binary — cPanel
 often has several, and the CLI one is not always the default in `PATH`.
 

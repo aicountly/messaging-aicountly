@@ -55,7 +55,6 @@ final class Features
         'SALES'        => ['SALES_SERVICE_KEY'],
         'PAY'          => ['PAY_SERVICE_KEY'],
         'APPOINTMENTS' => ['APPOINTMENTS_SERVICE_KEY'],
-        'CALENDAR'     => ['CALENDAR_SERVICE_KEY'],
         'DRIVE'        => ['DRIVE_SERVICE_KEY'],
         'REACH'        => ['REACH_SERVICE_KEY'],
         'BILLING'      => ['BILLING_SERVICE_KEY'],

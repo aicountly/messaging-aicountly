@@ -1,0 +1,50 @@
+{
+    "scenario": "expired",
+    "request": {
+        "cmp_id": 9301,
+        "channel": "whatsapp",
+        "to": "+919000000009",
+        "template": "appointment_reminder",
+        "language": "en",
+        "kind": "reminder",
+        "reference": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01",
+        "reference_label": "AP-1042",
+        "scheduled_for": "{{timestamp}}",
+        "not_after": "{{timestamp}}",
+        "variables": {
+            "client_name": "Priya Nair",
+            "service_name": "Initial consultation",
+            "when": "Wed 14 Oct 2026, 10:00 IST",
+            "reference": "AP-1042"
+        },
+        "consent": {
+            "basis": "staff_attestation",
+            "source": "staff:user-0001",
+            "captured_at": "{{timestamp}}",
+            "contact_verified": true,
+            "evidence_ref": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01"
+        }
+    },
+    "response": {
+        "status": 422,
+        "body": {
+            "error": {
+                "code": "expired",
+                "message": "not_after has passed, so this message is no longer worth delivering and was not sent.",
+                "details": {
+                    "retryable": false,
+                    "delivery_state": "expired",
+                    "reason_code": "expired"
+                }
+            },
+            "message": "not_after has passed, so this message is no longer worth delivering and was not sent.",
+            "data": {
+                "message_uuid": null,
+                "delivery_state": "expired",
+                "reason_code": "expired",
+                "reason": "not_after has passed, so this message is no longer worth delivering and was not sent.",
+                "terminal": true
+            }
+        }
+    }
+}

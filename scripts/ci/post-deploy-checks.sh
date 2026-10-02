@@ -67,6 +67,17 @@ else
   check page "Messaging web (${target})" "${base}/" '<title>Messaging · Aicountly</title>'
 fi
 
+# Must never be served: what the deploy leaves under the document root that is a secret, a log,
+# SQL, tests, scripts or dependency manifests. Read-only GETs of the first 64 KB, never of a .php
+# file under tests/, bin/ or scripts/ (a GET would run it); a failure logs the status, type and
+# size of what was served, never its content. /.git/HEAD may instead get the SPA's own page.
+for path in /api/.env /api/.env.example /api/error_log \
+  /api/database/migrations/001_messaging_channels.sql /api/tests/run.sh /api/bin/; do
+  check absent "Messaging ${path} must not be served (${target})" "${base}${path}"
+done
+check absent "Messaging /.git/HEAD must not be served (${target})" "${base}/.git/HEAD" \
+  '<title>Messaging · Aicountly</title>'
+
 if [ "$failed" -gt 0 ]; then
   echo "${failed} post-deploy check(s) failed for Messaging ${target}."
   exit 1

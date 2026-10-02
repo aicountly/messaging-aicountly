@@ -439,9 +439,19 @@ final class JourneyDefinition
                     ['id' => 'stop_sent', 'type' => 'stop', 'label' => 'Sent', 'outcome' => 'sent'],
                 ],
             ],
+            // The key stays `appointment_reminder` (it is a stored kind), but
+            // this is a MANUAL NUDGE for one booking, not the reminder
+            // schedule. Appointments owns when a client is reminded, and
+            // cancellation / reschedule notices, and sends them through the
+            // service API with its own idempotency keys; a fixed-delay journey
+            // here cannot count back from the appointment and would send a
+            // second message to a client Appointments already reminded.
             'appointment_reminder' => [
-                'name'        => 'Appointment reminder',
-                'description' => 'Reads the booking from Aicountly Appointments and reminds the customer.',
+                'name'        => 'Appointment nudge (manual)',
+                'description' => 'An agent-started, one-off nudge for ONE booking, read live from Aicountly '
+                    . 'Appointments. It is not the reminder schedule: Appointments owns reminder timing and the '
+                    . 'cancellation and reschedule notices, and a booking it already reminds should not be nudged '
+                    . 'here as well.',
                 'entry'       => 'fetch_booking',
                 'nodes'       => [
                     [

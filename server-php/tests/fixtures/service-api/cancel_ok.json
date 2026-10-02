@@ -1,0 +1,41 @@
+{
+    "scenario": "cancel_ok",
+    "request": {
+        "POST": "v1/messages/{message_uuid}/cancel",
+        "body": {
+            "cmp_id": 9301,
+            "reason": "Booking cancelled."
+        }
+    },
+    "response": {
+        "status": 200,
+        "body": {
+            "data": {
+                "message_uuid": "{{message_uuid}}",
+                "message_id": "{{message_id}}",
+                "conversation_uuid": "{{conversation_uuid}}",
+                "status": "cancelled",
+                "status_label": "Cancelled",
+                "delivery_state": "cancelled",
+                "reason_code": "cancelled",
+                "reason": "Booking cancelled.",
+                "delivered": false,
+                "terminal": true,
+                "channel": "whatsapp",
+                "kind": "reminder",
+                "reference": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01",
+                "reference_label": "AP-1042",
+                "scheduled_for": "{{timestamp}}",
+                "not_after": "{{timestamp}}",
+                "queued_at": "{{timestamp}}",
+                "provider_accepted_at": null,
+                "delivered_at": null,
+                "failed_at": null,
+                "provider_message_id": null,
+                "failure_code": "cancelled",
+                "failure_detail": "Booking cancelled.",
+                "cancelled": true
+            }
+        }
+    }
+}

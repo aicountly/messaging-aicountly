@@ -119,19 +119,58 @@ final class SourceReader
             return self::fromEnvelope($result, 'appointments');
         }
 
-        $body = $result['body']['data'] ?? $result['body'] ?? [];
+        // Appointments answers {data: {booking: {...}, metadata, reminders, ...}}
+        // with the service and the client NESTED (booking.service.name,
+        // booking.client.contact_uuid). Reading a flat shape here made every
+        // booking's status 'UNKNOWN' — which the appointment_reminder journey
+        // took for a cancelled one. See normaliseAppointmentsBooking().
+        $booking = self::normaliseAppointmentsBooking($result['body']['data'] ?? $result['body'] ?? []);
+        if ($booking['status'] === '') {
+            // No status is "we cannot tell", never "cancelled".
+            return self::unavailable('appointments', 'Appointments did not say what state this booking is in.');
+        }
 
         return self::ready('appointments', $result['fetched_at'], $result['correlation_id'], [
-            'reference'    => (string) ($body['reference'] ?? $reference),
-            'label'        => (string) ($body['reference'] ?? $reference),
-            'status'       => strtoupper((string) ($body['status'] ?? 'UNKNOWN')),
+            'reference'    => $booking['reference'] !== '' ? $booking['reference'] : $reference,
+            'label'        => $booking['reference'] !== '' ? $booking['reference'] : $reference,
+            'status'       => $booking['status'],
             // The agreed time comes from Appointments on every read. Messaging
             // does not keep it — see Clients/AppointmentsClient.
-            'starts_at'    => (string) ($body['starts_at'] ?? ''),
-            'timezone'     => (string) ($body['timezone'] ?? ''),
-            'service'      => (string) ($body['service_name'] ?? ''),
-            'contact_uuid' => (string) ($body['contact_uuid'] ?? ''),
+            'starts_at'    => $booking['starts_at'],
+            'timezone'     => $booking['timezone'],
+            'service'      => $booking['service'],
+            'contact_uuid' => $booking['contact_uuid'],
         ]);
+    }
+
+    /**
+     * One booking as Appointments really serves it, flattened for our readers.
+     *
+     * Accepts the envelope's `data` (a `booking` wrapper around the booking) or
+     * a booking row on its own (a list item), and both the nested shape
+     * (`service.name`, `client.contact_uuid`) and the old flat one, so a
+     * deployment on either side of an Appointments release keeps working.
+     * Fixtures captured from Appointments' own output are in
+     * tests/fixtures/appointments/.
+     *
+     * @param array<string, mixed> $data
+     * @return array{reference:string, status:string, starts_at:string, timezone:string, service:string, contact_uuid:string}
+     */
+    public static function normaliseAppointmentsBooking(array $data): array
+    {
+        $booking = is_array($data['booking'] ?? null) ? $data['booking'] : $data;
+
+        $service = $booking['service'] ?? null;
+        $client = $booking['client'] ?? null;
+
+        return [
+            'reference'    => (string) ($booking['reference'] ?? ''),
+            'status'       => strtoupper(trim((string) ($booking['status'] ?? ''))),
+            'starts_at'    => (string) ($booking['starts_at'] ?? ''),
+            'timezone'     => (string) ($booking['timezone'] ?? ''),
+            'service'      => (string) (is_array($service) ? ($service['name'] ?? '') : ($booking['service_name'] ?? '')),
+            'contact_uuid' => (string) (is_array($client) ? ($client['contact_uuid'] ?? '') : ($booking['contact_uuid'] ?? '')),
+        ];
     }
 
     private static function payLink(Context $ctx, string $reference): array
