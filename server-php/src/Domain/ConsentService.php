@@ -44,6 +44,14 @@ final class ConsentService
      * does NOT satisfy a promotional send — the whole point of recording the
      * purpose is that it narrows.
      */
+    /**
+     * Evidence for the consent a customer gives by writing in (G19#11): they
+     * may be ANSWERED (purpose `service`). It satisfies a service reply only —
+     * never a transactional send (an invoice, a reminder) and never marketing,
+     * which need consent somebody recorded.
+     */
+    public const EVIDENCE_WROTE_IN = 'customer_wrote_in';
+
     private const SATISFIED_BY = [
         'transactional' => ['transactional', 'service', 'all'],
         'service'       => ['service', 'all'],
@@ -93,12 +101,16 @@ final class ConsentService
              FROM messaging_consent_records
              WHERE cmp_id = :cmp AND channel = :ch AND address = :addr
                AND purpose = ANY(:purposes)
+               AND NOT (purpose = \'service\' AND evidence_source = :wrote_in AND :wanted <> \'service\')
              ORDER BY CASE state WHEN :withdrawn THEN 0 ELSE 1 END, recorded_at DESC
              LIMIT 1',
             [
                 'cmp'       => $ctx->cmpId,
                 'ch'        => $channel,
                 'addr'      => $address,
+                // Writing in lets us answer; it does not let us invoice or remind.
+                'wrote_in'  => self::EVIDENCE_WROTE_IN,
+                'wanted'    => $purpose,
                 // A withdrawal outranks a later grant of a narrower purpose:
                 // ordering withdrawals first means an explicit opt-out is what
                 // we find, not a stale 'granted' row beside it.
@@ -141,6 +153,64 @@ final class ConsentService
             'consent_uuid' => (string) $record['consent_uuid'],
             'checked_at'   => $now,
         ];
+    }
+
+    /**
+     * A customer wrote in: they may be answered (G19#11).
+     *
+     * Records a `service` grant with evidence `customer_wrote_in` — but never
+     * over a decision already on file: any service or all-purpose record
+     * (granted OR withdrawn — a STOP stands until the customer or an agent
+     * says otherwise) or an active suppression leaves everything as it is.
+     * The grant satisfies service replies only (see evaluate()).
+     *
+     * @return bool whether a grant was recorded
+     */
+    public static function recordWroteIn(
+        Context $ctx,
+        Auth $actor,
+        string $channel,
+        string $address,
+        ?string $messageUuid,
+        ?string $occurredAt = null,
+    ): bool {
+        $address = self::normaliseAddress($address);
+        if ($address === '') {
+            return false;
+        }
+        $decided = Db::first(
+            "SELECT 1 FROM messaging_consent_records
+              WHERE cmp_id = :cmp AND channel = :ch AND address = :addr AND purpose IN ('service', 'all')
+              LIMIT 1",
+            ['cmp' => $ctx->cmpId, 'ch' => $channel, 'addr' => $address],
+        );
+        $suppressed = Db::first(
+            'SELECT 1 FROM messaging_suppressions
+              WHERE cmp_id = :cmp AND channel = :ch AND address = :addr
+                AND released_at IS NULL AND (expires_at IS NULL OR expires_at > NOW())
+              LIMIT 1',
+            ['cmp' => $ctx->cmpId, 'ch' => $channel, 'addr' => $address],
+        );
+        if ($decided !== null || $suppressed !== null) {
+            return false;
+        }
+
+        self::record(
+            $ctx,
+            $actor,
+            $channel,
+            $address,
+            'service',
+            'granted',
+            self::EVIDENCE_WROTE_IN,
+            'The customer wrote in on ' . $channel . ', so they may be answered. This does not cover invoices, reminders or marketing.',
+            null,
+            $occurredAt,
+            $messageUuid,
+            'provider',
+        );
+
+        return true;
     }
 
     /**

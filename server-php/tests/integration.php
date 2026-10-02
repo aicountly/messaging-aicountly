@@ -1316,6 +1316,47 @@ check('ownership is Manage\'s companyinfo answer, never the portal session (I-18
     reset();
 });
 
+check('a customer who writes in may be answered, and nothing more (G19#11)', static function (): void {
+    reset();
+    connection();
+    ChannelRegistry::overrideForTesting('test_provider', new RecordingAdapter());
+    $inbound = static function (string $id, string $from, string $body): void {
+        $payload = (string) json_encode(['events' => [[
+            'id' => $id, 'kind' => 'inbound_message', 'from' => $from, 'to' => '+919800000000', 'body' => $body,
+        ]]]);
+        WebhookService::receive('test_provider', CONNECTION, $payload, ['x-test-signature' => 'valid']);
+    };
+
+    $inbound('evt-g19-11-a', '+919812345601', 'Where is my order?');
+    $service = ConsentService::evaluate(ctx(), 'whatsapp', '+919812345601', 'service');
+    assertTrue($service['allowed'], 'an agent may reply to a customer who wrote in: ' . $service['detail']);
+    assertContains(ConsentService::EVIDENCE_WROTE_IN, $service['detail'], 'on the evidence that they wrote in');
+    assertFalse(ConsentService::evaluate(ctx(), 'whatsapp', '+919812345601', 'transactional')['allowed'],
+        'but writing in is not consent to invoices or reminders');
+    assertFalse(ConsentService::evaluate(ctx(), 'whatsapp', '+919812345601', 'promotional')['allowed'],
+        'nor to marketing');
+
+    // STOP stands: a later "hi" does not undo it.
+    $inbound('evt-g19-11-b', '+919812345602', 'STOP');
+    $inbound('evt-g19-11-c', '+919812345602', 'hi again');
+    assertFalse(ConsentService::evaluate(ctx(), 'whatsapp', '+919812345602', 'service')['allowed'],
+        'after STOP, writing again does not re-grant anything by itself');
+
+    // A decision an agent recorded is not overwritten.
+    ConsentService::record(ctx(), owner(), 'whatsapp', '+919812345603', 'service', 'withdrawn', 'agent_recorded', 'Asked not to be messaged.');
+    $inbound('evt-g19-11-d', '+919812345603', 'Hello?');
+    assertSame('withdrawn', ConsentService::evaluate(ctx(), 'whatsapp', '+919812345603', 'service')['reason'],
+        'an agent-recorded withdrawal stands');
+
+    // Nor a suppression.
+    ConsentService::suppress(ctx(), owner(), 'whatsapp', '+919812345604', 'manual', 'Number reported abusive.');
+    $inbound('evt-g19-11-e', '+919812345604', 'Hello?');
+    assertSame(0, (int) Db::scalar(
+        "SELECT COUNT(*) FROM messaging_consent_records WHERE cmp_id = :c AND address = :a AND evidence_source = :e",
+        ['c' => CMP, 'a' => '+919812345604', 'e' => ConsentService::EVIDENCE_WROTE_IN],
+    ), 'a suppressed address gets no implied grant');
+});
+
 check('a replayed webhook event is processed once', static function (): void {
     reset();
     connection();

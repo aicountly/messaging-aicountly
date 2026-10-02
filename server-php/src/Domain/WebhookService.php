@@ -201,7 +201,22 @@ final class WebhookService
         // not their carrier noticed.
         if (ConsentService::detectOptOut($event->body)) {
             self::withdrawConsent($ctx, $connection, $event->fromAddress, $recorded['message_uuid']);
+
+            return;
         }
+
+        // Anything else from the customer is them asking to talk: replying is
+        // a service conversation and needs no hand-recorded consent first
+        // (G19#11). An earlier opt-out, a suppression or any recorded decision
+        // is left exactly as it is.
+        ConsentService::recordWroteIn(
+            $ctx,
+            Auth::forProvider($connection->provider),
+            $connection->channel,
+            $event->fromAddress,
+            $recorded['message_uuid'],
+            $event->occurredAt ?: null,
+        );
     }
 
     private static function handleStatus(Context $ctx, ChannelConnection $connection, NormalisedEvent $event): void
