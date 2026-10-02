@@ -312,8 +312,17 @@ final class BusinessContextService
         }
 
         $orders = [];
+        $others = 0;
         foreach ((array) ($result['body']['data'] ?? []) as $row) {
             if (!is_array($row)) {
+                continue;
+            }
+            // Sales lists the orders whose contact (sales_orders.contact_id) is
+            // this one. A row for anybody else is not shown: a Sales that
+            // ignored `contact_uuid` answered with the company's latest orders,
+            // and an agent read them out as this customer's.
+            if (strcasecmp(trim((string) ($row['contact_id'] ?? '')), $contactUuid) !== 0) {
+                $others++;
                 continue;
             }
             $orders[] = [
@@ -321,7 +330,15 @@ final class BusinessContextService
                 'status'       => strtoupper((string) ($row['status'] ?? '')),
                 'order_date'   => (string) ($row['order_date'] ?? ''),
                 'total_minor'  => isset($row['total_amount']) ? (int) round((float) $row['total_amount'] * 100) : 0,
-                'currency'     => strtoupper((string) ($row['currency'] ?? Settings::currency($ctx))),
+                // Sales' column is currency_code; the order's own currency, not the inbox's.
+                'currency'     => strtoupper((string) ($row['currency_code'] ?? $row['currency'] ?? Settings::currency($ctx))),
+            ];
+        }
+        if ($orders === [] && $others > 0) {
+            return [
+                'state' => 'unsupported', 'source' => 'sales', 'fetched_at' => $result['fetched_at'],
+                'message' => 'Sales did not list this contact\'s orders on their own, so none are shown. Update Aicountly Sales.',
+                'data' => [],
             ];
         }
 
