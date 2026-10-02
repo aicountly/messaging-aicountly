@@ -245,7 +245,9 @@ Messaging scopes the key per company and caller.
 
 * The **exact request body** is stored on the reminder row before the first
   attempt and resent **byte for byte** on every retry (Messaging binds a key to its
-  body; a retry rebuilt from a booking edited meanwhile would be a `409`).
+  body; a retry rebuilt from a booking edited meanwhile would be a `409`). The stored
+  body (a name and a number) is cleared as soon as the notice is anywhere but
+  `scheduled`: there is no retry left to serve.
 * Same key + same body → Messaging answers the **original message** (`replayed:true`)
   with its **current** state and sends nothing again.
 * Same key + different body → `409 conflict` (`idempotency_key_reused`).
