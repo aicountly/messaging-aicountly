@@ -221,9 +221,17 @@ final class DispatchService
         }
 
         // THE GATES, RUN NOW. Consent re-read, approval hash re-compared,
-        // promised resources re-checked.
+        // promised resources re-checked, and the caller's not_after honoured.
         $verdict = DispatchGuard::evaluate($ctx, $message, $connection);
         if (!$verdict['allowed']) {
+            if ($verdict['code'] === 'expired') {
+                // Not a failure and not a retry: the moment passed. Cancelled
+                // with the reason `expired`, so the caller reads it as such.
+                self::cancel($ctx, $messageUuid, $verdict['detail'], 'expired');
+
+                return ['outcome' => 'expired', 'detail' => $verdict['detail']];
+            }
+
             if ($verdict['retryable']) {
                 // Quiet hours, mostly. Come back later rather than failing.
                 self::defer($job, $verdict['code'], $verdict['detail']);
@@ -437,11 +445,14 @@ final class DispatchService
      * Cancel a queued message.
      *
      * Used when a journey decides the reminder is obsolete — the invoice was
-     * paid between queueing and sending.
+     * paid between queueing and sending — and when a calling product withdraws
+     * one. `$code` is stored as the failure code: 'cancelled' when somebody
+     * withdrew it, 'expired' when its not_after passed, or the code of the gate
+     * that refused it.
      */
-    public static function cancel(Context $ctx, string $messageUuid, string $reason): bool
+    public static function cancel(Context $ctx, string $messageUuid, string $reason, string $code = 'cancelled'): bool
     {
-        return Db::transaction(static function () use ($ctx, $messageUuid, $reason): bool {
+        return Db::transaction(static function () use ($ctx, $messageUuid, $reason, $code): bool {
             $message = Db::first(
                 'SELECT status FROM messaging_messages WHERE cmp_id = :cmp AND message_uuid = :uuid FOR UPDATE',
                 ['cmp' => $ctx->cmpId, 'uuid' => $messageUuid],
@@ -456,7 +467,7 @@ final class DispatchService
                 'UPDATE messaging_messages
                  SET status = :cancelled, failure_code = :code, failure_detail = :detail, row_version = row_version + 1
                  WHERE message_uuid = :uuid',
-                ['cancelled' => MessageState::CANCELLED, 'code' => 'cancelled', 'detail' => $reason, 'uuid' => $messageUuid],
+                ['cancelled' => MessageState::CANCELLED, 'code' => $code, 'detail' => $reason, 'uuid' => $messageUuid],
             );
             Db::run(
                 'UPDATE messaging_dispatch_jobs SET status = :cancelled, finished_at = :now, last_error_detail = :detail

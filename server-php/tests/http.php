@@ -572,26 +572,12 @@ check('the service contract refuses a malformed Idempotency-Key', static functio
     assertStatus(422, $response, 'a malformed idempotency key');
 });
 
-check('the same Idempotency-Key replays the original answer instead of sending again', static function () use ($router, $adapter): void {
-    $key = 'appointments-booking-1-reminder';
-    $body = [
-        'channel' => 'whatsapp', 'to' => '+919812345699', 'template' => 'order_packed',
-        'variables' => ['name' => 'Priya'], 'reference' => ['product' => 'appointments', 'id' => 'bk-1'],
-    ];
-
-    $first = callAsService($router, $body, $key);
-    $sentAfterFirst = count($adapter->sent);
-
-    $second = callAsService($router, $body, $key);
-
-    assertSame($first['status'], $second['status'], 'the second call answers the same as the first');
-    assertSame(count($adapter->sent), $sentAfterFirst,
-        'and sends nothing more — a retried reminder must not reach the customer twice');
-
-    if ($first['status'] < 400) {
-        assertTrue(($second['body']['replayed'] ?? false) === true, 'the replay says it is one');
-    }
-});
+// Replay, refusals that must not be stored, the status codes a 2xx may carry,
+// consent, not_after and delivery state are tested in tests/service.php against
+// an APPROVED template and a recording provider. The check that used to be here
+// asserted a replay for a template that did not exist (so nothing was ever sent
+// and nothing was replayed) and put cmp_id into $_GET — which is how a missing
+// cmp_id in the real caller passed CI (messaging-aicountly-F1/F14).
 
 check('a draft saves, as a draft, and says nothing was sent', static function () use ($router, $conversationUuid): void {
     $response = call($router, 'POST', 'v1/conversations/' . $conversationUuid . '/drafts', [], [

@@ -58,6 +58,7 @@ final class Routes
         $router->post('v1/messages', [ServiceController::class, 'send']);
         $router->get('v1/messages/stats', [ServiceController::class, 'stats']);
         $router->get('v1/messages/{message}', [ServiceController::class, 'show']);
+        $router->post('v1/messages/{message}/cancel', [ServiceController::class, 'cancel']);
 
         // ------------------------------------------------------------------
         // Session, company switcher, settings, access, audit.

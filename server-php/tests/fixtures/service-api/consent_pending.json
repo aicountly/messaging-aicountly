@@ -1,0 +1,53 @@
+{
+    "scenario": "consent_pending",
+    "request": {
+        "cmp_id": 9301,
+        "channel": "whatsapp",
+        "to": "+919000000006",
+        "template": "appointment_reminder",
+        "language": "en",
+        "kind": "reminder",
+        "reference": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01",
+        "reference_label": "AP-1042",
+        "scheduled_for": "{{timestamp}}",
+        "not_after": "{{timestamp}}",
+        "variables": {
+            "client_name": "Priya Nair",
+            "service_name": "Initial consultation",
+            "when": "Wed 14 Oct 2026, 10:00 IST",
+            "reference": "AP-1042"
+        },
+        "consent": {
+            "basis": "public_form_checkbox",
+            "source": "public_booking_page:main",
+            "captured_at": "{{timestamp}}",
+            "contact_verified": false,
+            "evidence_ref": "7d4f0b1e-52c3-4a8e-9f10-2b6a8c3d9e01"
+        }
+    },
+    "response": {
+        "status": 422,
+        "body": {
+            "error": {
+                "code": "no_consent",
+                "message": "Consent for this address has not been confirmed yet.",
+                "details": {
+                    "retryable": false,
+                    "customer_decision": true,
+                    "purpose": "transactional",
+                    "delivery_state": "suppressed",
+                    "reason_code": "consent_pending",
+                    "consent_recorded": "pending"
+                }
+            },
+            "message": "Consent for this address has not been confirmed yet.",
+            "data": {
+                "message_uuid": null,
+                "delivery_state": "suppressed",
+                "reason_code": "consent_pending",
+                "reason": "Consent for this address has not been confirmed yet.",
+                "terminal": true
+            }
+        }
+    }
+}
