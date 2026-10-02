@@ -57,6 +57,7 @@ use Aicountly\Api\Channels\TwilioSmsAdapter;
 use Aicountly\Api\Channels\WhatsAppCloudAdapter;
 use Aicountly\Api\Clients\BooksClient;
 use Aicountly\Api\Clients\ContactsClient;
+use Aicountly\Api\Domain\BusinessContextService;
 use Aicountly\Api\Domain\ConsentService;
 use Aicountly\Api\Domain\ConversationService;
 use Aicountly\Api\Domain\DispatchGuard;
@@ -1025,6 +1026,37 @@ check('an outage is unavailable and retryable', static function (): void {
     assertTrue((bool) $result['retryable'], 'and worth retrying');
     assertTrue(($result['body'] ?? null) === null || $result['body'] !== [],
         'no substituted sample data — the screen says so instead');
+});
+
+check('the orders panel shows the contact\'s own orders, in each order\'s currency', static function (): void {
+    reset();
+    connection();
+    Features::overrideForTesting(['SALES' => true]);
+    $n = 0;
+    $panelFor = static function (?string $contactUuid) use (&$n): array {
+        $uuid = conversation(['contact_uuid' => $contactUuid, 'customer_address' => '+9198123400' . str_pad((string) ++$n, 2, '0', STR_PAD_LEFT)]);
+        $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+
+        return BusinessContextService::for(ctx(), owner(), (array) $row)['orders'];
+    };
+
+    // Sales answers `contact_uuid` with that contact's orders only.
+    $panel = $panelFor('c0ffee00-0000-4000-8000-000000000001');
+    assertSame('ready', (string) $panel['state'], 'read live: ' . (string) ($panel['message'] ?? ''));
+    assertSame(['SO-8841'], array_column($panel['data']['orders'], 'reference'), 'only this contact\'s order');
+    assertSame('USD', (string) $panel['data']['orders'][0]['currency'], 'in the order\'s own currency (Sales\' currency_code)');
+    assertSame(640000, (int) $panel['data']['orders'][0]['total_minor'], 'and its total');
+
+    $none = $panelFor('c0ffee00-0000-4000-8000-000000000009');
+    assertSame([], $none['data']['orders'], 'a contact with no orders has none — not the company\'s latest');
+
+    // A Sales that ignored the filter answered with everybody's orders: none is shown as this contact's.
+    $old = $panelFor('c0ffee00-0000-4000-8000-0000000000ff');
+    assertSame('unsupported', (string) $old['state'], 'an answer about other contacts is not this contact\'s');
+    assertSame([], (array) $old['data'], 'and nothing from it is shown');
+
+    $nobody = $panelFor(null);
+    assertSame('unsupported', (string) $nobody['state'], 'an unmatched conversation asks Sales nothing');
 });
 
 check('a missing route is unsupported, which is a deployment fact', static function (): void {
