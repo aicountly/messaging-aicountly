@@ -974,23 +974,87 @@ check('nobody can grant a permission they do not hold', static function (): void
 
 section('Cross-product reads');
 
-check('Contacts is read live and a miss is a miss', static function (): void {
+check('Contacts is the company directory, looked up by number, attributed only on exactly one match (G19#1-3)', static function (): void {
     reset();
+    putenv('MESSAGING_CONTACTS_ENABLED=1');
+    Features::overrideForTesting(null);
+    assertTrue(Features::enabled('CONTACTS'), 'Contacts switches on with no key — Messaging holds none (G19#12)');
+    putenv('MESSAGING_CONTACTS_ENABLED');
     Features::overrideForTesting(['CONTACTS' => true]);
 
     $client = (new ContactsClient())->withSession(owner()->sesKey());
 
-    $found = $client->findByPhone('+919812345678');
-    assertTrue((bool) $found['ok'], 'the stub answers: ' . (string) $found['message']);
-    assertSame('ready', (string) $found['state'], 'a successful read is ready');
-    assertTrue((string) $found['fetched_at'] !== '', 'and carries the time it was read, for the freshness note');
+    $one = $client->lookupPhone(CMP, '+919812345678');
+    assertTrue((bool) $one['ok'], 'the stub answers: ' . (string) $one['message']);
+    assertSame('ready', (string) $one['state'], 'a successful read is ready');
+    assertTrue((string) $one['fetched_at'] !== '', 'and carries the time it was read');
+    assertSame(1, $one['body']['meta']['matchCount'], 'exactly one contact holds the number');
+    assertTrue($one['body']['meta']['attributable'] === true, 'so it is attributable');
+    assertSame('Priya Sharma', $one['body']['data'][0]['name'], 'named from displayName, not a field Contacts never sent (G19#2)');
+    assertSame('+919812345678', $one['body']['data'][0]['mobile'], 'with the phone from phones[{value}] in E.164');
 
-    // An address nobody has matched. An empty answer is the normal, permanent
-    // result for a walk-in number, and there is no local address book to fall
-    // back to — which is exactly why contact_name is nullable everywhere.
-    $missing = $client->findByPhone('+919000000001');
-    assertTrue((bool) $missing['ok'], 'the call still succeeds');
-    assertCount(0, (array) ($missing['body']['data'] ?? []), 'it is simply empty');
+    $two = $client->lookupPhone(CMP, '+919812399999');
+    assertSame(2, $two['body']['meta']['matchCount'], 'two contacts share a number (one stored nationally)');
+    assertFalse($two['body']['meta']['attributable'], 'so neither is assumed');
+
+    $none = $client->lookupPhone(CMP, '+919000000001');
+    assertTrue((bool) $none['ok'], 'an unknown number still answers');
+    assertSame(0, $none['body']['meta']['matchCount'], 'and matches nobody — no first-row fallback');
+
+    $merged = $client->contact(CMP, 'c0ffee00-0000-4000-8000-000000000099');
+    assertSame('c0ffee00-0000-4000-8000-000000000001', $merged['body']['data']['id'] ?? null, 'a merged id is read as its survivor');
+    $gone = $client->contact(CMP, 'c0ffee00-0000-4000-8000-00000000dead');
+    assertSame('unsupported', (string) $gone['state'], 'a contact not in this company is not-found');
+    assertSame('contact_gone', (string) $gone['error'], 'labelled as such, not as an outage');
+
+    $names = $client->resolveMany(CMP, ['c0ffee00-0000-4000-8000-000000000001', 'c0ffee00-0000-4000-8000-00000000dead']);
+    assertSame(['c0ffee00-0000-4000-8000-000000000001'], array_column((array) $names['body']['data'], 'requested_id'), 'resolve-many returns the readable ones by stored id');
+
+    $search = $client->search(CMP, 'priya', 10, 0);
+    assertSame(1, (int) $search['body']['meta']['total'], 'search reads the company list with its real total');
+
+    // Distinct failure labels: down is not "no such contact".
+    $down = (new ContactsClient())->withSession(owner()->sesKey());
+    putenv('CONTACTS_API_BASE=http://127.0.0.1:9');
+    $outage = $down->lookupPhone(CMP, '+919812345678');
+    putenv('CONTACTS_API_BASE');
+    \Aicountly\Api\Env::load(__DIR__ . '/../.env');
+    assertSame('unavailable', (string) $outage['state'], 'Contacts not answering is unavailable');
+    assertTrue((bool) $outage['retryable'], 'and retryable');
+    assertSame('contacts_unavailable', (string) $outage['error'], 'labelled as an outage');
+
+    $nobody = (new ContactsClient())->lookupPhone(CMP, '+919812345678');
+    assertSame('contacts_needs_person', (string) $nobody['error'], 'with nobody signed in Contacts is not read at all');
+});
+
+check('the customer panel offers one match, lists an ambiguous number, and never picks the first row (G19#1)', static function (): void {
+    reset();
+    connection();
+    Features::overrideForTesting(['CONTACTS' => true]);
+    $panel = static function (array $overrides): array {
+        $uuid = conversation($overrides);
+        $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+
+        return BusinessContextService::for(ctx(), owner(), (array) $row)['contact'];
+    };
+
+    $suggested = $panel(['customer_address' => '+919812345678']);
+    assertFalse($suggested['data']['matched'], 'an unlinked conversation is not presented as matched');
+    assertSame('Priya Sharma', $suggested['data']['suggestion']['name'] ?? null, 'the one contact holding the number is offered');
+
+    $ambiguous = $panel(['customer_address' => '+919812399999']);
+    assertSame(2, $ambiguous['data']['match_count'] ?? null, 'two holders');
+    assertSame(2, count($ambiguous['data']['candidates'] ?? []), 'are both listed for the agent to choose');
+    assertFalse(isset($ambiguous['data']['suggestion']), 'and neither is suggested');
+
+    $unknown = $panel(['customer_address' => '+919000000001']);
+    assertSame(0, $unknown['data']['match_count'] ?? null, 'an unknown number stays unknown');
+    assertFalse(isset($unknown['data']['name']), 'with no name invented');
+
+    $linked = $panel(['contact_uuid' => 'c0ffee00-0000-4000-8000-000000000001', 'customer_address' => '+919812300077']);
+    assertTrue($linked['data']['matched'] && $linked['data']['linked'], 'a linked conversation shows its contact');
+    assertSame('Priya Sharma', $linked['data']['name'], 'by displayName');
+    assertSame(['priya@example.test'], $linked['data']['emails'], 'with emails[{value}]');
 });
 
 check('an unconfigured integration is pending, not broken', static function (): void {

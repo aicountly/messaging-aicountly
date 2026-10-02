@@ -270,16 +270,36 @@ export interface InternalNote {
   created_at: string
 }
 
+export interface ContactSummary {
+  contact_uuid: string
+  name: string
+  organization?: string
+  mobile: string
+  email: string
+  phones?: string[]
+  emails?: string[]
+}
+
 export interface BusinessContext {
   contact: SourcePanel<{
+    /** True only when the conversation is LINKED to a company contact. */
     matched: boolean
+    linked?: boolean
     contact_uuid?: string
     name?: string
+    organization?: string
     mobile?: string
     email?: string
-    language?: string
+    phones?: string[]
+    emails?: string[]
     address: string
     provider_profile_name: string
+    /** Contacts' meta.matchCount for the number, when not linked. */
+    match_count?: number
+    /** Exactly one contact holds the number: offered, never assumed. */
+    suggestion?: ContactSummary
+    /** More than one holds it: the agent chooses. */
+    candidates?: ContactSummary[]
   }>
   financial: SourcePanel<{
     outstanding_by_currency?: Array<{ currency: string; outstanding_minor: number }>

@@ -37,9 +37,9 @@ import { channelLabel, humanise } from './CommandCentre'
 interface ContactRow {
   contact_uuid: string
   name: string
+  organization?: string
   mobile: string
   email: string
-  language: string
   messaging: {
     conversations: number
     open_conversations: number
@@ -224,7 +224,15 @@ export function ContactDetailPage() {
       api
         .get<{
           data: {
-            contact: { contact_uuid: string; name: string; mobile: string; email: string; language: string } | null
+            contact: {
+              contact_uuid: string
+              name: string
+              organization?: string
+              mobile: string
+              email: string
+              phones?: string[]
+              emails?: string[]
+            } | null
             contact_state: string
             contact_message: string | null
             contact_source: string
@@ -329,12 +337,16 @@ export function ContactDetailPage() {
                 {detail.contact !== null && (
                   <Panel title="Identity" subtitle="Aicountly Contacts" headingLevel={3}>
                     <dl className="msg-definition-list">
-                      <dt>Mobile</dt>
-                      <dd>{detail.contact.mobile || '—'}</dd>
-                      <dt>Email</dt>
-                      <dd className="msg-truncate">{detail.contact.email || '—'}</dd>
-                      <dt>Prefers</dt>
-                      <dd>{detail.contact.language ? detail.contact.language.toUpperCase() : '—'}</dd>
+                      {detail.contact.organization && (
+                        <>
+                          <dt>Organisation</dt>
+                          <dd>{detail.contact.organization}</dd>
+                        </>
+                      )}
+                      <dt>{(detail.contact.phones ?? []).length > 1 ? 'Phones' : 'Phone'}</dt>
+                      <dd>{(detail.contact.phones ?? []).join(', ') || detail.contact.mobile || '—'}</dd>
+                      <dt>{(detail.contact.emails ?? []).length > 1 ? 'Emails' : 'Email'}</dt>
+                      <dd className="msg-truncate">{(detail.contact.emails ?? []).join(', ') || detail.contact.email || '—'}</dd>
                     </dl>
                     <p className="msg-muted msg-small" style={{ margin: '0.6rem 0 0', lineHeight: 1.5 }}>
                       To change any of this, open the contact in Aicountly Contacts. Messaging does not edit contact

@@ -10,7 +10,7 @@ distinction is not already clear.
 | Product | What Messaging asks it for | Flag | Keys |
 | --- | --- | --- | --- |
 | **Manage** | Whether this session may open this company; the company and branch masters | *none — not optional* | `MANAGE_SERVICE_KEY`, `MANAGE_API_BASE` |
-| **Contacts** | Who a phone number belongs to; a contact's details | `CONTACTS` | `CONTACTS_SERVICE_KEY`, `CONTACTS_API_BASE` |
+| **Contacts** | Who a phone number belongs to (company lookup, attributed only on exactly one match); a contact's details | `CONTACTS` | `CONTACTS_API_BASE` (no key: read with the person's own session) |
 | **Books** | Invoices, outstanding balances, overdue lists, receipts | `BOOKS` | `BOOKS_SERVICE_KEY`, `BOOKS_API_BASE` |
 | **Sales** | Orders and their fulfilment state | `SALES` | `SALES_SERVICE_KEY`, `SALES_API_BASE` |
 | **Pay** | A payment link, and whether it has been paid | `PAY` | `PAY_SERVICE_KEY`, `PAY_API_BASE` |

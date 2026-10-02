@@ -46,37 +46,37 @@ final class ContactsController extends Controller
         }
 
         $params = Http::listParams(['name'], 'name');
-        $result = $client->withSession($auth->sesKey())->search($params['q'], [
-            'limit'  => $params['limit'],
-            'offset' => $params['offset'],
-        ]);
+        // The COMPANY's directory (G19#3): this inbox's customers are the
+        // company's contacts, never one employee's personal book.
+        $result = $client->withSession($auth->sesKey())->search($ctx->cmpId, $params['q'], $params['limit'], $params['offset']);
 
         if (!$result['ok']) {
             Http::data([
                 'contacts' => [],
                 'state'    => $result['state'],
                 'message'  => $result['message'],
+                'reason'   => $result['error'],
                 'source'   => 'contacts',
                 'retryable' => (bool) $result['retryable'],
             ]);
         }
 
         $contacts = [];
-        foreach ((array) ($result['body']['data'] ?? []) as $contact) {
-            if (!is_array($contact)) {
+        foreach ((array) ($result['body']['data'] ?? []) as $view) {
+            if (!is_array($view)) {
                 continue;
             }
-            $contactUuid = (string) ($contact['contact_uuid'] ?? '');
+            $contactUuid = (string) ($view['id'] ?? '');
 
             $contacts[] = [
-                // From Contacts, live.
+                // From Contacts, live (displayName, phones[], emails[] — G19#2).
                 'contact_uuid' => $contactUuid,
-                'name'         => (string) ($contact['name'] ?? ''),
-                'mobile'       => (string) ($contact['mobile'] ?? ''),
-                'email'        => (string) ($contact['email'] ?? ''),
-                'language'     => (string) ($contact['preferred_language'] ?? ''),
+                'name'         => (string) ($view['name'] ?? ''),
+                'organization' => (string) ($view['organization'] ?? ''),
+                'mobile'       => (string) ($view['mobile'] ?? ''),
+                'email'        => (string) ($view['email'] ?? ''),
                 // Ours.
-                'messaging'    => $contactUuid !== '' ? self::messagingProfile($ctx, $contactUuid, (string) ($contact['mobile'] ?? '')) : null,
+                'messaging'    => $contactUuid !== '' ? self::messagingProfile($ctx, $contactUuid, (string) ($view['mobile'] ?? '')) : null,
             ];
         }
 
@@ -106,19 +106,21 @@ final class ContactsController extends Controller
         $fetchedAt = gmdate('c');
 
         if ($client->configured()) {
-            $result = $client->withSession($auth->sesKey())->contact($contactUuid);
+            $result = $client->withSession($auth->sesKey())->contact($ctx->cmpId, $contactUuid);
             $state = (string) $result['state'];
             $message = (string) $result['message'];
             $fetchedAt = (string) $result['fetched_at'];
 
             if ($result['ok']) {
-                $body = $result['body']['data'] ?? $result['body'] ?? [];
+                $view = (array) ($result['body']['data'] ?? []);
                 $contact = [
-                    'contact_uuid' => (string) ($body['contact_uuid'] ?? $contactUuid),
-                    'name'         => (string) ($body['name'] ?? ''),
-                    'mobile'       => (string) ($body['mobile'] ?? ''),
-                    'email'        => (string) ($body['email'] ?? ''),
-                    'language'     => (string) ($body['preferred_language'] ?? ''),
+                    'contact_uuid' => (string) ($view['id'] ?? $contactUuid),
+                    'name'         => (string) ($view['name'] ?? ''),
+                    'organization' => (string) ($view['organization'] ?? ''),
+                    'mobile'       => (string) ($view['mobile'] ?? ''),
+                    'email'        => (string) ($view['email'] ?? ''),
+                    'phones'       => array_values(array_filter(array_map(static fn ($p) => is_array($p) ? ($p['e164'] ?? $p['value'] ?? null) : null, (array) ($view['phones'] ?? [])))),
+                    'emails'       => array_values(array_filter(array_map(static fn ($e) => is_array($e) ? ($e['value'] ?? null) : null, (array) ($view['emails'] ?? [])))),
                 ];
             }
         }

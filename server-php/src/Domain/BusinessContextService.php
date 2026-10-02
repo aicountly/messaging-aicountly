@@ -101,33 +101,59 @@ final class BusinessContextService
         }
 
         $contactUuid = (string) ($conversation['contact_uuid'] ?? '');
+        $address = (string) ($conversation['customer_address'] ?? '');
+        $unmatched = [
+            'matched'               => false,
+            'address'               => $address,
+            'provider_profile_name' => (string) ($conversation['provider_profile_name'] ?? ''),
+        ];
 
-        // No match yet: ask Contacts by phone number. This is how an inbound
-        // message from an unknown number becomes a named customer.
-        $result = $contactUuid !== ''
-            ? $client->contact($contactUuid)
-            : $client->findByPhone((string) ($conversation['customer_address'] ?? ''));
+        // Linked: read that company contact (following a merge to its survivor).
+        if ($contactUuid !== '') {
+            $result = $client->contact($ctx->cmpId, $contactUuid);
+            if (!$result['ok']) {
+                return self::fromEnvelope($result, $unmatched);
+            }
 
-        if (!$result['ok']) {
-            return self::fromEnvelope($result, [
-                'address'               => (string) ($conversation['customer_address'] ?? ''),
-                'provider_profile_name' => (string) ($conversation['provider_profile_name'] ?? ''),
-            ]);
-        }
-
-        $body = $result['body']['data'] ?? $result['body'] ?? [];
-        $contact = $contactUuid !== '' ? $body : (is_array($body[0] ?? null) ? $body[0] : null);
-
-        if ($contact === null || $contact === []) {
             return [
                 'state'      => 'ready',
                 'source'     => 'contacts',
                 'fetched_at' => $result['fetched_at'],
-                'message'    => 'No contact in Aicountly Contacts matches this number yet.',
-                'data'       => [
-                    'matched'               => false,
-                    'address'               => (string) ($conversation['customer_address'] ?? ''),
+                'message'    => '',
+                'data'       => self::contactData((array) $result['body']['data']) + [
+                    'matched' => true,
+                    'linked'  => true,
+                    'address' => $address,
                     'provider_profile_name' => (string) ($conversation['provider_profile_name'] ?? ''),
+                ],
+            ];
+        }
+
+        // Not linked: LOOK UP the number in the company's directory (G19#1).
+        // Exactly one contact holding it is offered as the match; more than one
+        // is a choice for the agent; none is unknown. Never "the first row".
+        $result = $client->lookupPhone($ctx->cmpId, $address);
+        if (!$result['ok']) {
+            return self::fromEnvelope($result, $unmatched);
+        }
+        $matches = (array) ($result['body']['data'] ?? []);
+        $meta = (array) ($result['body']['meta'] ?? []);
+        $count = (int) ($meta['matchCount'] ?? count($matches));
+
+        if (($meta['attributable'] ?? false) === true && isset($matches[0]) && is_array($matches[0])) {
+            return [
+                'state' => 'ready', 'source' => 'contacts', 'fetched_at' => $result['fetched_at'],
+                'message' => 'One contact in Aicountly Contacts holds this number. Link it to show their history.',
+                'data' => $unmatched + ['match_count' => 1, 'suggestion' => self::contactData($matches[0])],
+            ];
+        }
+        if ($count > 1) {
+            return [
+                'state' => 'ready', 'source' => 'contacts', 'fetched_at' => $result['fetched_at'],
+                'message' => $count . ' contacts in Aicountly Contacts share this number, so none is assumed. Choose one.',
+                'data' => $unmatched + [
+                    'match_count' => $count,
+                    'candidates'  => array_map(static fn ($m) => self::contactData((array) $m), array_slice(array_values(array_filter($matches, 'is_array')), 0, 10)),
                 ],
             ];
         }
@@ -136,17 +162,27 @@ final class BusinessContextService
             'state'      => 'ready',
             'source'     => 'contacts',
             'fetched_at' => $result['fetched_at'],
-            'message'    => '',
-            'data'       => [
-                'matched'      => true,
-                'contact_uuid' => (string) ($contact['contact_uuid'] ?? $contactUuid),
-                'name'         => (string) ($contact['name'] ?? ''),
-                'mobile'       => (string) ($contact['mobile'] ?? ''),
-                'email'        => (string) ($contact['email'] ?? ''),
-                'language'     => (string) ($contact['preferred_language'] ?? ''),
-                'address'      => (string) ($conversation['customer_address'] ?? ''),
-                'provider_profile_name' => (string) ($conversation['provider_profile_name'] ?? ''),
-            ],
+            'message'    => 'No contact in this company\'s Aicountly Contacts holds this number.',
+            'data'       => $unmatched + ['match_count' => 0],
+        ];
+    }
+
+    /**
+     * The identity fields shown for a contact view (ContactsClient::view).
+     *
+     * @param array<string, mixed> $view
+     * @return array<string, mixed>
+     */
+    private static function contactData(array $view): array
+    {
+        return [
+            'contact_uuid' => (string) ($view['id'] ?? ''),
+            'name'         => (string) ($view['name'] ?? ''),
+            'organization' => (string) ($view['organization'] ?? ''),
+            'mobile'       => (string) ($view['mobile'] ?? ''),
+            'email'        => (string) ($view['email'] ?? ''),
+            'phones'       => array_values(array_filter(array_map(static fn ($p) => is_array($p) ? ($p['e164'] ?? $p['value'] ?? null) : null, (array) ($view['phones'] ?? [])))),
+            'emails'       => array_values(array_filter(array_map(static fn ($e) => is_array($e) ? ($e['value'] ?? null) : null, (array) ($view['emails'] ?? [])))),
         ];
     }
 

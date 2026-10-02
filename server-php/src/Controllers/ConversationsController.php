@@ -275,21 +275,25 @@ final class ConversationsController extends Controller
             Http::validationFailed('A contact reference is required.');
         }
 
-        // Confirmed to exist in Contacts before it is stored, under the user's
-        // own session — so a caller cannot attach an arbitrary identifier, and
-        // cannot attach one they are not entitled to see.
+        // Confirmed in the COMPANY's directory before it is stored, under the
+        // user's own session — so a caller cannot attach an arbitrary
+        // identifier, one they may not see, or another company's contact. With
+        // Contacts not connected nothing can be confirmed, so nothing is stored.
         $client = new ContactsClient();
-        if ($client->configured()) {
-            $result = $client->withSession($auth->sesKey())->contact($contactUuid);
-            if (!$result['ok']) {
-                self::fail(
-                    $result['state'] === 'forbidden' ? 'forbidden' : 'not_found',
-                    $result['state'] === 'forbidden'
-                        ? 'You do not have access to that contact in Aicountly Contacts.'
-                        : 'That contact could not be found in Aicountly Contacts.',
-                );
-            }
+        if (!$client->configured()) {
+            self::fail('validation_failed', $client->unavailableMessage() . ' A contact cannot be matched until it is.');
         }
+        $result = $client->withSession($auth->sesKey())->contact($ctx->cmpId, $contactUuid);
+        if (!$result['ok']) {
+            match ((string) $result['state']) {
+                'forbidden'   => self::fail('forbidden', (string) $result['message']),
+                'unsupported' => self::fail('not_found', (string) $result['message']),
+                default       => Http::error(503, (string) ($result['error'] ?? 'contacts_unavailable'), (string) $result['message'],
+                    ['retryable' => (bool) $result['retryable']]),
+            };
+        }
+        // A merged contact is stored as its survivor, the live reference.
+        $contactUuid = (string) ($result['body']['data']['id'] ?? $contactUuid);
 
         \Aicountly\Api\Db::update(
             'messaging_conversations',
@@ -498,7 +502,7 @@ final class ConversationsController extends Controller
             ];
         }
 
-        $result = $client->withSession($auth->sesKey())->resolveMany($ids);
+        $result = $client->withSession($auth->sesKey())->resolveMany($ctx->cmpId, $ids);
         if (!$result['ok']) {
             return [
                 'names' => [],
@@ -508,13 +512,15 @@ final class ConversationsController extends Controller
         }
 
         $names = [];
-        foreach ((array) ($result['body']['data'] ?? []) as $contact) {
-            if (!is_array($contact)) {
+        foreach ((array) ($result['body']['data'] ?? []) as $view) {
+            if (!is_array($view)) {
                 continue;
             }
-            $uuid = (string) ($contact['contact_uuid'] ?? '');
+            // Keyed by the id the conversation stores (a merged contact
+            // answers with its survivor's name).
+            $uuid = (string) ($view['requested_id'] ?? $view['id'] ?? '');
             if ($uuid !== '') {
-                $names[$uuid] = (string) ($contact['name'] ?? '');
+                $names[$uuid] = (string) ($view['name'] ?? '');
             }
         }
 
