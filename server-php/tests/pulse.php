@@ -99,7 +99,7 @@ function section(string $name): void
 
 function user(): Auth
 {
-    return Auth::forTesting('user-alice', 'user', 'messaging', ['acs_type' => 1]);
+    return Auth::forTesting('user-alice', 'user', 'messaging');
 }
 
 /** A sibling product calling Messaging with its service key, for a named person. */

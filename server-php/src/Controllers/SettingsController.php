@@ -53,7 +53,8 @@ final class SettingsController extends Controller
                 'uuid'         => $auth->uuid,
                 'name'         => $auth->displayName(),
                 'kind'         => $auth->kind,
-                'is_owner'     => $auth->accessType() === 1,
+                // Manage's answer for this company (companyinfo), never the portal session.
+                'is_owner'     => $ctx->isOwner($auth),
             ],
             'context'     => $ctx->asQuery(),
             'permissions' => $granted,

@@ -177,13 +177,14 @@ function ctx(int $boId = 0): Context
 
 function owner(): Auth
 {
-    // acs_type 1 is the company owner, which is the shortcut in Permissions.
-    return Auth::forTesting('user-owner', 'user', 'messaging', ['acs_type' => 1]);
+    // The company owner: Manage's companyinfo says so (trusted below with
+    // owner = true), never the portal session, which has no such field.
+    return Auth::forTesting('user-owner', 'user', 'messaging');
 }
 
 function agent(): Auth
 {
-    return Auth::forTesting('user-agent', 'user', 'messaging', ['acs_type' => 2]);
+    return Auth::forTesting('user-agent', 'user', 'messaging');
 }
 
 /**
@@ -238,7 +239,8 @@ function reset(): void
     // Manage is stubbed rather than reached for the tenant check, because the
     // check itself is tested separately and every other test should not pay an
     // HTTP round trip for it.
-    Context::trustForTesting(CMP, owner());
+    Context::resetForTesting();
+    Context::trustForTesting(CMP, owner(), true, [['fy_id' => 7, 'fy_start' => '2026-04-01', 'fy_end' => '2027-03-31']]);
     Context::trustForTesting(CMP, agent());
 }
 
@@ -1162,6 +1164,47 @@ check('the tenant comes from the connection, never from the payload', static fun
     assertTrue($conversation !== null, 'a conversation was opened');
     assertSame(CMP, (int) $conversation['cmp_id'],
         'THE POINT: a spoofed tenant identifier in the body is ignored');
+});
+
+check('ownership is Manage\'s companyinfo answer, never the portal session (I-18, G19#8)', static function (): void {
+    reset();
+    Context::resetForTesting();
+    Permissions::forget();
+    $refusal = static function (int $cmpId, Auth $auth): int {
+        try {
+            Context::forCompany($cmpId)->assertAllowed($auth);
+
+            return 200;
+        } catch (ResponseSent $e) {
+            return $e->status;
+        }
+    };
+
+    // The stub answers in Manage's real shape: user-owner owns, user-agent is a member.
+    $owner = owner();
+    assertSame(200, $refusal(CMP, $owner), 'the owner opens the company');
+    assertTrue(ctx()->isOwner($owner), 'and Manage\'s companyinfo says they own it');
+    assertSame(Permissions::all(), Permissions::granted(ctx(), $owner), 'so they hold every permission');
+    assertSame(7, ctx()->fyFor($owner, '2026-06-01'), 'the financial year comes from the same answer');
+
+    $agent = agent();
+    assertSame(200, $refusal(CMP, $agent), 'a member opens the company');
+    assertFalse(ctx()->isOwner($agent), 'but is not its owner');
+    assertFalse(Permissions::allows(ctx(), $agent, 'messaging.access.manage'), 'and does not manage access');
+
+    // A session that CLAIMS ownership the old way gets nothing for it.
+    $claimer = Auth::forTesting('user-claims', 'user', 'messaging', ['acs_type' => 1]);
+    assertSame(200, $refusal(CMP, $claimer), 'a member whose session says acs_type 1');
+    assertFalse(ctx()->isOwner($claimer), 'is still not the owner — validatesession has no such field to trust');
+
+    assertSame(403, $refusal(9998, $owner), 'Manage\'s 404 (not found or access denied) is a 403');
+    assertSame(503, $refusal(9999, $owner), 'an answer about a different company is a 503, never an allow');
+    assertSame(503, $refusal(9997, $owner), 'Manage failing is a 503, never an allow');
+    assertFalse(Context::forCompany(9997)->isOwner($owner), 'and nobody owns what Manage did not answer for');
+
+    $service = Auth::forTesting('actor-1', 'service', 'appointments');
+    assertFalse(ctx()->isOwner($service), 'a product key never owns a company');
+    reset();
 });
 
 check('a replayed webhook event is processed once', static function (): void {

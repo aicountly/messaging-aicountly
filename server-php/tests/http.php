@@ -170,10 +170,11 @@ try {
     exit(1);
 }
 
-$auth = Auth::forTesting('user-http', 'user', 'messaging', ['acs_type' => 1]);
+$auth = Auth::forTesting('user-http', 'user', 'messaging');
 Auth::adopt($auth);
 $ctx = Context::forCompany(CMP);
-Context::trustForTesting(CMP, $auth);
+// Owner per Manage's companyinfo (the stub says so for user-http too).
+Context::trustForTesting(CMP, $auth, true);
 Clock::freeze('2026-06-01T04:00:00Z');
 
 foreach ($tables as $table) {
@@ -381,7 +382,7 @@ check('a company this session cannot open is refused', static function () use ($
 // ---------------------------------------------------------------------------
 
 check('an agent without the financial permission gets a working inbox and no balances', static function () use ($router, $conversationUuid): void {
-    $agent = Auth::forTesting('user-http-agent', 'user', 'messaging', ['acs_type' => 2]);
+    $agent = Auth::forTesting('user-http-agent', 'user', 'messaging');
     Auth::adopt($agent);
     Context::trustForTesting(CMP, $agent);
     Permissions::forget();
@@ -408,13 +409,13 @@ check('an agent without the financial permission gets a working inbox and no bal
         assertFalse(str_contains($encoded, '480000'),
             'no balance may appear anywhere in the payload for a caller who cannot see balances');
     } finally {
-        Auth::adopt(Auth::forTesting('user-http', 'user', 'messaging', ['acs_type' => 1]));
+        Auth::adopt(Auth::forTesting('user-http', 'user', 'messaging'));
         Permissions::forget();
     }
 });
 
 check('an agent without send permission cannot dispatch', static function () use ($router, $conversationUuid): void {
-    $agent = Auth::forTesting('user-http-agent', 'user', 'messaging', ['acs_type' => 2]);
+    $agent = Auth::forTesting('user-http-agent', 'user', 'messaging');
     Auth::adopt($agent);
     Context::trustForTesting(CMP, $agent);
     Permissions::forget();
@@ -423,7 +424,7 @@ check('an agent without send permission cannot dispatch', static function () use
         $response = call($router, 'POST', 'v1/conversations/' . CONVERSATION_FOR_SEND . '/send', [], ['message_uuid' => Uuid::v4()]);
         assertStatus(403, $response, 'dispatch without messaging.messages.send');
     } finally {
-        Auth::adopt(Auth::forTesting('user-http', 'user', 'messaging', ['acs_type' => 1]));
+        Auth::adopt(Auth::forTesting('user-http', 'user', 'messaging'));
         Permissions::forget();
     }
 });
@@ -468,7 +469,7 @@ function callAsService(Router $router, array $body, ?string $idempotencyKey): ar
     } finally {
         Http::setBodyForTesting(null);
         unset($_SERVER['HTTP_X_SERVICE_KEY'], $_SERVER['HTTP_X_ACTOR_UUID'], $_SERVER['HTTP_IDEMPOTENCY_KEY']);
-        Auth::adopt($previous ?? Auth::forTesting('user-http', 'user', 'messaging', ['acs_type' => 1]));
+        Auth::adopt($previous ?? Auth::forTesting('user-http', 'user', 'messaging'));
     }
 }
 
@@ -617,7 +618,7 @@ check('a webhook route needs no session and refuses an unsigned body', static fu
             'an unsigned body should be refused on its signature, got ' . $response['status'],
         );
     } finally {
-        Auth::adopt(Auth::forTesting('user-http', 'user', 'messaging', ['acs_type' => 1]));
+        Auth::adopt(Auth::forTesting('user-http', 'user', 'messaging'));
     }
 });
 

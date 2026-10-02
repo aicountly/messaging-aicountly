@@ -89,8 +89,8 @@ final class Auth
      * administrator suppressing them by hand.
      *
      * It holds no ses_key, so it cannot read Contacts or Books as anybody, and
-     * `accessType()` is null, so the owner shortcut in Permissions can never
-     * fire for it. It grants nothing — the caller has already proved the
+     * Manage was never asked about it, so the owner shortcut in Permissions
+     * can never fire for it. It grants nothing — the caller has already proved the
      * provider's signature before this is built.
      */
     public static function forProvider(string $provider): self
@@ -182,11 +182,9 @@ final class Auth
         return substr(hash('sha256', $this->kind . '|' . $this->uuid . '|' . $this->sesKey), 0, 32);
     }
 
-    /** Portal access type for the company when the portal reported one: 1 = owner. */
-    public function accessType(): ?int
-    {
-        return isset($this->session['acs_type']) ? (int) $this->session['acs_type'] : null;
-    }
+    // There is deliberately no accessType(). The portal's validatesession never
+    // returns `acs_type`; who owns a company is Manage's answer, read per company
+    // in Context::assertAllowed and asked through Context::isOwner() (G19#8).
 
     public function displayName(): string
     {

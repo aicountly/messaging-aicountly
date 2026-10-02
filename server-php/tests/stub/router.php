@@ -100,23 +100,42 @@ if ($path === '/api/health') {
 // Manage — the tenant boundary
 // ---------------------------------------------------------------------------
 
+// Manage's REAL companyinfo shape (manage-aicountly CompanyModel::companyInfo):
+// asked with the caller's own ses_key and `comp_id`; 404 "not found or access
+// denied" for a company the session cannot open. Ownership is in THIS answer
+// (ownership / is_creator / access_type) — the portal session carries none.
 if ($path === '/api/companyinfo' || preg_match('#^/api/companies/(\d+)$#', $path, $m) === 1) {
-    $cmpId = (int) ($query['cmp_id'] ?? $m[1] ?? 0);
+    $cmpId = (int) ($query['comp_id'] ?? $query['cmp_id'] ?? $m[1] ?? 0);
+    $bearer = preg_match('/Bearer\s+(.+)/i', (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? ''), $b) === 1 ? trim($b[1]) : '';
 
-    // A company id the tests use to prove the boundary holds: Manage says it
-    // is a DIFFERENT company, which must produce a 403 rather than a silent
-    // cross-tenant read.
+    // 9999: Manage answers about a DIFFERENT company — never read as a yes (503).
     if ($cmpId === 9999) {
-        send(200, ['data' => ['cmp_id' => 1234, 'cmp_name' => 'Somebody Else Pvt Ltd']]);
+        send(200, ['success' => '1', 'data' => ['comp_id' => 1234, 'cmp_id' => 1234, 'comp_name' => 'Somebody Else Pvt Ltd']]);
+    }
+    // 9998: this session may not open it — Manage's 404 (→ 403 here).
+    if ($cmpId === 9998) {
+        send(404, ['success' => false, 'message' => 'Company not found or access denied']);
+    }
+    // 9997: Manage itself failing (→ 503, never an allow).
+    if ($cmpId === 9997) {
+        send(502, ['message' => 'Bad gateway']);
     }
 
+    // The suites' owners own every stub company; everybody else is a member.
+    $owner = in_array($bearer, ['test-ses-key-user-owner', 'test-ses-key-user-http'], true);
     send(200, [
+        'success' => '1',
         'data' => [
-            'cmp_id'    => $cmpId,
-            'cmp_name'  => 'Stub Trading Co',
-            'currency'  => 'INR',
-            'timezone'  => 'Asia/Kolkata',
-            'branches'  => [['bo_id' => 0, 'bo_name' => 'All locations']],
+            'comp_id'     => $cmpId,
+            'cmp_id'      => $cmpId,
+            'comp_name'   => 'Stub Trading Co',
+            'currency'    => 'INR',
+            'timezone'    => 'Asia/Kolkata',
+            'branch_list' => [['bo_id' => 0, 'bo_name' => 'All locations']],
+            'fy_list'     => [['fy_id' => 7, 'fy_start' => '2026-04-01', 'fy_end' => '2027-03-31', 'fy_name' => '2026-27']],
+            'is_creator'  => $owner,
+            'ownership'   => $owner ? 'owner' : 'shared',
+            'access_type' => $owner ? 1 : 2,
         ],
     ]);
 }
