@@ -167,10 +167,12 @@ Other Aicountly products send through Messaging rather than growing their own
 channel code. `appointments-aicountly` already calls this.
 
 ```
-POST /api/v1/messages
-  X-Service-Key: <the calling product's key>
-  X-Actor-Uuid:  <the person or system the call is on behalf of>
-  Idempotency-Key: <8–200 chars of [A-Za-z0-9._:-]>
+POST /api/v1/messages?cmp_id=<company>
+  X-Service-Key:     <the calling product's key>
+  X-AIC-Environment: production | sandbox | local   (must equal this server's)
+  Authorization:     Bearer <the person's own ses_key>   (when a person is present)
+  X-Actor-Uuid:      <optional; must match that session, else only recorded as a claim>
+  Idempotency-Key:   <8–200 chars of [A-Za-z0-9._:-]>
 
   { "channel": "whatsapp",
     "to": "+919812345678",
@@ -181,6 +183,21 @@ POST /api/v1/messages
 GET  /api/v1/messages/stats
 GET  /api/v1/messages/{message}
 ```
+
+What a service key may do (G19#7, `server-php/src/ServicePolicy.php`):
+
+- **Routes:** only those listed for the product (the three above for
+  appointments, billing, books, sales, pos, reach, crm, advisor, voice; Helpdesk
+  may read `GET v1/conversations` and `GET v1/conversations/{uuid}/messages`).
+  Anything else is `403 service_route_not_allowed`.
+- **Environment:** `X-AIC-Environment` must equal the server's `AIC_ENVIRONMENT`
+  (else `401 service_environment_mismatch`); a server with none accepts no key.
+- **Company:** with a forwarded Bearer, Manage decides with that person's session.
+  With nobody present, the company must have allowed the product in Settings
+  (`service_products`, needs `messaging.access.manage`) or ops must list it in
+  `SERVICE_KEY_COMPANIES` — else `403 service_company_not_bound`.
+- **Actor:** a bare `X-Actor-Uuid` is recorded as a claim and never acted on;
+  one that disagrees with the forwarded session is `401 actor_mismatch`.
 
 Four things this endpoint insists on:
 

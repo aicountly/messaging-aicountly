@@ -17,9 +17,12 @@ namespace Aicountly\Api;
  *     refuses it. Messaging does not re-implement another product's
  *     permissions, and it does not hold a key that could bypass them.
  *
- *  2. A trusted product backend — `X-Service-Key`, plus `X-Actor-Uuid` naming
- *     the human it is acting for. Appointments posts a reminder this way; the
- *     client on the phone has no session here.
+ *  2. A trusted product backend — `X-Service-Key` and `X-AIC-Environment`,
+ *     limited to the routes ServicePolicy lists for it. When a person is
+ *     present the product forwards THEIR session as the Bearer and that is the
+ *     verified actor (Manage decides the company). With no person (a reminder
+ *     from cron) it acts as itself, only for companies bound to it. A bare
+ *     `X-Actor-Uuid` is recorded as a claim and never acted on (G19#7).
  *
  *  3. A provider webhook — no Auth at all. A delivery receipt from Meta or
  *     Twilio is not a user and never will be. Those routes resolve no Auth,
@@ -41,6 +44,8 @@ final class Auth
         public readonly string $sourceApp,
         private readonly string $sesKey,
         private readonly ?array $session,
+        /** A service call's unverified X-Actor-Uuid: recorded, never acted on. */
+        public readonly ?string $claimedActor = null,
     ) {
     }
 
@@ -115,6 +120,10 @@ final class Auth
         if ($resolved === null) {
             Http::unauthorized();
         }
+        if ($resolved->isService() && ServicePolicy::grants($resolved->sourceApp) === null) {
+            Http::error(403, 'service_route_not_allowed',
+                'This product\'s service key may not call this route. See ServicePolicy for what it may do.');
+        }
 
         return $resolved;
     }
@@ -123,22 +132,7 @@ final class Auth
     {
         $serviceKey = Http::header('X-Service-Key');
         if ($serviceKey !== '') {
-            $app = ServiceKeys::resolveApp($serviceKey);
-            if ($app === null) {
-                return null;
-            }
-            // Proven by the key, not claimed in a header. Recording it is what
-            // stops us calling that product back inside its own request.
-            CrossServiceCallContext::adoptAuthenticatedOrigin($app);
-            $actor = Http::header('X-Actor-Uuid');
-
-            return new self(
-                $actor !== '' ? $actor : 'service:' . $app,
-                'service',
-                $app,
-                '',
-                null,
-            );
+            return self::resolveService($serviceKey);
         }
 
         $sesKey = self::bearer();
@@ -158,6 +152,47 @@ final class Auth
             $sesKey,
             $session,
         );
+    }
+
+    private static function resolveService(string $serviceKey): ?self
+    {
+        $app = ServiceKeys::resolveApp($serviceKey);
+        if ($app === null) {
+            return null;
+        }
+        if (!ServicePolicy::environmentMatches(Http::header('X-AIC-Environment'))) {
+            Http::error(401, 'service_environment_mismatch',
+                'A service call must say which environment it is for (X-AIC-Environment), and it must be this one.');
+        }
+
+        // Proven by the key, not claimed in a header. Recording it is what
+        // stops us calling that product back inside its own request.
+        CrossServiceCallContext::adoptAuthenticatedOrigin($app);
+        $claimed = Http::header('X-Actor-Uuid');
+
+        $sesKey = self::bearer();
+        if ($sesKey === '') {
+            return new self('service:' . $app, 'service', $app, '', null, $claimed !== '' ? $claimed : null);
+        }
+
+        $session = Portal::validateSesKey($sesKey);
+        if ($session === null) {
+            return null;
+        }
+        $uuid = (string) ($session['uuid_aictly'] ?? $session['uuid'] ?? '');
+        if ($claimed !== '' && $claimed !== $uuid) {
+            Http::error(401, 'actor_mismatch', 'X-Actor-Uuid does not match the session sent with it.');
+        }
+
+        // The verified person, acting through the product: their session is
+        // kept so Manage decides whether they belong to the company.
+        return new self($uuid, 'service', $app, $sesKey, $session);
+    }
+
+    /** A service call that carries the acting person's own, validated session. */
+    public function hasVerifiedActor(): bool
+    {
+        return $this->isService() && $this->sesKey !== '';
     }
 
     public function isService(): bool

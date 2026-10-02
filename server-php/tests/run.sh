@@ -34,6 +34,8 @@ DB_PASS=$DB_PASS
 # no test ever reaches a real Pulse (or a real model).
 PULSE_API_ORIGIN=http://127.0.0.1:$STUB_PORT
 MANAGE_API_BASE=http://127.0.0.1:$STUB_PORT
+# The portal's validatesession too: no test ever reaches my.aicountly.com.
+PORTAL_AUTH_BASE=http://127.0.0.1:$STUB_PORT
 CONTACTS_API_BASE=http://127.0.0.1:$STUB_PORT
 BOOKS_API_BASE=http://127.0.0.1:$STUB_PORT
 SALES_API_BASE=http://127.0.0.1:$STUB_PORT

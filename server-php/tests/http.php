@@ -439,15 +439,30 @@ check('an agent without send permission cannot dispatch', static function () use
  * @param array<string, mixed> $body
  * @return array{status:int, body:array<string, mixed>}
  */
-function callAsService(Router $router, array $body, ?string $idempotencyKey): array
+function callAsService(Router $router, array $body, ?string $idempotencyKey, array $headers = [], string $method = 'POST', string $path = 'v1/messages', int $cmpId = CMP): array
 {
     $previous = Auth::resolve();
     Auth::adopt(null);
 
-    $_SERVER['REQUEST_METHOD'] = 'POST';
-    $_SERVER['HTTP_X_SERVICE_KEY'] = 'test-appointments-inbound-key-0123456789';
-    $_SERVER['HTTP_X_ACTOR_UUID'] = 'appointments-actor-1';
-    $_GET = ['cmp_id' => CMP, 'bo_id' => 0];
+    // Appointments with its key, for the environment this server is in, and
+    // no person (a reminder from cron) unless a test forwards a Bearer.
+    $headers += [
+        'X-Service-Key'     => 'test-appointments-inbound-key-0123456789',
+        'X-Actor-Uuid'      => 'appointments-actor-1',
+        'X-AIC-Environment' => 'local',
+    ];
+    $_SERVER['REQUEST_METHOD'] = $method;
+    $set = [];
+    foreach ($headers as $name => $value) {
+        $server = $name === 'Authorization' ? 'HTTP_AUTHORIZATION' : 'HTTP_' . strtoupper(str_replace('-', '_', $name));
+        if ($value === null) {
+            unset($_SERVER[$server]);
+            continue;
+        }
+        $_SERVER[$server] = $value;
+        $set[] = $server;
+    }
+    $_GET = ['cmp_id' => $cmpId, 'bo_id' => 0];
     Http::setBodyForTesting($body);
 
     if ($idempotencyKey === null) {
@@ -458,7 +473,7 @@ function callAsService(Router $router, array $body, ?string $idempotencyKey): ar
 
     try {
         ob_start();
-        $matched = $router->dispatch('POST', 'v1/messages');
+        $matched = $router->dispatch($method, $path);
         ob_end_clean();
 
         return ['status' => $matched ? 0 : 404, 'body' => []];
@@ -468,10 +483,71 @@ function callAsService(Router $router, array $body, ?string $idempotencyKey): ar
         return ['status' => 500, 'body' => ['error' => ['message' => $e->getMessage()]]];
     } finally {
         Http::setBodyForTesting(null);
-        unset($_SERVER['HTTP_X_SERVICE_KEY'], $_SERVER['HTTP_X_ACTOR_UUID'], $_SERVER['HTTP_IDEMPOTENCY_KEY']);
+        foreach ($set as $server) {
+            unset($_SERVER[$server]);
+        }
+        unset($_SERVER['HTTP_IDEMPOTENCY_KEY']);
         Auth::adopt($previous ?? Auth::forTesting('user-http', 'user', 'messaging'));
     }
 }
+
+// The company allows Appointments to send for it with nobody signed in (G19#7):
+// what an administrator does in Settings. Without it the contract refuses.
+Domain\Settings::save($ctx, $auth, ['service_products' => ['appointments']]);
+
+check('a service key is bound to an environment, a route list and a company (G19#7)', static function () use ($router, $ctx, $siblings): void {
+    $send = ['channel' => 'whatsapp', 'to' => '+919812345699', 'template' => 'order_packed'];
+
+    $missing = callAsService($router, $send, 'g19-7-env-missing', ['X-AIC-Environment' => null]);
+    assertStatus(401, $missing, 'no X-AIC-Environment');
+    assertSame('service_environment_mismatch', $missing['body']['error']['code'] ?? null, 'is refused as an environment mismatch');
+    $wrong = callAsService($router, $send, 'g19-7-env-wrong', ['X-AIC-Environment' => 'production']);
+    assertStatus(401, $wrong, 'a production call reaching a local server is refused');
+
+    $route = callAsService($router, [], null, [], 'GET', 'v1/conversations');
+    assertStatus(403, $route, 'Appointments\' key cannot read the inbox');
+    assertSame('service_route_not_allowed', $route['body']['error']['code'] ?? null, 'route not on its allow-list');
+    $settings = callAsService($router, ['service_products' => ['appointments', 'billing']], null, [], 'PUT', 'v1/settings');
+    assertSame('service_route_not_allowed', $settings['body']['error']['code'] ?? null, 'nor change settings — not even the binding');
+
+    $unbound = callAsService($router, $send, 'g19-7-unbound', [], 'POST', 'v1/messages', 4242);
+    assertStatus(403, $unbound, 'a company that did not allow Appointments');
+    assertSame('service_company_not_bound', $unbound['body']['error']['code'] ?? null, 'is not one it may name');
+    $stats = callAsService($router, [], null, [], 'GET', 'v1/messages/stats', 4242);
+    assertStatus(403, $stats, 'nor read its delivery statistics');
+
+    $bound = callAsService($router, $send, null);
+    assertStatus(422, $bound, 'the bound company reaches the contract (and its Idempotency-Key rule)');
+
+    // A person present: their forwarded session is the actor, and Manage decides
+    // (with the portal and Manage down, nobody can be verified: refused, never allowed).
+    if ($siblings === 'down') {
+        $person = callAsService($router, $send, null, ['Authorization' => 'Bearer test-ses-key-user-http', 'X-Actor-Uuid' => 'user-http'], 'POST', 'v1/messages', 4242);
+        assertTrue(in_array($person['status'], [401, 503], true), 'an unverifiable person is refused, got ' . $person['status']);
+
+        return;
+    }
+    $person = callAsService($router, $send, null, ['Authorization' => 'Bearer test-ses-key-user-http', 'X-Actor-Uuid' => 'user-http'], 'POST', 'v1/messages', 4242);
+    assertStatus(422, $person, 'with the person\'s own session, a company they belong to needs no binding');
+    $denied = callAsService($router, $send, null, ['Authorization' => 'Bearer test-ses-key-user-http', 'X-Actor-Uuid' => 'user-http'], 'POST', 'v1/messages', 9998);
+    assertStatus(403, $denied, 'and one Manage says they cannot open is refused');
+    $mismatch = callAsService($router, $send, null, ['Authorization' => 'Bearer test-ses-key-user-http', 'X-Actor-Uuid' => 'someone-else']);
+    assertSame('actor_mismatch', $mismatch['body']['error']['code'] ?? null, 'a claimed actor that is not the session\'s is refused');
+
+    // A bare X-Actor-Uuid is a claim, never an identity.
+    $_SERVER['HTTP_X_SERVICE_KEY'] = 'test-appointments-inbound-key-0123456789';
+    $_SERVER['HTTP_X_ACTOR_UUID'] = 'user-owner';
+    $_SERVER['HTTP_X_AIC_ENVIRONMENT'] = 'local';
+    try {
+        $resolved = Auth::resolve();
+    } finally {
+        unset($_SERVER['HTTP_X_SERVICE_KEY'], $_SERVER['HTTP_X_ACTOR_UUID'], $_SERVER['HTTP_X_AIC_ENVIRONMENT']);
+    }
+    assertSame('service:appointments', $resolved?->uuid, 'the product acts as itself');
+    assertSame('user-owner', $resolved?->claimedActor, 'and the named person is recorded only as a claim');
+    assertFalse($ctx->isOwner($resolved), 'which owns nothing');
+    assertFalse(Permissions::allows($ctx, $resolved, 'messaging.consent.override'), 'and holds no permission off its route list');
+});
 
 check('the service contract refuses a write with no Idempotency-Key', static function () use ($router): void {
     // THE REASON. Without one, a retry after a timeout sends the customer a

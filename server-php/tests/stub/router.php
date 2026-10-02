@@ -100,6 +100,17 @@ if ($path === '/api/health') {
 // Manage — the tenant boundary
 // ---------------------------------------------------------------------------
 
+// The portal's validatesession, in its REAL shape (my-aicountly-com
+// AuthController::validateSession): status, uuid_aictly and the key — no
+// name, no acs_type. A test session "test-ses-key-<uuid>" is that user.
+if ($path === '/api/validatesession') {
+    $bearer = preg_match('/Bearer\s+(.+)/i', (string) ($_SERVER['HTTP_AUTHORIZATION'] ?? ''), $b) === 1 ? trim($b[1]) : '';
+    if (!str_starts_with($bearer, 'test-ses-key-')) {
+        send(401, ['status' => 0, 'message' => 'Invalid session']);
+    }
+    send(200, ['status' => 1, 'uuid_aictly' => substr($bearer, strlen('test-ses-key-')), 'ses_key' => $bearer]);
+}
+
 // Manage's REAL companyinfo shape (manage-aicountly CompanyModel::companyInfo):
 // asked with the caller's own ses_key and `comp_id`; 404 "not found or access
 // denied" for a company the session cannot open. Ownership is in THIS answer

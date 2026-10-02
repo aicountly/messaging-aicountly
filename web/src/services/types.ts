@@ -753,6 +753,8 @@ export interface MessagingSettings {
   ai_suggest_allowed: boolean
   ai_autosend_allowed: boolean
   default_languages: string[]
+  /** Products that may send for this company with nobody signed in (G19#7). */
+  service_products?: string[]
   updated_at?: string | null
   updated_by?: string | null
 }
@@ -762,6 +764,8 @@ export interface SettingsResponse {
   /** Per-field explanations written by the backend, shown as field hints. */
   notes: Record<string, string>
   available_languages: Record<string, string>
+  /** Products whose service key this company may allow to act with nobody signed in. */
+  available_service_products?: string[]
 }
 
 export interface PermissionProfile {

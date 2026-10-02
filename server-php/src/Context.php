@@ -82,11 +82,20 @@ final class Context
      */
     public function assertAllowed(Auth $auth): void
     {
-        if ($auth->isService()) {
-            // A service key is issued to a product, not to a person, and the
-            // owning product has already checked the human behind it.
+        if ($auth->isService() && !$auth->hasVerifiedActor()) {
+            // A product acting as itself may act only for companies bound to
+            // it (ServicePolicy). Naming a cmp_id is not enough (G19#7).
+            if (!ServicePolicy::companyBound($auth->sourceApp, $this->cmpId)) {
+                Http::error(403, 'service_company_not_bound',
+                    'This product is not allowed to act for this company without a signed-in person. '
+                    . 'An administrator can allow it in Messaging settings.');
+            }
+
             return;
         }
+
+        // A person — directly, or through a product that forwarded their own
+        // session — is checked with Manage, with that session.
 
         $key = $this->cmpId . ':' . $auth->fingerprint();
         if (isset(self::$verified[$key])) {

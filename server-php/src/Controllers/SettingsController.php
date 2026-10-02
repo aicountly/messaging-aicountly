@@ -16,6 +16,7 @@ use Aicountly\Api\Domain\Settings;
 use Aicountly\Api\Features;
 use Aicountly\Api\Http;
 use Aicountly\Api\Permissions;
+use Aicountly\Api\ServicePolicy;
 
 final class SettingsController extends Controller
 {
@@ -103,7 +104,11 @@ final class SettingsController extends Controller
                     . 'without a stated conversion source.',
                 'ai_autosend_allowed' => 'Off by default. Turning it on lets AI-drafted messages reach customers '
                     . 'without anybody reading them.',
+                'service_products' => 'Products that may send through Messaging for this company when nobody is '
+                    . 'signed in — an appointment reminder sent overnight, for example. Each still goes through '
+                    . 'consent, suppression and approved templates. None until you allow one.',
             ],
+            'available_service_products' => ServicePolicy::products(),
             'available_languages' => [
                 'en' => 'English', 'hi' => 'Hindi', 'mr' => 'Marathi', 'gu' => 'Gujarati',
                 'ta' => 'Tamil', 'te' => 'Telugu', 'kn' => 'Kannada', 'ml' => 'Malayalam',
@@ -153,6 +158,29 @@ final class SettingsController extends Controller
             $body['default_languages'] = array_values(array_filter(
                 array_map(static fn ($l) => is_string($l) ? substr($l, 0, 12) : null, $body['default_languages']),
             ));
+        }
+
+        // Which products may act for this company with nobody signed in
+        // (G19#7). Widening what another product's key can do here is an
+        // access decision, so it needs messaging.access.manage too.
+        if (array_key_exists('service_products', $body)) {
+            if (!is_array($body['service_products'])) {
+                Http::validationFailed('service_products must be a list of products.', ['field' => 'service_products']);
+            }
+            $known = ServicePolicy::products();
+            $chosen = [];
+            foreach ($body['service_products'] as $product) {
+                $product = strtolower(trim((string) $product));
+                if (!in_array($product, $known, true)) {
+                    Http::validationFailed('"' . $product . '" is not a product that can act for a company here.', ['field' => 'service_products']);
+                }
+                $chosen[$product] = true;
+            }
+            $body['service_products'] = array_keys($chosen);
+            sort($body['service_products']);
+            if ($body['service_products'] !== ($before['service_products'] ?? [])) {
+                Permissions::assert($ctx, $auth, 'messaging.access.manage');
+            }
         }
 
         // Enabling autonomous sending is a deliberate act and needs its own

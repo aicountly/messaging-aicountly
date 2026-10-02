@@ -140,6 +140,7 @@ interface PolicyForm {
   ai_suggest_allowed: boolean
   ai_autosend_allowed: boolean
   default_languages: string[]
+  service_products: string[]
 }
 
 function toForm(settings: MessagingSettings): PolicyForm {
@@ -160,6 +161,7 @@ function toForm(settings: MessagingSettings): PolicyForm {
     ai_suggest_allowed: Boolean(settings.ai_suggest_allowed),
     ai_autosend_allowed: Boolean(settings.ai_autosend_allowed),
     default_languages: [...(settings.default_languages ?? [])],
+    service_products: [...(settings.service_products ?? [])],
   }
 }
 
@@ -183,6 +185,8 @@ function PolicyTab() {
   const notes = state.data?.notes ?? {}
   const languages = state.data?.available_languages ?? {}
   const canManageAi = can('messaging.ai.manage')
+  const canManageAccess = can('messaging.access.manage')
+  const serviceProducts = state.data?.available_service_products ?? []
 
   const error = save.error instanceof ApiError ? save.error : null
   const fieldErrors = error?.fieldErrors ?? {}
@@ -215,6 +219,12 @@ function PolicyTab() {
       ai_suggest_allowed: form.ai_suggest_allowed,
       ai_autosend_allowed: form.ai_autosend_allowed,
       default_languages: form.default_languages,
+    }
+    // Only an access manager may change which products act for the company,
+    // so the list is sent only when it changed.
+    const sortedProducts = [...form.service_products].sort()
+    if (sortedProducts.join(',') !== [...(loaded.service_products ?? [])].sort().join(',')) {
+      payload.service_products = sortedProducts
     }
 
     // Only sent when the user actually ticked the confirmation, and only when
@@ -461,6 +471,45 @@ function PolicyTab() {
                   <Notice tone="warning" title="At least one language is required">
                     The backend will refuse an empty list, because a composer with no language offered is a
                     composer nobody can use.
+                  </Notice>
+                )}
+              </Panel>
+
+              <Panel
+                title="Products that may send for this company"
+                subtitle={
+                  notes.service_products
+                  ?? 'Products that may send through Messaging when nobody is signed in. None until you allow one.'
+                }
+              >
+                <fieldset style={{ border: 0, margin: 0, padding: 0 }} disabled={!canManageAccess}>
+                  <legend className="msg-visually-hidden">Products allowed to send with nobody signed in</legend>
+                  <div className="msg-chips">
+                    {serviceProducts.map((product) => {
+                      const selected = form.service_products.includes(product)
+                      return (
+                        <label key={product} className="msg-chip" aria-pressed={selected}>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            style={{ marginRight: '0.4rem' }}
+                            onChange={(event) =>
+                              patch({
+                                service_products: event.target.checked
+                                  ? [...form.service_products, product]
+                                  : form.service_products.filter((entry) => entry !== product),
+                              })
+                            }
+                          />
+                          {product.charAt(0).toUpperCase() + product.slice(1)}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </fieldset>
+                {!canManageAccess && (
+                  <Notice tone="info" title="Only an access manager can change this">
+                    Allowing another product to act for this company is an access decision.
                   </Notice>
                 )}
               </Panel>

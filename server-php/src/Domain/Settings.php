@@ -41,6 +41,10 @@ final class Settings
 
         $settings = $row ?? self::defaults();
         $settings['default_languages'] = Db::jsonColumn($settings['default_languages'] ?? null) ?: ['en', 'hi'];
+        $settings['service_products'] = array_values(array_filter(
+            Db::jsonColumn($settings['service_products'] ?? null),
+            'is_string',
+        ));
         $settings['configured'] = $row !== null;
 
         return self::$memo[$ctx->cmpId] = $settings;
@@ -65,6 +69,9 @@ final class Settings
             'ai_suggest_allowed'            => true,
             'ai_autosend_allowed'           => false,
             'default_languages'             => ['en', 'hi'],
+            // Products allowed to act for this company with nobody signed in
+            // (ServicePolicy::companyBound). None until somebody allows one.
+            'service_products'              => [],
         ];
     }
 
@@ -78,6 +85,7 @@ final class Settings
             'timezone', 'currency', 'first_response_target_minutes', 'resolution_target_minutes',
             'quiet_hours_start', 'quiet_hours_end', 'ai_draft_allowed', 'ai_translate_allowed',
             'ai_summarise_allowed', 'ai_suggest_allowed', 'ai_autosend_allowed', 'default_languages',
+            'service_products',
         ];
 
         $update = [];
