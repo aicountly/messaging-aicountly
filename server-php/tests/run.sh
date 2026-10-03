@@ -51,7 +51,7 @@ MESSAGING_SERVICE_KEY=test-messaging-service-key-0123456789
 # app:key pairs for the inbound service contract. Placeholders, and the only
 # reason they are here is so tests can prove the contract refuses a browser
 # session and requires an Idempotency-Key. A real key never lives in a file.
-SERVICE_KEYS=appointments:test-appointments-inbound-key-0123456789,billing:test-billing-inbound-key-0123456789
+SERVICE_KEYS=appointments:test-appointments-inbound-key-0123456789,billing:test-billing-inbound-key-0123456789,secretarial:test-secretarial-inbound-key-0123456789
 
 # Integrations are switched on per test with Features::overrideForTesting(),
 # so the default here is OFF — which is also what exercises the

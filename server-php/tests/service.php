@@ -39,6 +39,7 @@ use Aicountly\Api\Domain\AppointmentTemplates;
 use Aicountly\Api\Domain\ConsentService;
 use Aicountly\Api\Domain\DispatchService;
 use Aicountly\Api\Domain\MessageState;
+use Aicountly\Api\Domain\SecretarialTemplates;
 use Aicountly\Api\Domain\ServiceConsent;
 use Aicountly\Api\Domain\SourceReader;
 use Aicountly\Api\Domain\TemplateService;
@@ -51,6 +52,7 @@ const CONN_WA = '44444444-4444-4444-8444-444444444441';
 const CONN_SMS = '44444444-4444-4444-8444-444444444442';
 const KEY_APPOINTMENTS = 'test-appointments-inbound-key-0123456789';
 const KEY_BILLING = 'test-billing-inbound-key-0123456789';
+const KEY_SECRETARIAL = 'test-secretarial-inbound-key-0123456789';
 const FIXTURES = __DIR__ . '/fixtures/service-api';
 
 $regenerate = getenv('REGENERATE_FIXTURES') === '1';
@@ -854,6 +856,77 @@ check('Appointments\' real booking shape is read: status, time, service, contact
 check('a booking with no status is unavailable, never a cancellation', static function (): void {
     $booking = SourceReader::normaliseAppointmentsBooking(['booking' => ['reference' => 'AP-1']]);
     assertSame('', $booking['status'], 'no status is empty, so the caller treats it as unavailable');
+});
+
+// ---------------------------------------------------------------------------
+// Secretarial notices (NOTIFY, LR-40): the same contract, its own template
+// ---------------------------------------------------------------------------
+
+/** @return array<string, mixed> a request body Secretarial's ledger sends */
+function secretarialNotice(string $to, array $over = []): array
+{
+    return array_replace_recursive([
+        'cmp_id'          => CMP,
+        'channel'         => 'whatsapp',
+        'to'              => $to,
+        'template'        => SecretarialTemplates::NAME,
+        'kind'            => 'compliance_reminder',
+        'reference'       => 'ntf-3f2a9c0d1e4b5a6978c0d1e2',
+        'reference_label' => 'Reminder: MGT-7 annual return',
+        'not_after'       => '2026-10-16T18:30:00Z',
+        'variables'       => [
+            'recipient_name' => 'Asha Rao',
+            'subject'        => 'Reminder: MGT-7 annual return due 29 Nov 2026',
+            'summary'        => 'Compliance reminder from AICOUNTLY Secretarial.',
+            'reference'      => 'ntf-3f2a9c0d1e4b5a6978c0d1e2',
+        ],
+    ], $over);
+}
+
+check('Secretarial is refused for a company that has not allowed it', static function () use ($router): void {
+    $response = service($router, 'POST', 'v1/messages', secretarialNotice('+919000000071'), 'ntf-sec-unbound-0001', KEY_SECRETARIAL);
+    assertSame(403, $response['status'], 'not bound');
+    assertSame('service_company_not_bound', $response['body']['error']['code'] ?? null, 'named');
+});
+
+check('Secretarial reaches only the four contract routes', static function () use ($router): void {
+    $response = service($router, 'GET', 'v1/conversations', null, null, KEY_SECRETARIAL, ['cmp_id' => CMP]);
+    assertSame(403, $response['status'], 'conversations are not on its allow-list');
+    assertSame('service_route_not_allowed', $response['body']['error']['code'] ?? null, 'named');
+});
+
+Domain\Settings::save($ctx, $owner, ['service_products' => ['appointments', 'billing', 'secretarial']]);
+SecretarialTemplates::seed($ctx, $provider, ['whatsapp'], true);
+foreach (Db::all("SELECT template_uuid FROM messaging_templates WHERE cmp_id = :cmp AND name = :n", ['cmp' => CMP, 'n' => SecretarialTemplates::NAME]) as $t) {
+    TemplateService::recordProviderStatus($ctx, (string) $t['template_uuid'], 1, 'en', 'approved', 'prov-sec-' . substr((string) $t['template_uuid'], 0, 8));
+}
+
+check('Secretarial never records consent: without the director\'s consent the notice is suppressed, not sent', static function () use ($router, $adapter): void {
+    $before = count($adapter->sent ?? []);
+    $response = service($router, 'POST', 'v1/messages', secretarialNotice('+919000000072'), 'ntf-sec-noconsent-0001', KEY_SECRETARIAL);
+    assertSame(422, $response['status'], 'refused');
+    assertSame('suppressed', $response['body']['data']['delivery_state'] ?? null, 'suppressed — Secretarial records it failed');
+    assertSame($before, count($adapter->sent ?? []), 'nothing went to the provider');
+});
+
+check('with consent the notice is accepted, and the answer has the fields Secretarial\'s contract fixture names', static function () use ($router): void {
+    ConsentService::record(Context::forCompany(CMP), Auth::forTesting('agent-1', 'user'), 'whatsapp', '+919000000073', 'transactional', 'granted', 'agent_recorded', 'Director agreed to WhatsApp notices.');
+    $response = service($router, 'POST', 'v1/messages', secretarialNotice('+919000000073'), 'ntf-sec-consented-0001', KEY_SECRETARIAL);
+    assertTrue(in_array($response['status'], [200, 202], true), 'accepted (got ' . $response['status'] . ': ' . json_encode($response['body']) . ')');
+    $data = $response['body']['data'] ?? [];
+    assertTrue(in_array($data['delivery_state'] ?? '', ['queued', 'sent', 'delivered'], true), 'a delivery state Secretarial maps');
+    $keys = array_keys(array_diff_key($data, array_flip(['outcome', 'detail', 'delivery_note', 'consent'])));
+    sort($keys);
+    $fixture = json_decode((string) file_get_contents(__DIR__ . '/fixtures/secretarial/messaging-service-messages.v1.json'), true);
+    assertSame($fixture['data_keys'], $keys, 'the message shape Secretarial reads');
+
+    $replay = service($router, 'POST', 'v1/messages', secretarialNotice('+919000000073'), 'ntf-sec-consented-0001', KEY_SECRETARIAL);
+    assertSame(true, $replay['body']['replayed'] ?? null, 'the same key replays and sends nothing');
+
+    $status = service($router, 'GET', 'v1/messages/' . $data['message_uuid'], null, null, KEY_SECRETARIAL, ['cmp_id' => CMP]);
+    assertSame(200, $status['status'], 'Secretarial reads its own message');
+    $other = service($router, 'GET', 'v1/messages/' . $data['message_uuid'], null, null, KEY_BILLING, ['cmp_id' => CMP]);
+    assertSame(404, $other['status'], 'another product cannot');
 });
 
 // ---------------------------------------------------------------------------

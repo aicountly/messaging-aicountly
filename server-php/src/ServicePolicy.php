@@ -62,6 +62,10 @@ final class ServicePolicy
             'crm'          => self::CONTRACT,
             'advisor'      => self::CONTRACT,
             'voice'        => self::CONTRACT,
+            // Statutory notices and compliance reminders from Secretarial's
+            // notification ledger (NOTIFY, LR-40): the four contract routes,
+            // nothing else. Consent and suppression are Messaging's, at dispatch.
+            'secretarial'  => self::CONTRACT,
             // Helpdesk's sync worker reads conversations awaiting a reply for
             // companies that bound their channel to it. Read only: replies go
             // out under the agent's own session, not this key.
