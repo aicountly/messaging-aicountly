@@ -20,7 +20,7 @@ declare(strict_types=1);
  *   Contacts   /api/companies/{cmp}/contacts[/lookup|/resolve|/{id}/resolve|/{id}/references] (contract v1)
  *   Books      /api/registers, /api/reports/bill-by-bill (acc_id+fy_id), /api/reports/dues, /api/vouchers/{id}
  *   Sales      /api/v1/orders, /api/v1/orders/{id}
- *   Pay        /api/v1/payment-links, /api/v1/payments
+ *   Pay        /api/v1/payment-requests/{id} (a sibling key's read) — and Pay's own refusals; no payment-links
  *   Appts      /api/v1/bookings
  *   Drive      /api/v1/documents
  *   Reach      /api/v1/campaigns
@@ -363,29 +363,56 @@ if ($path === '/api/v1/orders') {
     send(200, ['data' => $salesOrders, 'meta' => ['total' => count($salesOrders), 'limit' => (int) ($query['limit'] ?? 50), 'offset' => 0]]);
 }
 
-if ($path === '/api/v1/payment-links' && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
-    // Pay owns the link and the ledger. Messaging asks for one and keeps the
-    // URL it is given; it never mints a link or records a payment itself.
-    send(201, [
-        'data' => [
-            'payment_link_uuid' => 'pay00000-0000-4000-8000-000000000001',
-            'url'               => 'https://pay.aicountly.test/l/stub-link',
-            'amount'            => 480000,
-            'currency'          => 'INR',
-            'expires_at'        => '2026-06-30T00:00:00Z',
-        ],
-    ]);
-}
+// Pay, as a sibling product's service key meets it (pay-aicountly
+// ServiceAccess::ROUTES; docs/PAY_INTEGRATION_GUIDE.md section 1). Pay's contract is a payment
+// REQUEST: `payment-links` is not a route there (it answers 404 like any unknown address) and
+// `payments` is refused to a key. This stub used to serve both, which is how a client that called
+// them stayed green. The checks below are Pay's own, in Pay's order, with Pay's codes: a call that
+// leaves out the environment, the actor or the actor's session is refused here as it is there.
+if (preg_match('#^/api/v1/payment-requests/([^/]+)$#', $path, $m) === 1 || $path === '/api/v1/payments') {
+    if (header_value('X-Service-Key') !== 'test-pay-service-key-0123456789') {
+        send(401, ['error' => ['code' => 'unauthorized', 'message' => 'Pay does not know that service key.']]);
+    }
+    if ($path === '/api/v1/payments') {
+        send(403, ['error' => ['code' => 'service_route_not_allowed', 'message' => 'A service key cannot use this part of Pay.']]);
+    }
+    $environment = strtolower(header_value('X-AIC-Environment'));
+    if ($environment === '') {
+        send(400, ['error' => ['code' => 'environment_required', 'message' => 'Name the deployment this call is meant for in X-AIC-Environment.']]);
+    }
+    if ($environment !== 'local') {
+        send(403, ['error' => ['code' => 'environment_mismatch', 'message' => 'This service key was presented to the local deployment of Pay, but the call names ' . $environment . '.']]);
+    }
+    $actor = header_value('X-Actor-Uuid');
+    if ($actor === '' || preg_match('/^[A-Za-z0-9._:@\-]+$/', $actor) !== 1 || str_starts_with($actor, 'service:')) {
+        send(400, ['error' => ['code' => 'actor_required', 'message' => 'Name the person this call is for in X-Actor-Uuid.']]);
+    }
+    $session = header_value('X-Actor-Session');
+    if ($session === '') {
+        send(403, ['error' => ['code' => 'actor_unverified', 'message' => 'Pay cannot verify the person this call is for.']]);
+    }
+    if ($session !== 'test-ses-key-' . $actor) {
+        send(403, ['error' => ['code' => 'actor_mismatch', 'message' => 'The session belongs to somebody other than X-Actor-Uuid.']]);
+    }
 
-if (preg_match('#^/api/v1/payment-links/([^/]+)$#', $path, $m) === 1) {
-    send(200, ['data' => ['payment_link_uuid' => $m[1], 'status' => 'pending', 'url' => 'https://pay.aicountly.test/l/stub-link']]);
-}
-
-if ($path === '/api/v1/payments') {
-    send(200, [
-        'data' => [['payment_uuid' => 'pmt00000-0000-4000-8000-000000000001', 'amount' => 480000, 'currency' => 'INR', 'status' => 'captured', 'captured_at' => '2026-06-01T05:00:00Z']],
-        'meta' => ['total' => 1, 'limit' => 20, 'offset' => 0],
-    ]);
+    // Requests Messaging raised, in Pay's own presentation (PaymentRequestService::present +
+    // `links`): amounts in major units beside amount_minor, the request's own statuses. Any
+    // other id answers 404 — including a request another product raised.
+    $link = static fn (string $status): array => [
+        'link_id' => 'LNK-STUB', 'kind' => 'LINK', 'channel' => 'WHATSAPP', 'status' => $status,
+        'url' => 'https://pay.aicountly.test/pay/p/stub-token',
+    ];
+    $requests = [
+        'PAYREQ-ACTIVE'   => ['status' => 'ACTIVE', 'amount' => 4800.0, 'amount_minor' => 480000, 'paid' => 0.0, 'refunded' => 0.0, 'links' => [$link('ACTIVE')]],
+        'PAYREQ-PAID'     => ['status' => 'PAID', 'amount' => 4800.0, 'amount_minor' => 480000, 'paid' => 4800.0, 'refunded' => 0.0, 'links' => [$link('ACTIVE')]],
+        'PAYREQ-PART'     => ['status' => 'PARTIALLY_PAID', 'amount' => 4800.0, 'amount_minor' => 480000, 'paid' => 1200.5, 'refunded' => 0.0, 'links' => [$link('ACTIVE')]],
+        'PAYREQ-REFUNDED' => ['status' => 'PAID', 'amount' => 1000.0, 'amount_minor' => 100000, 'paid' => 1000.0, 'refunded' => 1000.0, 'links' => []],
+        'PAYREQ-EXPIRED'  => ['status' => 'EXPIRED', 'amount' => 4800.0, 'amount_minor' => 480000, 'paid' => 0.0, 'refunded' => 0.0, 'links' => [$link('ACTIVE')]],
+    ];
+    if (!isset($requests[$m[1]])) {
+        send(404, ['error' => ['code' => 'not_found', 'message' => 'That payment request could not be found.']]);
+    }
+    send(200, ['data' => ['payment_request_id' => $m[1], 'reference' => 'INV-2048', 'currency' => 'INR', 'source_app' => 'MESSAGING'] + $requests[$m[1]]]);
 }
 
 if (preg_match('#^/api/v1/bookings/([^/]+)$#', $path, $m) === 1) {

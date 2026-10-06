@@ -13,7 +13,7 @@ distinction is not already clear.
 | **Contacts** | Who a phone number belongs to (company lookup, attributed only on exactly one match); a contact's details | `CONTACTS` | `CONTACTS_API_BASE` (no key: read with the person's own session) |
 | **Books** | Outstanding bills for the ledger a contact is linked to in Contacts (books/ledger_account), overdue dues, receipts — as the signed-in person, per Manage's financial year | `BOOKS` | `BOOKS_API_BASE` (no key: Books has no product-key access) |
 | **Sales** | Orders and their fulfilment state | `SALES` | `SALES_SERVICE_KEY`, `SALES_API_BASE` |
-| **Pay** | A payment link, and whether it has been paid | `PAY` | `PAY_SERVICE_KEY`, `PAY_API_BASE` |
+| **Pay** | A payment request Messaging raised (`GET v1/payment-requests/{id}`): its status, what it collected and its link — as the signed-in person, with the key, `X-AIC-Environment`, their id and their session on every call. Messaging raises none yet | `PAY` | `PAY_SERVICE_KEY`, `PAY_API_BASE`, `AIC_ENVIRONMENT` |
 | **Appointments** | Bookings for a customer (read live, by booking **uuid**, for the inbox panel and outcomes) | `APPOINTMENTS` | `APPOINTMENTS_SERVICE_KEY`, `APPOINTMENTS_API_BASE` |
 | **Drive / Vault** | A document and its malware-scan verdict | `DRIVE` | `DRIVE_SERVICE_KEY`, `DRIVE_API_BASE` |
 | **Reach** | Campaign context, so Messaging does not rebuild campaign planning | `REACH` | `REACH_SERVICE_KEY`, `REACH_API_BASE` |

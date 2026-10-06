@@ -1,0 +1,13 @@
+{
+    "source": "pay-aicountly server-php/src/ServiceAccess.php ROUTES (what a sibling product's service key may call) plus GET /api/health from server-php/index.php, as of pay-aicountly 207f73e. Keep in step with Pay's docs/PAY_INTEGRATION_GUIDE.md section 1.",
+    "routes": [
+        ["GET", "health"],
+        ["GET", "v1/capabilities"],
+        ["GET", "v1/payment-requests"],
+        ["POST", "v1/payment-requests"],
+        ["GET", "v1/payment-requests/{id}"],
+        ["POST", "v1/payment-requests/{id}/cancel"],
+        ["POST", "v1/payment-requests/{id}/link"],
+        ["POST", "v1/payment-requests/{id}/qr"]
+    ]
+}

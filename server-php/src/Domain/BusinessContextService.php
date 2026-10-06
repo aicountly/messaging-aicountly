@@ -64,7 +64,7 @@ final class BusinessContextService
                 ? self::financialPanel($ctx, $auth, $contactUuid, $sesKey)
                 : self::denied('books', 'You do not have permission to view financial context.'),
             'payment'      => $maySeeFinancial
-                ? self::paymentPanel($ctx, $conversation)
+                ? self::paymentPanel($ctx, $auth, $conversation)
                 : self::denied('pay', 'You do not have permission to view payment context.'),
             'orders'       => $maySeeCommercial
                 ? self::ordersPanel($ctx, $auth, $contactUuid, $sesKey)
@@ -295,12 +295,17 @@ final class BusinessContextService
      * invoice and says the link is unavailable — rather than one that claims a
      * link is attached.
      *
+     * Connected or not, `can_create_link` is false: Messaging has no call that
+     * raises a payment request in Pay (the one it had named a route Pay does not
+     * serve and nothing used it), so the panel does not offer what it cannot do.
+     * It shows a request already linked to the conversation, read from Pay.
+     *
      * @param array<string, mixed> $conversation
      * @return array<string, mixed>
      */
-    private static function paymentPanel(Context $ctx, array $conversation): array
+    private static function paymentPanel(Context $ctx, Auth $auth, array $conversation): array
     {
-        $client = new PayClient();
+        $client = (new PayClient())->forPerson($auth->uuid, $auth->sesKey());
         if (!$client->configured()) {
             return self::pending('pay', $client->unavailableMessage(), [
                 'can_create_link' => false,
@@ -309,6 +314,7 @@ final class BusinessContextService
         }
 
         // An existing link for this conversation, if one was created.
+        $cannotCreate = ['can_create_link' => false, 'reason' => 'Messaging cannot raise a payment request in Aicountly Pay yet.'];
         $reference = null;
         foreach (ConversationService::externalReferences($ctx, (string) $conversation['conversation_uuid']) as $ref) {
             if ((string) $ref['owner_product'] === 'pay' && (string) $ref['relationship'] === 'payment_request') {
@@ -323,30 +329,29 @@ final class BusinessContextService
                 'source'     => 'pay',
                 'fetched_at' => gmdate('c'),
                 'message'    => '',
-                'data'       => ['can_create_link' => true, 'link' => null],
+                'data'       => $cannotCreate + ['link' => null],
             ];
         }
 
-        $result = $client->paymentLink($ctx, $reference);
+        $result = $client->paymentRequest($ctx, $reference);
         if (!$result['ok']) {
-            return self::fromEnvelope($result, ['can_create_link' => true, 'link' => null]);
+            return self::fromEnvelope($result, $cannotCreate + ['link' => null]);
         }
 
-        $body = $result['body']['data'] ?? $result['body'] ?? [];
+        $view = PayClient::requestView($result['body']['data'] ?? $result['body'] ?? [], $reference, Settings::currency($ctx));
 
         return [
             'state'      => 'ready',
             'source'     => 'pay',
             'fetched_at' => $result['fetched_at'],
             'message'    => '',
-            'data'       => [
-                'can_create_link' => true,
+            'data'       => $cannotCreate + [
                 'link' => [
-                    'reference'    => (string) ($body['reference'] ?? $reference),
-                    'status'       => strtoupper((string) ($body['status'] ?? 'UNKNOWN')),
-                    'url'          => (string) ($body['url'] ?? ''),
-                    'amount_minor' => (int) ($body['amount_minor'] ?? 0),
-                    'currency'     => strtoupper((string) ($body['currency'] ?? Settings::currency($ctx))),
+                    'reference'    => $view['reference'],
+                    'status'       => $view['status'],
+                    'url'          => $view['url'],
+                    'amount_minor' => $view['amount_minor'],
+                    'currency'     => $view['currency'],
                 ],
             ],
         ];

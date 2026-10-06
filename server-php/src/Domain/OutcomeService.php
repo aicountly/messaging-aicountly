@@ -239,7 +239,7 @@ final class OutcomeService
         }
 
         $books = new BooksClient();
-        $pay = new PayClient();
+        $pay = (new PayClient())->forPerson($auth->uuid, $auth->sesKey());
 
         if (!$books->configured() && !$pay->configured()) {
             return [
@@ -264,7 +264,7 @@ final class OutcomeService
             $externalId = (string) $link['external_id'];
 
             $result = $product === 'pay'
-                ? $pay->paymentLink($ctx, $externalId)
+                ? $pay->paymentRequest($ctx, $externalId)
                 : $booksClient->invoice($ctx, $externalId);
 
             if (!$result['ok']) {
@@ -273,6 +273,19 @@ final class OutcomeService
             }
 
             $body = $result['body']['data'] ?? $result['body'] ?? [];
+
+            if ($product === 'pay') {
+                // A Pay request says what it ASKED for and what it COLLECTED. Only the
+                // second is a collection, net of refunds: an active, expired or cancelled
+                // link that took nothing adds nothing, and is not "unresolved" either.
+                $view = PayClient::requestView($body, $externalId, Settings::currency($ctx));
+                if ($view['collected_minor'] > 0) {
+                    $byCurrency[$view['currency']] = ($byCurrency[$view['currency']] ?? 0) + $view['collected_minor'];
+                    $resolved++;
+                }
+                continue;
+            }
+
             $status = strtoupper((string) ($body['status'] ?? ''));
 
             // A reversed or cancelled payment must stop counting. This is
