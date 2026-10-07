@@ -59,9 +59,38 @@ function check(string $name, callable $fn): void
             putenv($key);
         }
         unset($_SERVER['HTTP_HOST']);
+        Env::load(__DIR__ . '/does-not-exist.env');
         AiClient::overrideForTesting(null);
         Features::overrideForTesting(null);
     }
+}
+
+/**
+ * Settings as a deployed api/.env holds them, for values the process
+ * environment cannot carry (a NUL byte). check() puts the empty file back.
+ */
+function withEnvFile(string $contents): void
+{
+    $file = tempnam(sys_get_temp_dir(), 'msg-pulse-env-');
+    file_put_contents($file, $contents);
+    Env::load($file);
+    unlink($file);
+}
+
+/** What error_log() wrote while $fn ran. */
+function capturedErrorLog(callable $fn): string
+{
+    $file = tempnam(sys_get_temp_dir(), 'msg-pulse-log-');
+    $previous = ini_set('error_log', $file);
+    try {
+        $fn();
+    } finally {
+        ini_set('error_log', $previous === false ? '' : $previous);
+    }
+    $log = (string) file_get_contents($file);
+    unlink($file);
+
+    return $log;
 }
 
 function assertSame(mixed $expected, mixed $actual, string $what): void
@@ -126,41 +155,143 @@ echo str_repeat('=', 60) . "\n";
 
 section('Client');
 
-check('a user call carries the product and the user\'s session, never the service key', static function (): void {
-    putenv('PULSE_SERVICE_KEY=must-not-be-sent');
+check('a user call carries the product, Messaging\'s own gateway key AND the user\'s session', static function (): void {
+    putenv('PULSE_SERVICE_KEY=messaging-gateway-key');
     $fake = new FakePulseTransport(FakePulseTransport::generated('Hello'));
 
-    $res = $fake->client()->generate(['feature' => 'inbox.draft_reply', 'input' => 'x'], 'ses-alice');
+    $res = $fake->client()->generate(['feature' => 'inbox.draft_reply', 'input' => 'x'], 'ses-alice', 'idem-key-0001');
 
     assertTrue($res['ok'], 'a 200 with status 1 is a success');
     assertSame('Hello', $res['data']['text'] ?? null, 'and the answer is Pulse\'s data');
     assertSame('POST', $fake->last()['method'], 'generate is a POST');
     assertSame('https://pulse.test/api/ai/v1/generate', $fake->last()['url'], 'to the gateway');
-    assertSame('messaging', $fake->header('X-Pulse-Product'), 'as product "messaging"');
-    assertSame('Bearer ses-alice', $fake->header('Authorization'), 'with the user\'s own session');
-    assertSame(null, $fake->header('X-Pulse-Service-Key'), 'a user call never borrows the service key');
+    assertSame('messaging', $fake->header('X-Pulse-Product'), 'as product "messaging", the product the key is minted for');
+    assertSame('messaging-gateway-key', $fake->header('X-Pulse-Service-Key'), 'with Messaging\'s own key, on a user call too');
+    assertSame('Bearer ses-alice', $fake->header('Authorization'), 'and the user\'s own session beside it');
+    assertSame([
+        'Content-Type: application/json',
+        'Accept: application/json',
+        'X-Pulse-Product: messaging',
+        'X-Pulse-Service-Key: messaging-gateway-key',
+        'Authorization: Bearer ses-alice',
+        'Idempotency-Key: idem-key-0001',
+    ], $fake->last()['headers'], 'exactly these headers, nothing else');
     assertSame('inbox.draft_reply', $fake->last()['body']['feature'] ?? null, 'and the body is the request as given');
 });
 
-check('with no user the service key is sent: PULSE_SERVICE_KEY, then CONSOLE_SERVICE_KEY, else nothing', static function (): void {
-    putenv('PULSE_SERVICE_KEY=pulse-service-key');
+check('json(), text() and status() send the key on a user call as well', static function (): void {
+    putenv('PULSE_SERVICE_KEY=messaging-gateway-key');
+    $fake = new FakePulseTransport(FakePulseTransport::generatedJson(['intent' => 'thanks']), FakePulseTransport::generated('ok'), FakePulseTransport::status(true));
+    $client = $fake->client();
+
+    $client->json('inbox.analyse', 'Classify.', 'thanks', ['type' => 'object'], [], 'ses-alice');
+    assertSame('messaging-gateway-key', $fake->header('X-Pulse-Service-Key'), 'json()');
+    assertSame('Bearer ses-alice', $fake->header('Authorization'), 'json() as the user');
+
+    $client->text('inbox.summarise', 'Summarise.', 'x', [], 'ses-alice');
+    assertSame('messaging-gateway-key', $fake->header('X-Pulse-Service-Key'), 'text()');
+    assertSame('Bearer ses-alice', $fake->header('Authorization'), 'text() as the user');
+
+    $client->status('ses-alice');
+    assertSame('https://pulse.test/api/ai/v1/status', $fake->last()['url'], 'the status probe');
+    assertSame(['Accept: application/json', 'X-Pulse-Product: messaging', 'X-Pulse-Service-Key: messaging-gateway-key', 'Authorization: Bearer ses-alice'],
+        $fake->last()['headers'], 'status() carries the product, the key and the session');
+    assertSame(3, count($fake->requests), 'one request each');
+});
+
+check('with no user the product key goes alone; CONSOLE_SERVICE_KEY is never a fallback', static function (): void {
+    putenv('PULSE_SERVICE_KEY=messaging-gateway-key');
     putenv('CONSOLE_SERVICE_KEY=console-service-key');
-    $fake = new FakePulseTransport(FakePulseTransport::generated('ok'));
+    $fake = new FakePulseTransport(FakePulseTransport::generated('ok'), FakePulseTransport::status(true));
     $client = $fake->client();
 
     $client->generate(['feature' => 'inbox.summarise', 'input' => 'x']);
-    assertSame('pulse-service-key', $fake->header('X-Pulse-Service-Key'), 'PULSE_SERVICE_KEY first');
+    assertSame(['Content-Type: application/json', 'Accept: application/json', 'X-Pulse-Product: messaging', 'X-Pulse-Service-Key: messaging-gateway-key'],
+        $fake->last()['headers'], 'a job with no user: the product and its own key, no session');
+    $client->status();
+    assertSame('messaging-gateway-key', $fake->header('X-Pulse-Service-Key'), 'the status probe with no user too');
     assertSame(null, $fake->header('Authorization'), 'and no session');
 
     putenv('PULSE_SERVICE_KEY');
-    $client->generate(['feature' => 'inbox.summarise', 'input' => 'x'], '');
-    assertSame('console-service-key', $fake->header('X-Pulse-Service-Key'), 'CONSOLE_SERVICE_KEY is the fallback');
-
-    putenv('CONSOLE_SERVICE_KEY');
     $before = count($fake->requests);
-    $res = $client->generate(['feature' => 'inbox.summarise', 'input' => 'x']);
-    assertSame('not_configured', $res['code'], 'with neither, the call is refused here');
+    $res = $client->generate(['feature' => 'inbox.summarise', 'input' => 'x'], '');
+    assertSame('not_configured', $res['code'], 'CONSOLE_SERVICE_KEY alone does not stand in for the product key');
+    assertSame('not_configured', $client->status()['code'], 'nor for the status probe');
     assertSame($before, count($fake->requests), 'and nothing is sent to Pulse');
+    assertFalse(str_contains((string) json_encode($res), 'console-service-key'), 'the Console key is in no result');
+
+    $client->generate(['feature' => 'inbox.summarise', 'input' => 'x'], 'ses-alice');
+    assertSame(null, $fake->header('X-Pulse-Service-Key'), 'a user call does not borrow the Console key either');
+    foreach ($fake->requests as $request) {
+        assertFalse(str_contains(implode("\n", $request['headers']), 'console-service-key'), 'the Console key never leaves for Pulse');
+    }
+});
+
+check('with PULSE_SERVICE_KEY unset or blank the headers are exactly what they were before the key', static function (): void {
+    // Deploying this before Messaging's key is minted must change nothing.
+    putenv('CONSOLE_SERVICE_KEY=console-service-key');
+    foreach (['unset' => null, 'empty' => '', 'spaces' => '   ', 'tabs' => "\t \t"] as $case => $value) {
+        $value === null ? putenv('PULSE_SERVICE_KEY') : putenv('PULSE_SERVICE_KEY=' . $value);
+        $fake = new FakePulseTransport(FakePulseTransport::generated('ok'), FakePulseTransport::status(true));
+        $client = $fake->client();
+
+        $client->generate(['feature' => 'inbox.draft_reply', 'input' => 'x'], 'ses-alice', 'idem-key-0001');
+        assertSame(
+            ['Content-Type: application/json', 'Accept: application/json', 'X-Pulse-Product: messaging', 'Authorization: Bearer ses-alice', 'Idempotency-Key: idem-key-0001'],
+            $fake->last()['headers'],
+            "{$case}: generate sends what it always sent",
+        );
+        $client->status('ses-alice');
+        assertSame(['Accept: application/json', 'X-Pulse-Product: messaging', 'Authorization: Bearer ses-alice'], $fake->last()['headers'],
+            "{$case}: and so does the status probe");
+
+        $res = $client->generate(['feature' => 'inbox.draft_reply', 'input' => 'x']);
+        assertSame('not_configured', $res['code'], "{$case}: with no user and no key the call is refused here");
+        assertSame(2, count($fake->requests), "{$case}: and nothing is sent");
+    }
+
+    withEnvFile("PULSE_SERVICE_KEY=\n");
+    $fake = new FakePulseTransport(FakePulseTransport::generated('ok'));
+    $fake->client()->generate(['feature' => 'inbox.draft_reply', 'input' => 'x'], 'ses-alice');
+    assertSame(null, $fake->header('X-Pulse-Service-Key'), 'a blank PULSE_SERVICE_KEY= line in api/.env is unset too');
+});
+
+check('a key holding a control character is refused whole: nothing is sent and no part of it is in the result', static function (): void {
+    $controls = ['CR' => "\r", 'LF' => "\n", 'CRLF' => "\r\n", 'SOH' => "\x01", 'TAB inside' => "\t", 'US' => "\x1F", 'DEL' => "\x7F"];
+    foreach ($controls as $name => $control) {
+        putenv('PULSE_SERVICE_KEY=mpk-SECRETPART' . $control . 'X-Injected: yes');
+        $fake = new FakePulseTransport(FakePulseTransport::generated('ok'), FakePulseTransport::status(true));
+        $client = $fake->client();
+
+        $results = [
+            'a user call'      => $client->generate(['feature' => 'inbox.draft_reply', 'input' => 'x'], 'ses-alice'),
+            'a call with no user' => $client->generate(['feature' => 'inbox.draft_reply', 'input' => 'x']),
+            'json()'           => $client->json('inbox.analyse', 'Classify.', 'x', ['type' => 'object'], [], 'ses-alice'),
+            'the status probe' => $client->status('ses-alice'),
+        ];
+        foreach ($results as $what => $res) {
+            assertFalse($res['ok'], "{$name}: {$what} is refused");
+            assertSame('not_configured', $res['code'], "{$name}: {$what} is not_configured");
+            assertFalse($res['retryable'], "{$name}: {$what} is not worth retrying until the setting is fixed");
+            assertContains('PULSE_SERVICE_KEY', (string) $res['message'], "{$name}: {$what} names the setting");
+            $encoded = (string) json_encode($res);
+            assertFalse(str_contains($encoded, 'SECRETPART') || str_contains($encoded, 'X-Injected') || str_contains($encoded, 'mpk-'),
+                "{$name}: {$what} holds no part of the key");
+        }
+        assertSame([], $fake->requests, "{$name}: nothing was sent to Pulse, not even without the key");
+    }
+
+    withEnvFile("PULSE_SERVICE_KEY=mpk-SECRETPART\0X-Injected\n");
+    $fake = new FakePulseTransport(FakePulseTransport::generated('ok'));
+    $res = $fake->client()->generate(['feature' => 'inbox.draft_reply', 'input' => 'x'], 'ses-alice');
+    assertSame('not_configured', $res['code'], 'NUL in api/.env: refused');
+    assertSame([], $fake->requests, 'NUL in api/.env: nothing sent');
+    assertFalse(str_contains((string) json_encode($res), 'SECRETPART'), 'NUL in api/.env: no part of the key in the result');
+
+    putenv('PULSE_SERVICE_KEY=  messaging-gateway-key  ');
+    $fake = new FakePulseTransport(FakePulseTransport::generated('ok'));
+    $fake->client()->generate(['feature' => 'inbox.draft_reply', 'input' => 'x'], 'ses-alice');
+    assertSame('X-Pulse-Service-Key: messaging-gateway-key', $fake->last()['headers'][3] ?? null, 'surrounding spaces are not part of the key');
 });
 
 check('json() asks for JSON against the schema', static function (): void {
@@ -296,7 +427,7 @@ check('a feature call sends the feature, its tier and the company, as the signed
     assertSame(300, $body['max_output_tokens'] ?? null, 'the feature\'s own answer budget');
     assertFalse(array_key_exists('actor_uuid', $body), 'no actor claim: Pulse knows the user from the session');
     assertSame('Bearer test-ses-key-user-alice', $fake->header('Authorization'), 'the Bearer this API received');
-    assertSame(null, $fake->header('X-Pulse-Service-Key'), 'never the service key for a user');
+    assertSame(null, $fake->header('X-Pulse-Service-Key'), 'with PULSE_SERVICE_KEY unset, only the session, as before the key');
 
     assertTrue($result['ok'], 'the answer is used');
     assertSame('Your order has shipped.', $result['text'], 'as text');
@@ -323,16 +454,77 @@ check('what leaves this server is capped at 24,000 characters', static function 
     assertSame(24000, mb_strlen((string) $fake->last()['body']['input']), 'the grounding cap still applies');
 });
 
-check('a sibling product\'s call uses the service key and names the person', static function (): void {
-    putenv('PULSE_SERVICE_KEY=pulse-service-key');
+check('a feature call as the signed-in user carries Messaging\'s own key too', static function (): void {
+    putenv('PULSE_SERVICE_KEY=messaging-gateway-key');
+    $fake = fakePulse(FakePulseTransport::status(true), FakePulseTransport::generated('ok'));
+
+    assertTrue(AiClient::status(user())['available'], 'the status probe');
+    assertSame('messaging-gateway-key', $fake->header('X-Pulse-Service-Key'), 'asked with the key');
+    assertSame('Bearer test-ses-key-user-alice', $fake->header('Authorization'), 'and the session');
+
+    AiClient::complete(Context::forCompany(11), user(), AiClient::FEATURE_DRAFT_REPLY, 'Draft.', 'x');
+    assertSame('messaging', $fake->header('X-Pulse-Product'), 'the product the key is minted for');
+    assertSame('messaging-gateway-key', $fake->header('X-Pulse-Service-Key'), 'the key, on a user call');
+    assertSame('Bearer test-ses-key-user-alice', $fake->header('Authorization'), 'beside the user\'s session');
+    assertFalse(array_key_exists('actor_uuid', $fake->last()['body']), 'and no actor claim: Pulse knows the user from the session');
+});
+
+check('a sibling product\'s call uses Messaging\'s own key alone and names the person', static function (): void {
+    putenv('PULSE_SERVICE_KEY=messaging-gateway-key');
     $fake = fakePulse(FakePulseTransport::generated('ok'));
 
     AiClient::complete(Context::forCompany(11), service('actor-42'), AiClient::FEATURE_DRAFT_REPLY, 'Draft.', 'x');
 
-    assertSame('pulse-service-key', $fake->header('X-Pulse-Service-Key'), 'no session here, so the estate service key');
+    assertSame('messaging-gateway-key', $fake->header('X-Pulse-Service-Key'), 'no session here, so the product key alone');
     assertSame(null, $fake->header('Authorization'), 'and no Bearer');
     assertSame('actor-42', $fake->last()['body']['actor_uuid'] ?? null, 'the person the calling product named, for attribution');
     assertSame(11, $fake->last()['body']['cmp_id'] ?? null, 'and the company, as our claim');
+
+    putenv('PULSE_SERVICE_KEY');
+    putenv('CONSOLE_SERVICE_KEY=console-service-key');
+    $fake = fakePulse(FakePulseTransport::generated('ok'));
+    $result = AiClient::complete(Context::forCompany(11), service('actor-42'), AiClient::FEATURE_DRAFT_REPLY, 'Draft.', 'x');
+    assertSame([], $fake->requests, 'with only the Console key there is nothing to send with, and nothing is sent');
+    assertSame('not_configured', $result['code'], 'refused as not configured');
+    assertSame('unavailable', $result['run_status'], 'and logged as unavailable');
+});
+
+check('an unusable key: the feature is unavailable, nothing is sent, and the key is in no result or log line', static function (): void {
+    putenv("PULSE_SERVICE_KEY=mpk-SECRETPART\r\nX-Injected: yes");
+    $fake = fakePulse(FakePulseTransport::generated('should not be used'), FakePulseTransport::status(true));
+
+    $log = capturedErrorLog(static function () use (&$result, &$status): void {
+        $result = AiClient::complete(Context::forCompany(11), user(), AiClient::FEATURE_DRAFT_REPLY, 'Draft.', 'x');
+        $status = AiClient::status(user());
+    });
+
+    assertSame([], $fake->requests, 'nothing left this server');
+    assertFalse($result['ok'], 'no draft');
+    assertSame('not_configured', $result['code'], 'not configured');
+    assertSame('unavailable', $result['run_status'], 'logged as unavailable');
+    assertContains('not set up for Messaging', (string) $result['error'], 'and the panel says so, in Messaging\'s words');
+    assertFalse($status['available'], 'the status says AI is unavailable');
+    assertContains('PULSE_SERVICE_KEY', (string) $status['admin_hint'], 'and tells an administrator which setting');
+    assertContains('pulse:gateway-key mint messaging', (string) $status['admin_hint'], 'and how to get the key');
+    assertContains('code=not_configured', $log, 'the failure is logged');
+    foreach (['result' => (string) json_encode($result), 'status' => (string) json_encode($status), 'log' => $log] as $where => $text) {
+        assertFalse(str_contains($text, 'SECRETPART') || str_contains($text, 'X-Injected') || str_contains($text, 'mpk-'),
+            "no part of the key in the {$where}");
+    }
+});
+
+check('Pulse refusing the key is reported as configuration, not as a busy assistant', static function (): void {
+    foreach ([[401, 'product_key_required'], [401, 'service_key_retired'], [401, 'invalid_service_key'], [403, 'product_mismatch']] as [$http, $code]) {
+        fakePulse(FakePulseTransport::error($http, $code));
+        $result = AiClient::complete(Context::forCompany(11), user(), AiClient::FEATURE_DRAFT_REPLY, 'Draft.', 'x');
+        assertContains('not set up for Messaging', (string) $result['error'], "{$code}: says AI is not set up");
+
+        fakePulse(FakePulseTransport::error($http, $code));
+        $status = AiClient::status(user());
+        assertFalse($status['available'], "{$code}: unavailable");
+        assertContains('PULSE_SERVICE_KEY', (string) $status['admin_hint'], "{$code}: the hint names the setting");
+        assertContains($code, (string) $status['admin_hint'], "{$code}: and Pulse's code");
+    }
 });
 
 check('Pulse\'s failures become Messaging\'s own messages and run statuses', static function (): void {
@@ -422,7 +614,7 @@ check('with AI switched off for the deployment, nothing is asked of Pulse', stat
     assertContains('MESSAGING_AI_ENABLED', (string) $status['admin_hint'], 'naming the switch, for an administrator');
 });
 
-check('AI is on by default: there is no key to configure any more', static function (): void {
+check('AI is on by default: there is no model key to configure', static function (): void {
     assertTrue(Features::enabled('AI'), 'nothing set, and AI is on — Pulse decides whether it can answer');
     putenv('MESSAGING_AI_ENABLED=0');
     Features::overrideForTesting(null);
@@ -526,6 +718,25 @@ check('Console is asked for channel secrets only, never for an AI module', stati
         'only the channel-secret resolver talks to Console\'s credential endpoint');
     assertContains("'channel:' . \$name", (string) file_get_contents($root . '/server-php/src/Channels/ConsoleSecrets.php'),
         'and it only ever asks for a channel:<name> module');
+});
+
+check('the gateway client reads PULSE_SERVICE_KEY, never the Console key, and the key is documented', static function (): void {
+    $root = dirname(__DIR__, 2);
+    $client = (string) file_get_contents($root . '/server-php/src/Ai/PulseAiClient.php');
+    assertFalse(str_contains($client, 'CONSOLE_SERVICE_KEY'), 'PulseAiClient does not read CONSOLE_SERVICE_KEY: Pulse retires it');
+    assertContains("SERVICE_KEY_ENV = 'PULSE_SERVICE_KEY'", $client, 'PulseAiClient reads PULSE_SERVICE_KEY');
+    assertContains("'X-Pulse-Service-Key: '", $client, 'and sends it as X-Pulse-Service-Key');
+
+    $example = (string) file_get_contents($root . '/server-php/.env.example');
+    assertContains('PULSE_SERVICE_KEY=', $example, 'server-php/.env.example has the setting');
+    assertContains('pulse:gateway-key mint messaging', $example, 'and says how the key is minted');
+
+    // The key is a server-side secret: the web bundle never holds it.
+    foreach (productFiles() as $file) {
+        if (str_starts_with($file, 'web/') || $file === '.env.example') {
+            assertFalse(str_contains((string) file_get_contents($root . '/' . $file), 'PULSE_SERVICE_KEY'), "{$file} does not name the gateway key");
+        }
+    }
 });
 
 check('every model call goes through AiClient', static function (): void {

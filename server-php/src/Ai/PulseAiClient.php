@@ -20,13 +20,15 @@ use Aicountly\Api\Env;
  * untrusted-data labelling, the closed vocabularies, the checks on what comes
  * back, the run log — live in AiClient, which is the only caller of this class.
  *
- * Who is calling:
+ * Who is calling — the product and, when there is one, the person, on every call:
+ *   - the product: Messaging's own AI Pulse gateway key (PULSE_SERVICE_KEY) as
+ *     X-Pulse-Service-Key, beside X-Pulse-Product: messaging — on EVERY call
+ *     (generate, json, text and status), with a signed-in user or without;
  *   - a signed-in user started the action: their ses_key (the Bearer this API
- *     received) goes to Pulse as Bearer, and Pulse checks the person and the
- *     company itself;
- *   - nobody (a sibling product calling with its service key): the estate
- *     service key goes as X-Pulse-Service-Key — PULSE_SERVICE_KEY, falling back
- *     to CONSOLE_SERVICE_KEY.
+ *     received) also goes to Pulse as Bearer, and Pulse checks the person and
+ *     the company itself;
+ *   - nobody (a sibling product calling Messaging with its service key): the
+ *     product key goes alone, and Pulse takes the call as a job with no user.
  *
  * Configuration (server-php/.env):
  *   PULSE_API_ORIGIN   https://pulse.aicountly.com (sandbox https://pulse.gh.aicountly.com).
@@ -35,7 +37,19 @@ use Aicountly\Api\Env;
  *                      only, never the request's Host and never a guess for a CLI
  *                      with no Host (X-09). Unconfigured: no call. A trailing /api
  *                      is ignored.
- *   PULSE_SERVICE_KEY  only for calls with no signed-in user.
+ *   PULSE_SERVICE_KEY  Messaging's OWN AI Pulse gateway key, minted on Pulse with
+ *                      `php spark pulse:gateway-key mint messaging` (production and
+ *                      sandbox Pulse are separate, so each has its own). Sent on every
+ *                      call as X-Pulse-Service-Key. Until it is set only the session
+ *                      is sent — the headers are exactly what they were before the
+ *                      key existed — which Pulse accepts only until 2026-11-15 (UTC);
+ *                      after that it answers 401 product_key_required and every AI
+ *                      feature stops. The estate-wide Console key is no fallback:
+ *                      Pulse refuses it (401 service_key_retired) and it is never
+ *                      read here. A value holding a line break, NUL or another
+ *                      control character is refused whole (not_configured) and
+ *                      nothing is sent. The key, or any part of it, is never put in
+ *                      a result, a message or a log.
  *
  * Never throws, never logs content. Every method returns
  *   ['ok' => bool, 'status' => int, 'code' => ?string, 'message' => ?string, 'retryable' => bool, 'data' => ?array]
@@ -49,6 +63,9 @@ final class PulseAiClient
 
     public const PRODUCTION = 'https://pulse.aicountly.com';
     public const SANDBOX    = 'https://pulse.gh.aicountly.com';
+
+    /** The setting that holds Messaging's own AI Pulse gateway key. */
+    private const SERVICE_KEY_ENV = 'PULSE_SERVICE_KEY';
 
     /** @var \Closure(string, string, list<string>, ?string, float, float): array{status: int, body: ?string, error: ?string} */
     private \Closure $transport;
@@ -74,7 +91,8 @@ final class PulseAiClient
 
     /**
      * One call. Pass the user's ses_key whenever a user is behind the request;
-     * leave it null only when nobody is (then the service key is used).
+     * leave it null only when nobody is (then the product key goes alone).
+     * Messaging's own key (PULSE_SERVICE_KEY) goes on every call, session or not.
      *
      * @param array<string,mixed> $request gateway body: feature, system, input|messages,
      *                                     response_format, tier, max_output_tokens, cmp_id,
@@ -116,11 +134,11 @@ final class PulseAiClient
      */
     public function status(?string $userSesKey = null): array
     {
-        $caller = $this->callerHeader($userSesKey);
-        if ($caller === null) {
-            return self::result(false, 0, 'not_configured', 'No user session and no PULSE_SERVICE_KEY to ask AI Pulse with.', false);
+        $refused = $this->refusal($userSesKey, 'No user session and no PULSE_SERVICE_KEY to ask AI Pulse with.');
+        if ($refused !== null) {
+            return $refused;
         }
-        $headers = ['Accept: application/json', 'X-Pulse-Product: ' . $this->product, $caller];
+        $headers = array_merge(['Accept: application/json', 'X-Pulse-Product: ' . $this->product], $this->callerHeaders($userSesKey));
         if ($this->origin() === '') {
             return self::result(false, 0, 'not_configured', \Aicountly\Api\Environment::explainUnconfigured(), false);
         }
@@ -156,11 +174,14 @@ final class PulseAiClient
      */
     private function post(string $path, array $body, ?string $userSesKey, ?string $idempotencyKey): array
     {
-        $caller = $this->callerHeader($userSesKey);
-        if ($caller === null) {
-            return self::result(false, 0, 'not_configured', 'No user session and no PULSE_SERVICE_KEY for an AI call with no user.', false);
+        $refused = $this->refusal($userSesKey, 'No user session and no PULSE_SERVICE_KEY for an AI call with no user.');
+        if ($refused !== null) {
+            return $refused;
         }
-        $headers = ['Content-Type: application/json', 'Accept: application/json', 'X-Pulse-Product: ' . $this->product, $caller];
+        $headers = array_merge(
+            ['Content-Type: application/json', 'Accept: application/json', 'X-Pulse-Product: ' . $this->product],
+            $this->callerHeaders($userSesKey),
+        );
         if ($idempotencyKey !== null && $idempotencyKey !== '') {
             $headers[] = 'Idempotency-Key: ' . $idempotencyKey;
         }
@@ -190,15 +211,69 @@ final class PulseAiClient
         return self::result(false, $status, (string) ($json['code'] ?? 'error'), (string) ($json['message'] ?? "AI Pulse answered HTTP {$status}."), (bool) ($json['retryable'] ?? $status >= 500));
     }
 
-    /** The user's session when a user is behind the call, else the estate service key; null when neither. */
-    private function callerHeader(?string $userSesKey): ?string
+    /**
+     * Why this call cannot be made, as a failed result, or null when it can:
+     * nothing is sent with a gateway key that cannot go in a header, nor with
+     * neither a session nor a key to say who is calling. The words name the
+     * setting, never its value.
+     *
+     * @return array{ok: bool, status: int, code: ?string, message: ?string, retryable: bool, data: ?array}|null
+     */
+    private function refusal(?string $userSesKey, string $nothingToSendWith): ?array
     {
-        if ($userSesKey !== null && trim($userSesKey) !== '') {
-            return 'Authorization: Bearer ' . trim($userSesKey);
+        $key = self::serviceKey();
+        if ($key === null) {
+            return self::result(
+                false,
+                0,
+                'not_configured',
+                self::SERVICE_KEY_ENV . ' is not usable (it contains a line break or another control character), so nothing was sent to AI Pulse.',
+                false,
+            );
         }
-        $key = self::env('PULSE_SERVICE_KEY') ?: self::env('CONSOLE_SERVICE_KEY');
+        if ($key === '' && trim((string) $userSesKey) === '') {
+            return self::result(false, 0, 'not_configured', $nothingToSendWith, false);
+        }
 
-        return $key !== '' ? 'X-Pulse-Service-Key: ' . $key : null;
+        return null;
+    }
+
+    /**
+     * Who is calling: the product (its own gateway key, once PULSE_SERVICE_KEY
+     * is set) and the signed-in user (their session) when there is one — both,
+     * on every call. Call refusal() first: it has rejected a key that cannot be
+     * sent and a call with nothing to identify it by.
+     *
+     * @return list<string>
+     */
+    private function callerHeaders(?string $userSesKey): array
+    {
+        $headers = [];
+        $key = self::serviceKey();
+        if ($key !== null && $key !== '') {
+            $headers[] = 'X-Pulse-Service-Key: ' . $key;
+        }
+        $sesKey = trim((string) $userSesKey);
+        if ($sesKey !== '') {
+            $headers[] = 'Authorization: Bearer ' . $sesKey;
+        }
+
+        return $headers;
+    }
+
+    /**
+     * Messaging's gateway key: '' while PULSE_SERVICE_KEY is unset or blank
+     * (only the session is sent, exactly as before the key existed), the key
+     * when it is usable, null when it holds a control character — CR, LF, NUL
+     * or any other — that would end a header line early. A value like that is
+     * refused whole, never trimmed down to something that happens to be safe.
+     * Read on every call, so a rotated key is picked up without a restart.
+     */
+    private static function serviceKey(): ?string
+    {
+        $value = trim(Env::get(self::SERVICE_KEY_ENV), " \t");
+
+        return preg_match('/[\x00-\x1F\x7F]/', $value) === 1 ? null : $value;
     }
 
     private static function defaultOrigin(): string

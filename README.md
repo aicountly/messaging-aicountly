@@ -220,10 +220,14 @@ Two things about it are worth knowing without reading it:
   *name* of the environment variable; the adapter resolves the value at the
   moment of the call, and the API only ever returns a `credential_present`
   boolean.
-- **AI needs no key.** Every AI feature runs through AI Pulse (Powered by AI
-  Pulse) as the signed-in user; Pulse picks the model. Messaging holds no model
-  key and has no fallback model. `PULSE_API_ORIGIN` exists only to point at a
-  different Pulse.
+- **AI needs no model key.** Every AI feature runs through AI Pulse (Powered by
+  AI Pulse) as the signed-in user; Pulse picks the model. Messaging holds no
+  model key and has no fallback model. It does need its own **AI Pulse gateway
+  key**, `PULSE_SERVICE_KEY` (minted on Pulse with
+  `php spark pulse:gateway-key mint messaging`), sent on every AI call as
+  `X-Pulse-Service-Key` — required by 2026-11-15, when Pulse stops accepting a
+  user's session alone. `PULSE_API_ORIGIN` exists only to point at a different
+  Pulse.
 
 ## Deployment
 
