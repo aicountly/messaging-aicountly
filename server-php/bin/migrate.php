@@ -37,7 +37,10 @@ if ($files === []) {
 try {
     $pdo = Db::connect();
 } catch (\Throwable $e) {
+    $diagnosis = DatabaseDiagnosis::classify($e);
     fwrite(STDERR, "Cannot connect: {$e->getMessage()}\n");
+    fwrite(STDERR, "Reason: {$diagnosis['reason']}. {$diagnosis['hint']}\n");
+    fwrite(STDERR, "Run php bin/db-check.php to see where each connection setting comes from.\n");
     exit(1);
 }
 

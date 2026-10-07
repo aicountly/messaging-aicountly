@@ -29,21 +29,39 @@ final class Health
 {
     private const MIGRATIONS_TABLE = 'messaging_sql_migrations';
 
-    /** @return array<string, mixed> */
+    /**
+     * `source` says where the database name and username came from: "console" (CONSOLE_API_URL and
+     * CONSOLE_DB_DETAILS_KEY are both set, so Console is asked) or "env" (DB_NAME / DB_USER in api/.env).
+     * "env" on a deployed server is the sign that Console is not in use, whatever else is configured.
+     *
+     * A failure to get the name and username (Console refused, unreachable, or no key to ask with) is
+     * reported by its own reason (console_key_missing, console_key_rejected, ...) with a fixed `hint` saying
+     * what to do (DatabaseDiagnosis). Both come from a fixed list and can never echo a key or a name.
+     *
+     * @return array<string, mixed>
+     */
     public static function database(): array
     {
+        $source = ConsoleDatabaseDetails::isConfigured() ? 'console' : 'env';
+
         try {
             $pdo = Db::connect();
         } catch (PDOException $e) {
-            return [
+            $out = [
                 'reachable' => false,
-                'reason'    => self::categorise($e->getMessage()),
+                'source'    => $source,
+                'reason'    => self::categorise($e),
                 'schema'    => null,
             ];
+            if ($e instanceof DatabaseConnectionException) {
+                $out['hint'] = DatabaseDiagnosis::hint($e->category);
+            }
+
+            return $out;
         } catch (\Throwable $e) {
             error_log('[health] database check failed: ' . $e->getMessage());
 
-            return ['reachable' => false, 'reason' => 'error', 'schema' => null];
+            return ['reachable' => false, 'source' => $source, 'reason' => 'error', 'schema' => null];
         }
 
         $onDisk = count(glob(__DIR__ . '/../database/migrations/*.sql') ?: []);
@@ -58,6 +76,7 @@ final class Health
 
         return [
             'reachable' => true,
+            'source'    => $source,
             'reason'    => null,
             'schema'    => [
                 'applied' => $applied,
@@ -117,8 +136,17 @@ final class Health
      * The full driver text is logged, because the person who has to fix this
      * needs the database and role names that the category deliberately omits.
      */
-    private static function categorise(string $message): string
+    private static function categorise(PDOException $e): string
     {
+        // A failure to obtain the database name / username already has its category (and its message is
+        // ours, never the driver's): use it as it is, so Console's refusals are not squeezed into "error".
+        if ($e instanceof DatabaseConnectionException) {
+            error_log('[health] database unreachable [' . $e->category . ']: ' . $e->getMessage());
+
+            return $e->category;
+        }
+
+        $message = $e->getMessage();
         error_log('[health] database unreachable: ' . $message);
 
         $m = strtolower($message);

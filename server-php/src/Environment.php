@@ -110,6 +110,19 @@ final class Environment
         };
     }
 
+    /** For /api/health-style output and the db-check script: what was configured, in words. */
+    public static function describe(): string
+    {
+        $current = self::current();
+        if ($current !== null) {
+            return $current;
+        }
+
+        $aic = trim(Env::get('AIC_ENVIRONMENT'));
+
+        return trim($aic !== '' ? $aic : Env::get('APP_ENV')) === '' ? 'unset' : 'unrecognised';
+    }
+
     /** For messages: what to set when nothing is configured. */
     public static function explainUnconfigured(): string
     {
