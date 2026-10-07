@@ -55,7 +55,7 @@ check_with_hint() {
 # missing: configuration on the server, not this deploy, so it only warns. A channel is
 # deliberately not part of usable: Messaging with nothing connected is up and usable, which is the
 # correct state for a fresh deploy.
-check_with_hint "usable is false: the database is unreachable or the schema is missing. Check the DB_* values in api/.env and the migrations." \
+check_with_hint "usable is false: the database is unreachable or the schema is missing. Check the DB_* values in api/.env and the migrations; a console_* .database.reason means the name and username could not be had from Console (CONSOLE_API_URL / CONSOLE_DB_DETAILS_KEY) - run php bin/db-check.php in api/." \
   json "Messaging API (${target})" "${base}/api/health" \
   '.app == "Messaging"' \
   '.usable == true'
