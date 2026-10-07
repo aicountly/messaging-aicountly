@@ -33,6 +33,9 @@ DB_PASS=$DB_PASS
 # Every cross-product client points at the one stub — AI Pulse included, so
 # no test ever reaches a real Pulse (or a real model).
 PULSE_API_ORIGIN=http://127.0.0.1:$STUB_PORT
+# Messaging's own gateway key (placeholder). The stub refuses any AI call
+# without it, as Pulse does from 2026-11-15.
+PULSE_SERVICE_KEY=test-messaging-pulse-gateway-key-0123456789
 MANAGE_API_BASE=http://127.0.0.1:$STUB_PORT
 # The portal's validatesession too: no test ever reaches my.aicountly.com.
 PORTAL_AUTH_BASE=http://127.0.0.1:$STUB_PORT

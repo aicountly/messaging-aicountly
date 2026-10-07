@@ -446,7 +446,10 @@ if ($path === '/api/v1/campaigns') {
 
 // ---------------------------------------------------------------------------
 // AI Pulse — the AI gateway. Server to server: the product names itself and
-// sends the user's session (or, with no user, the service key).
+// sends its own gateway key on every call, with the user's session when there
+// is one. This stub answers as Pulse will from 2026-11-15: no product key, no
+// call — so the HTTP suite proves the key reaches the wire on a user's call.
+// tests/run.sh gives Messaging the placeholder key below.
 // ---------------------------------------------------------------------------
 
 /** A request header, case-insensitively. */
@@ -466,8 +469,12 @@ function pulse_caller(): void
     if (header_value('X-Pulse-Product') !== 'messaging') {
         send(400, ['status' => 0, 'code' => 'product_required', 'message' => 'Send X-Pulse-Product.', 'retryable' => false]);
     }
-    if (preg_match('/^Bearer\s+\S+/', header_value('Authorization')) !== 1 && header_value('X-Pulse-Service-Key') === '') {
-        send(401, ['status' => 0, 'code' => 'unauthenticated', 'message' => 'Send a session or a service key.', 'retryable' => false]);
+    $key = header_value('X-Pulse-Service-Key');
+    if ($key === '') {
+        send(401, ['status' => 0, 'code' => 'product_key_required', 'message' => 'Send the product\'s own gateway key.', 'retryable' => false]);
+    }
+    if ($key !== 'test-messaging-pulse-gateway-key-0123456789') {
+        send(401, ['status' => 0, 'code' => 'invalid_service_key', 'message' => 'Unknown gateway key.', 'retryable' => false]);
     }
 }
 

@@ -109,8 +109,14 @@ Books is not connected; it does not mean the inbox breaks. Nothing is on by
 default except the features Messaging owns outright, and `/api/health` names the
 missing key for each one.
 
-AI needs nothing in `api/.env`: it runs through AI Pulse as the signed-in user,
-and the Pulse host follows this one (`PULSE_API_ORIGIN` only to point
+AI needs one value in `api/.env`: `PULSE_SERVICE_KEY`, Messaging's own AI Pulse
+gateway key, minted on the Pulse host with
+`php spark pulse:gateway-key mint messaging` (production and sandbox Pulse each
+mint their own) and pasted straight from that terminal. It is sent on every AI
+call beside the signed-in user's session; until it is set only the session is
+sent, which Pulse accepts only until **2026-11-15** — after that every AI
+feature stops (401 `product_key_required`). `CONSOLE_SERVICE_KEY` is not a
+substitute. The Pulse host follows this one (`PULSE_API_ORIGIN` only to point
 elsewhere). An `api/.env` from before AI moved to Pulse may still hold
 `CONSOLE_API_URL` and `CONSOLE_SERVICE_KEY`; keep them only if a channel
 connection uses a `console:<name>` reference, otherwise delete both:
