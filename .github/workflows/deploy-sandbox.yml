@@ -375,6 +375,9 @@ jobs:
       # and this build's entry script on the web root. When the runner is shown
       # the anti-bot page, the request is repeated from the server over SSH
       # (deploy-target, still configured here). A wrong answer fails the deploy.
+      # The paths that must never be served (api/.env, error_log, SQL, tests,
+      # bin, .git) are asked from the server only: the host's WAF graylists a
+      # runner that asks for them, and the graylist drops SSH.
       - name: Verify the live app
         env:
           VERIFY_SSH: ssh deploy-target

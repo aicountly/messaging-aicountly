@@ -35,11 +35,18 @@
 #       first 64 KB only, and the log shows the status, type and size of what was served,
 #       never its content, which may be a secret. Never point it at a .php file under
 #       tests/, bin/ or scripts/: on a host that serves them, a GET runs them.
+#       With VERIFY_SSH set it is asked from the server ONLY, never from the runner: the
+#       host's WAF (Imunify360) logs a runner asking for api/.env, .git/HEAD, error_log ...
+#       as "direct access to sensitive file" and graylists the runner's address, which then
+#       silently drops its SSH, so every ssh the job makes after the probes times out. The
+#       server's own addresses are on the WAF's whitelist. Same request, same verdict.
+#       Without VERIFY_SSH (a job with no SSH to lose) it is asked from the runner.
 #
 # Environment:
 #   VERIFY_SSH           command prefix that runs one shell command on the server, e.g.
 #                        "ssh deploy-target" or "ssh -p 22 user@host". Unset: no retry from
-#                        the server, so a splash fails the check.
+#                        the server, so a splash fails the check. Set: absent checks are
+#                        asked from the server only (see absent above).
 #   VERIFY_FORCE_SERVER  1: ask the server as well when the runner did get the real answer,
 #                        and fail unless the server's answer passes too. Proves the fallback
 #                        works (SSH, curl on the server, the server reaching its own site)
@@ -203,8 +210,14 @@ ask() { # place
 }
 
 place=runner
-ask runner
-if [ "$result" = splash ] || [ "$result" = unreachable ]; then
+if [ "$mode" = absent ] && [ -n "$ssh_prefix" ]; then
+  # A path that must not be served: never asked from the runner (see absent above).
+  place=server
+fi
+ask "$place"
+if [ "$place" = server ]; then
+  : # asked from the server only; its answer is the answer
+elif [ "$result" = splash ] || [ "$result" = unreachable ]; then
   # The runner never reached the app; asking the server is the only way to get the answer.
   if [ -n "$ssh_prefix" ]; then
     place=server
