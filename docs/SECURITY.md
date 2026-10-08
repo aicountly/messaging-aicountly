@@ -12,8 +12,15 @@ fleet. Two tokens, deliberately different:
 
 | Token | Lifetime | Where it lives |
 | --- | --- | --- |
-| `auth_token` | long | `localStorage` plus a shared `.aicountly.com` cookie |
+| `auth_token` | long | `localStorage` (this origin only) |
 | `ses_key` | short | **memory only** |
+
+The shared `.aicountly.com` `auth_token` cookie is **retired**: it put the
+long-lived token where any script on any *.aicountly.com page could read it.
+Cross-product sign-in is the portal hand-off — my.aicountly.com
+`/login/authentication_jump`, backed by the portal's own httpOnly
+`AIC_AUTH_TOKEN` cookie. A leftover `auth_token` cookie is purged at start-up
+and at sign-out, on *.aicountly.com only.
 
 The `ses_key` is never written to `localStorage`, `sessionStorage` or a cookie.
 A short-lived credential sitting in storage is a credential any script can read

@@ -105,14 +105,112 @@ export function readAuthCallback(): AuthCallback {
   return { authToken: null, authError: fromSearch.get('auth_error') }
 }
 
+// ---------------------------------------------------------------------------
+// Where to land after the portal
+// ---------------------------------------------------------------------------
+
 /**
- * Drop the token from the address bar once it has been stored.
+ * Per tab: the address (path + query + hash) to reopen once the portal hands
+ * the user back.
+ *
+ * The portal only knows one return address — `/auth/callback` — so without
+ * this every sign-in landed on "/" and a deep link lost its screen. Since the
+ * shared `.aicountly.com` cookie was retired, every first visit goes through
+ * the portal, so this is the common case. Same idea as Books'
+ * `rememberReturnRoute` and Inventory's `web/src/auth/portal.ts`.
+ *
+ * sessionStorage, not localStorage: the destination belongs to the tab that
+ * was sent away, and another tab signing in must not inherit it.
+ */
+export const RETURN_ROUTE_KEY = 'messaging:returnRoute'
+
+/** Query parameters that only ever carry a sign-in answer; never part of a destination. */
+const AUTH_ANSWER_PARAMS = ['auth_token', 'auth_error', 'sso_code', 'sso_error']
+
+/**
+ * A same-origin, in-app address or null.
+ *
+ * Rejects anything that is not a path on this origin ("//host", "/\\host" are
+ * protocol-relative to a browser), the sign-in paths themselves, and the bare
+ * root (nothing worth restoring). Sign-in answer parameters are dropped so a
+ * token can never be written back into the address bar.
+ */
+export function normaliseReturnRoute(route: string | null | undefined): string | null {
+  if (typeof route !== 'string' || route === '') return null
+  if (!route.startsWith('/') || route.startsWith('//') || route.startsWith('/\\')) return null
+  let url: URL
+  try {
+    url = new URL(route, 'https://messaging.invalid')
+  } catch {
+    return null
+  }
+  if (url.origin !== 'https://messaging.invalid') return null
+  if (url.pathname === CALLBACK_PATH || url.pathname.startsWith('/auth/')) return null
+  let search = url.search
+  if (AUTH_ANSWER_PARAMS.some((name) => url.searchParams.has(name))) {
+    // Rebuilt only when something had to go, so an ordinary destination keeps
+    // its query byte for byte.
+    for (const name of AUTH_ANSWER_PARAMS) url.searchParams.delete(name)
+    const rest = url.searchParams.toString()
+    search = rest ? `?${rest}` : ''
+  }
+  const kept = `${url.pathname}${search}${url.hash}`
+  return kept === '/' ? null : kept
+}
+
+/**
+ * Remember where this tab is before it leaves for the portal.
+ *
+ * Every jump overwrites the previous answer — including with "nothing" when the
+ * tab is on "/" — so a destination from an abandoned attempt is never replayed
+ * on a later, unrelated sign-in.
+ */
+export function rememberReturnRoute(): void {
+  try {
+    const { pathname, search, hash } = window.location
+    const route = normaliseReturnRoute(`${pathname}${search}${hash}`)
+    if (route) sessionStorage.setItem(RETURN_ROUTE_KEY, route)
+    else sessionStorage.removeItem(RETURN_ROUTE_KEY)
+  } catch {
+    /* storage unavailable — the user lands on "/" instead */
+  }
+}
+
+/** The address saved by rememberReturnRoute(), read once; null when there is none. */
+export function takeReturnRoute(): string | null {
+  try {
+    const route = sessionStorage.getItem(RETURN_ROUTE_KEY)
+    sessionStorage.removeItem(RETURN_ROUTE_KEY)
+    return normaliseReturnRoute(route)
+  } catch {
+    return null
+  }
+}
+
+export function forgetReturnRoute(): void {
+  try {
+    sessionStorage.removeItem(RETURN_ROUTE_KEY)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Drop the token from the address bar once it has been stored, and put back
+ * the address the tab had before it left for the portal (see
+ * rememberReturnRoute) — "/" when there was none.
  *
  * replaceState, not assign: the token must not survive in history, and a real
- * navigation here would restart the app mid-login.
+ * navigation here would restart the app mid-login. BrowserRouter read the
+ * address before this ran, so the callback route (AfterSignIn in App.tsx) is what
+ * moves the router to the restored address.
+ *
+ * A portal error also lands here: the destination is restored to the address
+ * bar so that "Sign in" on the signed-out screen remembers it again.
  */
 export function clearCallbackFromUrl(): void {
-  window.history.replaceState(null, '', `${window.location.origin}/`)
+  const route = takeReturnRoute() ?? '/'
+  window.history.replaceState(null, '', `${window.location.origin}${route}`)
 }
 
 function buildCallbackUrl(): string {
@@ -181,6 +279,7 @@ export function redirectToPortalSso(): boolean {
   if (isLogoutInProgress()) return false
   if (!allowRedirect()) return false
 
+  rememberReturnRoute()
   const portal = resolveLoginPortalOrigin()
   const productKey = resolveProductKeyFromHost()
   const returnUrl = encodeURIComponent(buildCallbackUrl())
@@ -201,6 +300,7 @@ export function redirectToPortalSso(): boolean {
 export function redirectToPortalLoginForm(): void {
   if (isLogoutInProgress()) return
 
+  rememberReturnRoute()
   const portal = resolveLoginPortalOrigin()
   const returnUrl = encodeURIComponent(buildCallbackUrl())
   window.location.replace(`${portal}/?${RETURN_PARAM}=${returnUrl}&prompt=login`)
@@ -348,6 +448,7 @@ export async function ensureSesKey(force = false): Promise<string> {
 export function performLogout(): void {
   markLogoutInProgress()
   clearRedirectGuard()
+  forgetReturnRoute()
 
   const authToken = getAuthToken()
   const portalLogoutUrl = `${resolveLoginPortalOrigin()}/login/logout`
