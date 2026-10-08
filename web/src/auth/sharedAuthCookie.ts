@@ -7,6 +7,11 @@
  * (my.aicountly.com /login/authentication_jump/<product_key>, backed by the
  * portal's httpOnly cookie). This module is kept for one release only so callers
  * keep compiling and cookies already in browsers are purged; delete it next release.
+ *
+ * The purge only ever runs on *.aicountly.com and only ever expires the
+ * `domain=.aicountly.com` cookie the old module wrote. Anywhere else (localhost,
+ * a custom domain) it touches nothing: a host-only `auth_token` there belongs to
+ * some other application.
  */
 
 const AUTH_TOKEN_COOKIE = 'auth_token'
@@ -30,21 +35,21 @@ export function readSharedAuthToken(): string | null {
 /** Retired: a JavaScript-readable cookie must never carry the token again. */
 export function writeSharedAuthToken(_token: string): void {}
 
-/** Expire `auth_token` on the shared parent domain (if any) and host-only. */
+/** Expire the `.aicountly.com` cookie; a no-op on any other host. */
 export function clearSharedAuthToken(): void {
   if (typeof document === 'undefined') return
+  const domain = getSharedCookieDomain()
+  if (!domain) return
 
   const secure = window.location.protocol === 'https:' ? '; Secure' : ''
-  const expiry = `${AUTH_TOKEN_COOKIE}=; path=/; max-age=0; SameSite=Lax${secure}`
-  const domain = getSharedCookieDomain()
-  if (domain) document.cookie = `${expiry}; domain=${domain}`
-  document.cookie = expiry
+  document.cookie = `${AUTH_TOKEN_COOKIE}=; domain=${domain}; path=/; max-age=0; SameSite=Lax${secure}`
 }
 
 /** Remove a legacy `auth_token` cookie still sitting in this browser. Never throws. */
 export function purgeLegacySharedAuthToken(): void {
   try {
     if (typeof document === 'undefined') return
+    if (!getSharedCookieDomain()) return
     const prefix = `${AUTH_TOKEN_COOKIE}=`
     const present = document.cookie.split(';').some((part) => part.trim().startsWith(prefix))
     if (present) clearSharedAuthToken()
