@@ -33,6 +33,9 @@ DB_PASS=$DB_PASS
 # Every cross-product client points at the one stub — AI Pulse included, so
 # no test ever reaches a real Pulse (or a real model).
 PULSE_API_ORIGIN=http://127.0.0.1:$STUB_PORT
+# Messaging's own gateway key (placeholder). The stub refuses any AI call
+# without it, as Pulse does from 2026-11-15.
+PULSE_SERVICE_KEY=test-messaging-pulse-gateway-key-0123456789
 MANAGE_API_BASE=http://127.0.0.1:$STUB_PORT
 # The portal's validatesession too: no test ever reaches my.aicountly.com.
 PORTAL_AUTH_BASE=http://127.0.0.1:$STUB_PORT
@@ -68,6 +71,11 @@ php "$ROOT/bin/migrate.php" > /dev/null
 # Re-run the migrations to prove they are idempotent. A migration that only
 # works on an empty database is a migration that fails on the next deploy.
 php "$ROOT/bin/migrate.php" > /dev/null
+
+# Where the database name and username come from (Console's SaaS Database Details, or DB_NAME / DB_USER) and what is
+# said when they cannot be had: the resolver, /api/health, bin/db-check.php and bin/migrate.php. Needs the migrated
+# database above; the cases that take a migration record away put it back.
+php "$ROOT/tests/console_database.php"
 
 php -S "127.0.0.1:$STUB_PORT" "$ROOT/tests/stub/router.php" > /dev/null 2>&1 &
 STUB_PID=$!

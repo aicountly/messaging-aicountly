@@ -51,7 +51,7 @@ final class SourceReader
             'books_invoice'          => self::booksInvoice($ctx, $auth, $reference),
             'sales_order'            => self::salesOrder($ctx, $auth, $reference),
             'appointments_booking'   => self::appointmentsBooking($ctx, $auth, $reference),
-            'pay_payment_link'       => self::payLink($ctx, $reference),
+            'pay_payment_link'       => self::payLink($ctx, $auth, $reference),
             'contacts_contact'       => self::contact($ctx, $auth, $reference),
             'messaging_conversation' => self::conversation($ctx, $reference),
             default => self::unavailable('unknown', 'Unknown data source "' . $source . '".'),
@@ -173,22 +173,23 @@ final class SourceReader
         ];
     }
 
-    private static function payLink(Context $ctx, string $reference): array
+    private static function payLink(Context $ctx, Auth $auth, string $reference): array
     {
-        $result = (new PayClient())->paymentLink($ctx, $reference);
+        $result = (new PayClient())->forPerson($auth->uuid, $auth->sesKey())->paymentRequest($ctx, $reference);
         if (!$result['ok']) {
             return self::fromEnvelope($result, 'pay');
         }
 
-        $body = $result['body']['data'] ?? $result['body'] ?? [];
+        $view = PayClient::requestView($result['body']['data'] ?? $result['body'] ?? [], $reference, Settings::currency($ctx));
 
         return self::ready('pay', $result['fetched_at'], $result['correlation_id'], [
-            'reference' => (string) ($body['reference'] ?? $reference),
-            'label'     => (string) ($body['reference'] ?? $reference),
-            'status'    => strtoupper((string) ($body['status'] ?? 'UNKNOWN')),
-            'url'       => (string) ($body['url'] ?? ''),
-            'amount_minor' => self::minor($body, ['amount_minor', 'amount']),
-            'currency'  => strtoupper((string) ($body['currency'] ?? Settings::currency($ctx))),
+            'reference' => $view['reference'],
+            'label'     => $view['reference'],
+            'status'    => $view['status'],
+            'url'       => $view['url'],
+            'amount_minor'    => $view['amount_minor'],
+            'collected_minor' => $view['collected_minor'],
+            'currency'  => $view['currency'],
         ]);
     }
 

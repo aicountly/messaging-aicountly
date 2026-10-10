@@ -245,7 +245,8 @@ See `books-react-app/docs/CROSS_SERVICE_CALL_RULES.md`.
 ## AI
 
 Messaging's AI runs through **AI Pulse**. `Ai/AiClient` sends each task to the
-Pulse gateway (`POST /api/ai/v1/generate`, via `Ai/PulseAiClient`) with the
+Pulse gateway (`POST /api/ai/v1/generate`, via `Ai/PulseAiClient`) with
+Messaging's own gateway key (`PULSE_SERVICE_KEY`, on every call), the
 signed-in user's own session, the company (and branch, when one is selected),
 a stable feature id and a model tier. Pulse picks the model Console binds to
 it, enforces the daily allowances, validates JSON answers and reports usage to

@@ -11,7 +11,9 @@
 # The host's anti-bot page answers some requests from GitHub's runners with
 # HTTP 200. When the runner is shown it, the request is repeated from the
 # server over SSH, which is why this job sets up the deploy workflow's SSH
-# key for the chosen environment. It only ever runs curl there.
+# key for the chosen environment. It only ever runs curl there. The paths
+# that must not be served are asked from the server only: the host's WAF
+# graylists a runner that asks for them, and the graylist drops SSH.
 # ---------------------------------------------------------------------------
 name: Verify live app
 
@@ -104,7 +106,8 @@ jobs:
           TARGET: ${{ inputs.environment }}
           VERIFY_SSH: ssh deploy-target
           # Ask the server as well, even when the runner gets through: proves the fallback
-          # a deploy relies on when the runner is shown the anti-bot page.
+          # a deploy relies on when the runner is shown the anti-bot page. The paths that
+          # must not be served are asked from the server only, never from the runner.
           VERIFY_FORCE_SERVER: '1'
           # Nothing was deployed here, so there is no build or commit to compare.
           EXPECTED_ENTRY: ''

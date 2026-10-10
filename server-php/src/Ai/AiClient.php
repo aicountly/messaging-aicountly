@@ -21,10 +21,11 @@ use Aicountly\Api\Support\Clock;
  *
  * Messaging holds no model key, resolves none and calls no model provider.
  * Pulse picks the model (the one Console binds to Pulse), enforces budgets and
- * reports usage per feature. The signed-in user's own session goes to Pulse,
- * so Pulse checks the person and the company itself. When Pulse cannot answer,
- * the assistant says it is unavailable — there is no fallback to a model of
- * Messaging's own.
+ * reports usage per feature. Messaging's own gateway key (PULSE_SERVICE_KEY)
+ * goes with every call and the signed-in user's own session with it, so Pulse
+ * knows the product and checks the person and the company itself. When Pulse
+ * cannot answer, the assistant says it is unavailable — there is no fallback to
+ * a model of Messaging's own.
  *
  * ## 2. EVERYTHING IT IS GIVEN IS DATA, NOT INSTRUCTIONS
  *
@@ -479,8 +480,8 @@ final class AiClient
                 => 'AI Pulse could not confirm your access to this company, so the assistant did not run.',
             'unauthenticated'
                 => 'AI Pulse could not confirm your session. Sign in again, then retry.',
-            'not_configured', 'invalid_service_key'
-                => 'The assistant is unavailable for requests made without a signed-in user.',
+            'not_configured', 'invalid_service_key', 'product_key_required', 'service_key_retired', 'product_mismatch'
+                => 'The assistant is unavailable: AI Pulse is not set up for Messaging on this server. Write the reply yourself.',
             'invalid_request', 'payload_too_large', 'idempotency_mismatch', 'product_required'
                 => 'The request to the model could not be prepared.',
             default
@@ -547,12 +548,23 @@ final class AiClient
         }
 
         $code = (string) ($res['code'] ?? 'error');
-        if ($code === 'not_configured' || $code === 'invalid_service_key') {
+        if (in_array($code, ['not_configured', 'invalid_service_key', 'product_key_required', 'service_key_retired', 'product_mismatch'], true)) {
+            // The words name settings, never a value: PulseAiClient's own
+            // message for not_configured says which setting is missing or
+            // unusable, and holds no part of the key.
+            $detail = $code === 'not_configured' ? trim((string) ($res['message'] ?? '')) : '';
+            $keyHint = 'Set PULSE_SERVICE_KEY in the server environment to Messaging\'s own AI Pulse gateway key, minted on '
+                . 'Pulse with php spark pulse:gateway-key mint messaging; it is sent on every AI call. '
+                . 'CONSOLE_SERVICE_KEY is not used for AI.';
+
             return [[
                 'available'  => false,
-                'reason'     => 'AI is unavailable for requests made without a signed-in user.',
-                'admin_hint' => 'Set PULSE_SERVICE_KEY (or CONSOLE_SERVICE_KEY) in the server environment for AI calls '
-                    . 'a sibling product makes with its service key.',
+                'reason'     => 'AI is unavailable: AI Pulse is not set up for Messaging on this server.',
+                'admin_hint' => match (true) {
+                    $detail === ''                                => 'AI Pulse answered ' . $code . '. ' . $keyHint,
+                    str_contains($detail, 'PULSE_SERVICE_KEY')    => $detail . ' ' . $keyHint,
+                    default                                       => $detail,
+                },
             ], 0];
         }
         if ($res['status'] >= 400 && $res['status'] < 500) {
@@ -570,7 +582,7 @@ final class AiClient
         ], self::STATUS_TTL_UNREACHABLE];
     }
 
-    /** The user's session for a user; null for anybody else, so the service key is used. */
+    /** The user's session for a user; null for anybody else, so Messaging's own gateway key goes alone. */
     private static function sesKey(Auth $auth): ?string
     {
         return $auth->kind === 'user' && $auth->sesKey() !== '' ? $auth->sesKey() : null;

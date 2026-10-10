@@ -247,7 +247,9 @@ abstract class ApiClient
         }
 
         $url = $this->apiRoot() . '/' . ltrim($path, '/');
-        $memoKey = $method . ' ' . $url . ' ' . ($headers['Authorization'] ?? '');
+        // The person is part of the key: a product-key call (Pay) names its person in X-Actor-Uuid,
+        // not in Authorization, and a read for one person must never answer for another.
+        $memoKey = $method . ' ' . $url . ' ' . ($headers['Authorization'] ?? '') . ' ' . ($headers['X-Actor-Uuid'] ?? '');
         if ($method === 'GET' && isset($this->memo[$memoKey])) {
             return $this->memo[$memoKey];
         }
@@ -355,7 +357,7 @@ abstract class ApiClient
      * every company-scoped request and logging each one buries the failures the
      * log exists to surface.
      */
-    private function log(string $outcome, string $path, int $status, float $ms, ?string $reason): void
+    protected function log(string $outcome, string $path, int $status, float $ms, ?string $reason): void
     {
         $operation = explode('?', ltrim($path, '/'))[0];
         error_log(sprintf(

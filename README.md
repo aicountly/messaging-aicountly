@@ -120,7 +120,7 @@ the other products in the fleet. There is no `composer.json` and no `vendor/`.
 
 ```bash
 cd server-php
-cp .env.example .env               # set APP_ENV=local and the DB_* values
+cp .env.example .env               # set APP_ENV=local and the DB_* values (DB_NAME / DB_USER locally; Console names them on a server)
 php bin/migrate.php --status       # what would run
 php bin/migrate.php                # apply it
 php -S localhost:8000
@@ -210,6 +210,13 @@ database, public URLs, the sibling products, the inbound service contract, the
 channel providers, attachments, AI, and the feature flags. Every value in it is
 a placeholder.
 
+The database is the first of them: its **name and username come from Console >
+SaaS Database Details** (`CONSOLE_API_URL` + `CONSOLE_DB_DETAILS_KEY`, the `sdb_`
+key generated on this deployment's row), while host, port and password stay in
+`.env`. `DB_NAME` / `DB_USER` are a local-development fallback and are not read
+while both Console variables are set. `php bin/db-check.php` shows where the
+connection comes from and whether it works.
+
 Two things about it are worth knowing without reading it:
 
 - **An absent service key is not an error.** That integration reports itself
@@ -220,10 +227,14 @@ Two things about it are worth knowing without reading it:
   *name* of the environment variable; the adapter resolves the value at the
   moment of the call, and the API only ever returns a `credential_present`
   boolean.
-- **AI needs no key.** Every AI feature runs through AI Pulse (Powered by AI
-  Pulse) as the signed-in user; Pulse picks the model. Messaging holds no model
-  key and has no fallback model. `PULSE_API_ORIGIN` exists only to point at a
-  different Pulse.
+- **AI needs no model key.** Every AI feature runs through AI Pulse (Powered by
+  AI Pulse) as the signed-in user; Pulse picks the model. Messaging holds no
+  model key and has no fallback model. It does need its own **AI Pulse gateway
+  key**, `PULSE_SERVICE_KEY` (minted on Pulse with
+  `php spark pulse:gateway-key mint messaging`), sent on every AI call as
+  `X-Pulse-Service-Key` — required by 2026-11-15, when Pulse stops accepting a
+  user's session alone. `PULSE_API_ORIGIN` exists only to point at a different
+  Pulse.
 
 ## Deployment
 

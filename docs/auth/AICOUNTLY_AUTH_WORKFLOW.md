@@ -9,35 +9,43 @@ signs or stores a credential of its own.
 
 | Token | Lifetime | Storage | Use |
 |-------|----------|---------|-----|
-| `auth_token` | Long-lived | `localStorage` + a `.aicountly.com` cookie | Mint / refresh a `ses_key` |
+| `auth_token` | Long-lived | `localStorage` (this origin only) | Mint / refresh a `ses_key` |
 | `ses_key` | ~15 minutes | **Memory only** | `Authorization: Bearer` on product APIs |
 
 `ses_key` must **never** be written to `localStorage` or `sessionStorage`. In
 this app it lives in a module variable in `web/src/auth/tokens.ts` and dies with
 the page.
 
-The `auth_token` cookie is scoped to `.aicountly.com` on purpose:
-`localStorage` is origin-scoped, so without the cookie a user arriving from
-another AICOUNTLY product would have to sign in again.
+The shared `.aicountly.com` `auth_token` cookie is **retired**: it put the
+long-lived token where any script on any *.aicountly.com page could read it.
+`localStorage` is origin-scoped, so a user arriving from another AICOUNTLY
+product is signed in by the portal hand-off instead — my.aicountly.com
+`/login/authentication_jump`, backed by the portal's own httpOnly
+`AIC_AUTH_TOKEN` cookie — in one silent round trip. A leftover `auth_token`
+cookie is purged at start-up and at sign-out, on *.aicountly.com only
+(`web/src/auth/sharedAuthCookie.ts`).
 
 ## Login flow
 
 1. User opens `messaging.aicountly.com` (or `messaging.gh.aicountly.com`).
-2. No `auth_token` → redirect to
+2. No `auth_token` → the address the user opened is kept per tab in
+   `sessionStorage` (`messaging:returnRoute`), then redirect to
    `{portal}/login/authentication_jump/messaging?returnUrl={origin}/auth/callback`.
    The portal reuses an existing portal web session — this is what makes moving
    between AICOUNTLY products seamless. With no session it shows its login form.
 3. Portal redirects back to `/auth/callback?auth_token=…`. The SPA history
-   fallback in `web/public/.htaccess` serves the app at that path; there is no
-   router, so `AuthProvider` reads the token at boot and clears it from the URL.
+   fallback in `web/public/.htaccess` serves the app at that path; `AuthProvider`
+   reads the token at boot and replaces the URL with the kept address (or `/`),
+   and the router's callback route opens it, so a deep link survives the round
+   trip.
 4. App stores `auth_token`, then `POST /api/global/seskey` with
    `Bearer auth_token` → `ses_key`.
 5. Dashboard.
 
-Logout clears both tokens and the shared cookie, tells the portal to invalidate
-the `auth_token`, and navigates to `{portal}/login/logout` so the portal's own
-session cookie goes too. Skipping that last step leaves the portal session
-alive and the next visit signs the user straight back in.
+Logout clears both tokens (and any leftover retired cookie), tells the portal
+to invalidate the `auth_token`, and navigates to `{portal}/login/logout` so the
+portal's own session cookie goes too. Skipping that last step leaves the portal
+session alive and the next visit signs the user straight back in.
 
 ## Host mapping
 

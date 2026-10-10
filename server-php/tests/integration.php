@@ -57,6 +57,7 @@ use Aicountly\Api\Channels\TwilioSmsAdapter;
 use Aicountly\Api\Channels\WhatsAppCloudAdapter;
 use Aicountly\Api\Clients\BooksClient;
 use Aicountly\Api\Clients\ContactsClient;
+use Aicountly\Api\Clients\PayClient;
 use Aicountly\Api\Domain\BusinessContextService;
 use Aicountly\Api\Domain\ConsentService;
 use Aicountly\Api\Domain\ConversationService;
@@ -68,6 +69,7 @@ use Aicountly\Api\Domain\JourneySimulator;
 use Aicountly\Api\Domain\MessageService;
 use Aicountly\Api\Domain\MessageState;
 use Aicountly\Api\Domain\MetricsService;
+use Aicountly\Api\Domain\OutcomeService;
 use Aicountly\Api\Domain\Period;
 use Aicountly\Api\Domain\Settings;
 use Aicountly\Api\Domain\SourceReader;
@@ -1229,6 +1231,196 @@ check('reading a foreign record leaves no copy of it behind', static function ()
         );
         assertSame(0, $hits, "the figure {$figure} must not be stored — Books owns it and it changes there");
     }
+});
+
+// ===========================================================================
+// Pay
+// ===========================================================================
+
+section('Pay');
+
+/** Pay's key for these tests: a placeholder the stub (tests/stub/router.php) expects, restored afterwards. */
+function withPayKey(callable $body): void
+{
+    putenv('PAY_SERVICE_KEY=test-pay-service-key-0123456789');
+    Features::overrideForTesting(['PAY' => true]);
+    try {
+        $body();
+    } finally {
+        putenv('PAY_SERVICE_KEY');
+        putenv('AIC_ENVIRONMENT');
+    }
+}
+
+check('Messaging asks Pay only for routes Pay serves', static function (): void {
+    // Pay's route table as a service key meets it (tests/fixtures/pay/service_routes.json says from where).
+    // The old client called `v1/payment-links`, which Pay has never served, and `v1/payments`, which
+    // Pay refuses a key: every call was a 404 or a 403 that a panel showed as "could not be reached".
+    $fixture = json_decode((string) file_get_contents(__DIR__ . '/fixtures/pay/service_routes.json'), true);
+    $served = array_map(static fn (array $route): string => $route[0] . ' ' . $route[1], $fixture['routes']);
+
+    $source = (string) file_get_contents(__DIR__ . '/../src/Clients/PayClient.php');
+    // A path built in a variable first (`$path = 'v1/payment-requests/' . rawurlencode($ref)`) is resolved
+    // to what it names, so the scan reads what is sent rather than what the call site is called.
+    $pathOf = static function (string $expression, array $variables): string {
+        $expression = (string) preg_replace('/\.\s*self::query\(.*$/s', '', $expression);
+        preg_match_all('/\'([^\']*)\'|(rawurlencode\([^)]*\))|\$(\w+)/', $expression, $parts, PREG_SET_ORDER);
+        $path = '';
+        foreach ($parts as $part) {
+            $path .= ($part[2] ?? '') !== '' ? '{id}' : (($part[3] ?? '') !== '' ? ($variables[$part[3]] ?? '{unresolved}') : $part[1]);
+        }
+
+        return $path;
+    };
+    $variables = [];
+    preg_match_all('/\$(\w+)\s*=\s*(\'v1[^;]*);/', $source, $assigned, PREG_SET_ORDER);
+    foreach ($assigned as [, $name, $expression]) {
+        $variables[$name] = $pathOf($expression, []);
+    }
+    preg_match_all('/->request\(\s*\'([A-Z]+)\'\s*,\s*([^,]+?)\s*,/', $source, $calls, PREG_SET_ORDER);
+    $called = [];
+    foreach ($calls as [, $method, $expression]) {
+        $called[] = $method . ' ' . $pathOf($expression, $variables);
+    }
+
+    assertTrue($called !== [], 'the scan finds the request the Pay client makes');
+    assertSame([], array_values(array_diff($called, $served)), 'every request the Pay client makes is a route Pay serves');
+});
+
+check('a payment request is read as the signed-in person, with all four things Pay requires', static function (): void {
+    reset();
+    withPayKey(static function (): void {
+        $client = (new PayClient())->forPerson(owner()->uuid, owner()->sesKey());
+
+        // The stub refuses, with Pay's own codes, a call that leaves out the key, the environment,
+        // the actor or the actor's session — so a pass here means all four were sent.
+        $read = $client->paymentRequest(ctx(), 'PAYREQ-ACTIVE');
+        assertTrue((bool) $read['ok'], 'Pay answered: ' . (string) ($read['error'] ?? '') . ' ' . (string) ($read['message'] ?? ''));
+        assertSame('PAYREQ-ACTIVE', (string) ($read['body']['data']['payment_request_id'] ?? ''), 'with the request that was asked for');
+
+        // The environment named is this deployment's, not a constant.
+        putenv('AIC_ENVIRONMENT=sandbox');
+        $mismatch = (new PayClient())->forPerson(owner()->uuid, owner()->sesKey())->paymentRequest(ctx(), 'PAYREQ-ACTIVE');
+        assertSame('environment_mismatch', (string) $mismatch['error'], 'it names the configured environment, so Pay can refuse a wrong one');
+        putenv('AIC_ENVIRONMENT');
+
+        // Who it is for travels with the call: the same client acting for somebody else is asked
+        // again, not answered from what it read for the first person.
+        $impostor = $client->forPerson(agent()->uuid, owner()->sesKey())->paymentRequest(ctx(), 'PAYREQ-ACTIVE');
+        assertSame('actor_mismatch', (string) $impostor['error'], 'a session that is not the named person\'s is refused by Pay, and not answered from a memo');
+
+        // A request Messaging did not raise is a 404 over there, and is shown as not found.
+        $other = $client->paymentRequest(ctx(), 'PAYREQ-RAISED-BY-SOMEONE-ELSE');
+        assertFalse((bool) $other['ok'], 'a request Pay will not show this key is not read');
+        assertSame(404, (int) $other['status'], 'it is Pay\'s 404, not a guess');
+    });
+});
+
+check('Pay is not asked at all without a person, or without an environment to name', static function (): void {
+    reset();
+    withPayKey(static function (): void {
+        // Nobody signed in (a journey step, the scheduler): a key with an actor id alone is refused
+        // by Pay, and an actor id with no session is a claim. Neither is sent.
+        $nobody = (new PayClient())->paymentRequest(ctx(), 'PAYREQ-ACTIVE');
+        assertSame('pay_needs_person', (string) $nobody['error'], 'with nobody signed in Pay is not called');
+        assertFalse((bool) $nobody['ok'], 'and it is not reported as read');
+
+        $noSession = (new PayClient())->forPerson('scheduler', '')->paymentRequest(ctx(), 'PAYREQ-ACTIVE');
+        assertSame('pay_needs_person', (string) $noSession['error'], 'an actor id with no session of theirs is not enough');
+
+        putenv('AIC_ENVIRONMENT=bogus');
+        $unnamed = (new PayClient())->forPerson(owner()->uuid, owner()->sesKey())->paymentRequest(ctx(), 'PAYREQ-ACTIVE');
+        assertSame('environment_not_configured', (string) $unnamed['error'], 'a server that does not say which environment it is names none, and calls nobody');
+    });
+
+    Features::overrideForTesting(['PAY' => false]);
+    $off = (new PayClient())->forPerson(owner()->uuid, owner()->sesKey())->paymentRequest(ctx(), 'PAYREQ-ACTIVE');
+    assertSame('pending', (string) $off['state'], 'an unconnected Pay is pending, not broken');
+});
+
+check('Pay\'s status is shown as Pay states it, and a link is offered only while it can be paid', static function (): void {
+    reset();
+    withPayKey(static function (): void {
+        $read = static function (string $ref): array {
+            $result = SourceReader::read(ctx(), owner(), 'pay_payment_link', $ref);
+            assertSame('ready', (string) $result['state'], $ref . ' reads: ' . (string) ($result['message'] ?? ''));
+
+            return (array) $result['data'];
+        };
+
+        $active = $read('PAYREQ-ACTIVE');
+        assertSame(['ACTIVE', 480000, 0, 'INR'], [$active['status'], $active['amount_minor'], $active['collected_minor'], $active['currency']],
+            'an active request asked for 4,800.00 and has collected nothing');
+        assertSame('https://pay.aicountly.test/pay/p/stub-token', $active['url'], 'and its link can be offered');
+
+        $paid = $read('PAYREQ-PAID');
+        assertSame(['PAID', 480000], [$paid['status'], $paid['collected_minor']], 'a paid request has collected what it asked');
+        assertSame('', $paid['url'], 'but its link is not offered again');
+
+        assertSame('', $read('PAYREQ-EXPIRED')['url'], 'nor is an expired one');
+        assertSame(120050, $read('PAYREQ-PART')['collected_minor'], 'a part payment is the part, in hundredths');
+        assertSame(0, $read('PAYREQ-REFUNDED')['collected_minor'], 'and money refunded is not collected');
+
+        $gone = SourceReader::read(ctx(), owner(), 'pay_payment_link', 'PAYREQ-NOT-OURS');
+        assertFalse((bool) $gone['ok'], 'a request Pay will not show is not read');
+    });
+});
+
+check('the payment panel shows what Pay holds and does not offer to create a link', static function (): void {
+    reset();
+    connection();
+    withPayKey(static function (): void {
+        $n = 0;
+        $panelFor = static function (?string $payRequest) use (&$n): array {
+            $uuid = conversation(['customer_address' => '+9198123500' . str_pad((string) ++$n, 2, '0', STR_PAD_LEFT)]);
+            if ($payRequest !== null) {
+                ConversationService::linkExternal(ctx(), $uuid, 'pay', $payRequest, 'payment_request', $payRequest);
+            }
+            $row = Db::first('SELECT * FROM messaging_conversations WHERE conversation_uuid = :u', ['u' => $uuid]);
+
+            return BusinessContextService::for(ctx(), owner(), (array) $row)['payment'];
+        };
+
+        $none = $panelFor(null);
+        assertSame('ready', (string) $none['state'], 'a conversation with no request is an honest empty panel');
+        assertSame([false, null], [$none['data']['can_create_link'], $none['data']['link']], 'which does not offer a link Messaging cannot make');
+
+        $linked = $panelFor('PAYREQ-ACTIVE');
+        assertSame('ready', (string) $linked['state'], 'a linked request is read live: ' . (string) ($linked['message'] ?? ''));
+        assertSame(['ACTIVE', 480000, 'https://pay.aicountly.test/pay/p/stub-token', false],
+            [$linked['data']['link']['status'], $linked['data']['link']['amount_minor'], $linked['data']['link']['url'], $linked['data']['can_create_link']],
+            'with Pay\'s status, amount and link');
+
+        $missing = $panelFor('PAYREQ-NOT-OURS');
+        assertSame('unsupported', (string) $missing['state'], 'a request Pay will not show is not found, and is not drawn as a link');
+        assertTrue($missing['data']['link'] === null, 'with no link in it');
+    });
+});
+
+check('collections count what Pay collected, never what a link asked for', static function (): void {
+    reset();
+    connection();
+    withPayKey(static function (): void {
+        $uuid = conversation();
+        foreach (['PAYREQ-ACTIVE', 'PAYREQ-PAID', 'PAYREQ-PART', 'PAYREQ-REFUNDED', 'PAYREQ-EXPIRED'] as $ref) {
+            $linked = OutcomeService::link(ctx(), owner(), 'pay', 'payment_link_paid', $ref, 'payment_link_callback', $uuid);
+            assertTrue($linked['ok'], 'fixture: the outcome links — ' . $linked['detail']);
+        }
+
+        $collections = OutcomeService::overview(ctx(), owner(), Period::named(ctx(), '30d'))['collections'];
+
+        assertSame([['currency' => 'INR', 'amount_minor' => 600050]], $collections['by_currency'],
+            '4,800.00 paid plus 1,200.50 part-paid, and not the 4,800.00 an active link asked for');
+        assertSame([5, 2, 0], [$collections['linked_count'], $collections['valued_count'], $collections['unresolved']],
+            'five links, two of which collected anything, none unread');
+        assertSame('complete', (string) $collections['completeness'], 'a link that took nothing is a known zero, not a missing figure');
+
+        // With nobody signed in Pay is not read, and the total says so instead of guessing.
+        $scheduler = Auth::forTesting('scheduler', 'service', 'crm');
+        $unread = OutcomeService::overview(ctx(), $scheduler, Period::named(ctx(), '30d'))['collections'];
+        assertSame([], $unread['by_currency'], 'no figure when no person can be asked');
+        assertSame(5, $unread['unresolved'], 'and every link is reported as not valued');
+    });
 });
 
 // ===========================================================================

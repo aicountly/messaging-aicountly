@@ -8,6 +8,10 @@ use PDO;
 use PDOException;
 use PDOStatement;
 
+// bin/migrate.php and bin/db-check.php load Env and Db directly, without the autoloader; the classes
+// Db throws and reports through (DatabaseConnectionException, DatabaseDiagnosis) must still resolve.
+require_once __DIR__ . '/Autoload.php';
+
 /**
  * PostgreSQL connection for this product's OWN database.
  *
@@ -36,24 +40,43 @@ final class Db
 
         $host = Env::get('DB_HOST', '127.0.0.1');
         $port = Env::get('DB_PORT', '5432');
-        $name = Env::get('DB_NAME');
-        $user = Env::get('DB_USER');
+        // The database name and login come from Console's SaaS Database Details when CONSOLE_API_URL and
+        // CONSOLE_DB_DETAILS_KEY are both set (ConsoleDatabaseDetails); DB_NAME / DB_USER are then not read.
+        // Host, port, password, SSL mode and schema always come from .env: Console never holds a password,
+        // and this is the split Connect uses. A Console failure is a PDOException.
+        ['name' => $name, 'user' => $user] = ConsoleDatabaseDetails::connectionIdentity();
         $pass = Env::get('DB_PASS');
 
         if ($name === '' || $user === '') {
-            throw new PDOException('Database is not configured (DB_NAME / DB_USER missing from api/.env).');
+            throw new DatabaseConnectionException(ConsoleDatabaseDetails::unconfiguredMessage(), ConsoleDatabaseDetails::unconfiguredReason());
         }
 
         $dsn = sprintf('pgsql:host=%s;port=%s;dbname=%s', $host, $port, $name);
 
-        $pdo = new PDO($dsn, $user, $pass, [
-            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-            // Real prepares. Emulation would send NUMERIC(18,4) money as a string
-            // literal and let PostgreSQL guess the type, which is how a rate
-            // silently becomes text in one query and numeric in the next.
-            PDO::ATTR_EMULATE_PREPARES   => false,
-        ]);
+        // Optional. Unset, the connection takes libpq's default ("prefer"), as Connect's does.
+        $sslmode = strtolower(Env::get('DB_SSLMODE'));
+        if ($sslmode !== '') {
+            if (!in_array($sslmode, ['disable', 'allow', 'prefer', 'require', 'verify-ca', 'verify-full'], true)) {
+                throw new DatabaseConnectionException('DB_SSLMODE must be one of disable, allow, prefer, require, verify-ca, verify-full.', 'invalid_sslmode');
+            }
+            $dsn .= ';sslmode=' . $sslmode;
+        }
+
+        try {
+            $pdo = new PDO($dsn, $user, $pass, [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                // Real prepares. Emulation would send NUMERIC(18,4) money as a string
+                // literal and let PostgreSQL guess the type, which is how a rate
+                // silently becomes text in one query and numeric in the next.
+                PDO::ATTR_EMULATE_PREPARES   => false,
+            ]);
+        } catch (PDOException $e) {
+            // Where each setting came from is the first thing to know about a refused connection.
+            error_log('[messaging-db] connection refused [' . DatabaseDiagnosis::classify($e)['reason'] . '] (' . self::describeSources() . '): ' . $e->getMessage());
+
+            throw $e;
+        }
 
         $schema = Env::get('DB_SCHEMA');
         if ($schema !== '') {
@@ -61,6 +84,25 @@ final class Db
         }
 
         return self::$pdo = $pdo;
+    }
+
+    /**
+     * Where each part of the connection comes from, for a log line or a diagnostic. The database name and
+     * username are Console's (when CONSOLE_API_URL and CONSOLE_DB_DETAILS_KEY are set); host, port, password
+     * and SSL mode are always this server's .env. Names and sources only: never a value, never the password.
+     */
+    public static function describeSources(): string
+    {
+        $env = static fn (string $key, string $else): string => Env::get($key) !== '' ? '.env' : $else;
+
+        return sprintf(
+            'database name/user from %s; host from %s; port from %s; sslmode from %s; password from %s',
+            ConsoleDatabaseDetails::isConfigured() ? 'Console' : '.env (DB_NAME/DB_USER)',
+            $env('DB_HOST', 'default 127.0.0.1'),
+            $env('DB_PORT', 'default 5432'),
+            $env('DB_SSLMODE', 'libpq default'),
+            $env('DB_PASS', 'NOWHERE (DB_PASS is not set in .env)'),
+        );
     }
 
     /** @param array<string|int, mixed> $params */

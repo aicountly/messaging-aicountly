@@ -11,11 +11,7 @@
  * variable that dies with the page.
  */
 
-import {
-  readSharedAuthToken,
-  writeSharedAuthToken,
-  clearSharedAuthToken,
-} from './sharedAuthCookie'
+import { clearSharedAuthToken } from './sharedAuthCookie'
 
 const AUTH_TOKEN_KEY = 'auth_token'
 
@@ -45,14 +41,12 @@ export function setAuthToken(token: string | null): void {
     }
   }
 
-  if (token) writeSharedAuthToken(token)
-  else clearSharedAuthToken()
+  if (!token) clearSharedAuthToken()
 }
 
 /**
- * Memory → localStorage → shared cookie. The cookie is the cross-product hop:
- * finding a token there means the user signed in on another AICOUNTLY product,
- * so it is promoted into localStorage for this origin.
+ * Memory → localStorage. Cross-product sign-in is the portal hand-off, not a
+ * shared cookie.
  */
 export function getAuthToken(): string | null {
   if (authToken) return authToken
@@ -70,15 +64,7 @@ export function getAuthToken(): string | null {
     }
   }
 
-  authToken = readSharedAuthToken()
-  if (authToken && store) {
-    try {
-      store.setItem(AUTH_TOKEN_KEY, authToken)
-    } catch {
-      /* ignore */
-    }
-  }
-  return authToken
+  return null
 }
 
 // ---------- ses_key (memory only, never persisted) ----------
@@ -103,7 +89,7 @@ export function clearSession(): void {
   sesExpiry = 0
 }
 
-/** Full sign-out: drops the session key, the auth token and the shared cookie. */
+/** Full sign-out: drops the session key, the auth token and any leftover retired `.aicountly.com` cookie. */
 export function clearAllTokens(): void {
   clearSession()
   authToken = null

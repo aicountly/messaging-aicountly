@@ -4,13 +4,16 @@
 # Run by the deploy workflows after a deploy, and by verify-live.yml to check the live app without
 # deploying anything. Every check goes through verify-live.sh, which passes only on the app's real
 # answer, never on the host's anti-bot page, and repeats the request from the server (VERIFY_SSH)
-# when the runner is shown that page.
+# when the runner is shown that page. The paths that must not be served are asked from the server
+# only, over VERIFY_SSH, never from the runner: the host's WAF graylists a runner that asks for
+# them, and the graylist drops the job's SSH (verify-live.sh absent).
 #
 # Usage: scripts/ci/post-deploy-checks.sh <production|sandbox>
 #
 # Environment:
 #   VERIFY_SSH         command prefix that runs one command on the server ("ssh deploy-target"
-#                      in the workflows); see verify-live.sh.
+#                      in the workflows); see verify-live.sh. Unset: no retry from the server, and
+#                      the must-not-be-served paths are asked from the runner.
 #   EXPECTED_ENTRY     the hashed entry script of the build just deployed, e.g.
 #                      assets/index-C5tx8mVh.js from web/dist/index.html. Empty (checking without
 #                      a deploy): the page's <title> is checked instead.
@@ -55,7 +58,7 @@ check_with_hint() {
 # missing: configuration on the server, not this deploy, so it only warns. A channel is
 # deliberately not part of usable: Messaging with nothing connected is up and usable, which is the
 # correct state for a fresh deploy.
-check_with_hint "usable is false: the database is unreachable or the schema is missing. Check the DB_* values in api/.env and the migrations." \
+check_with_hint "usable is false: the database is unreachable or the schema is missing. Check the DB_* values in api/.env and the migrations; a console_* .database.reason means the name and username could not be had from Console (CONSOLE_API_URL / CONSOLE_DB_DETAILS_KEY) - run php bin/db-check.php in api/." \
   json "Messaging API (${target})" "${base}/api/health" \
   '.app == "Messaging"' \
   '.usable == true'
@@ -78,6 +81,7 @@ fi
 # SQL, tests, scripts or dependency manifests. Read-only GETs of the first 64 KB, never of a .php
 # file under tests/, bin/ or scripts/ (a GET would run it); a failure logs the status, type and
 # size of what was served, never its content. /.git/HEAD may instead get the SPA's own page.
+# Asked from the server only when VERIFY_SSH is set (the WAF graylists a runner asking for them).
 for path in /api/.env /api/.env.example /api/error_log \
   /api/database/migrations/001_messaging_channels.sql /api/tests/run.sh /api/bin/; do
   check absent "Messaging ${path} must not be served (${target})" "${base}${path}"
