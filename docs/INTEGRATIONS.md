@@ -198,7 +198,7 @@ GET  /api/v1/messages/stats               counts of what THIS product sent    ?c
 What a service key may do (G19#7, `server-php/src/ServicePolicy.php`):
 
 - **Routes:** only those listed for the product (the four above for
-  appointments, billing, books, sales, pos, reach, crm, advisor, voice; Helpdesk
+  appointments, billing, books, sales, pos, reach, crm, advisor, voice, secretarial; Helpdesk
   may read `GET v1/conversations` and `GET v1/conversations/{uuid}/messages`).
   Anything else is `403 service_route_not_allowed`.
 - **Environment:** `X-AIC-Environment` must equal the server's `AIC_ENVIRONMENT`
@@ -239,6 +239,18 @@ Configure inbound keys with `SERVICE_KEYS=app:key,app:key` — see
 `server-php/.env.example`. Create a company's appointment templates (as drafts, for
 an administrator to edit, submit and get approved) with
 `php bin/seed-appointment-templates.php --cmp=<id>` (add `--apply` to write).
+
+**Secretarial's notices** (statutory meeting notices, compliance reminders and
+escalations from its notification ledger — NOTIFY, LR-40) use the same four routes
+with Secretarial's own key and one template, `secretarial_notice`
+(`Domain/SecretarialTemplates`: `recipient_name`, `subject`, `summary`, `reference`,
+`sender_name`). Create it as a draft with
+`php bin/seed-secretarial-templates.php --cmp=<id>` (`--apply` to write), get it approved,
+and allow `secretarial` in the company's Messaging settings. Secretarial is not on the
+consent allow-list: it never records consent, so a director without Messaging-side consent
+is `suppressed`, which Secretarial records as failed. The shapes Secretarial reads are
+pinned by `tests/fixtures/secretarial/messaging-service-messages.v1.json` (the same file is
+in Secretarial's `server-php/tests/fixtures/notify/`), checked in `tests/service.php`.
 
 Reminder **timing** belongs to Appointments. The “Appointment nudge (manual)”
 journey is an agent-started one-off for one booking, not the reminder schedule.

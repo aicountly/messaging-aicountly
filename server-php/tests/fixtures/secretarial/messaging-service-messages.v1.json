@@ -1,0 +1,360 @@
+{
+  "contract": "messaging-aicountly POST/GET /api/v1/messages (published service contract)",
+  "receiver": "messaging-aicountly server-php/src/Controllers/ServiceController.php + Domain/ServiceDelivery",
+  "data_keys": [
+    "channel",
+    "conversation_uuid",
+    "delivered",
+    "delivered_at",
+    "delivery_state",
+    "failed_at",
+    "failure_code",
+    "failure_detail",
+    "kind",
+    "message_id",
+    "message_uuid",
+    "not_after",
+    "provider_accepted_at",
+    "provider_message_id",
+    "queued_at",
+    "reason",
+    "reason_code",
+    "reference",
+    "reference_label",
+    "scheduled_for",
+    "status",
+    "status_label",
+    "terminal"
+  ],
+  "cases": {
+    "send_queued": {
+      "status": 202,
+      "body": {
+        "data": {
+          "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "message_id": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "conversation_uuid": "0b7e1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d",
+          "status": "queued",
+          "status_label": "queued",
+          "delivery_state": "queued",
+          "reason_code": null,
+          "reason": null,
+          "delivered": false,
+          "terminal": false,
+          "channel": "whatsapp",
+          "kind": "compliance_reminder",
+          "reference": "ntf-3f2a9c0d1e4b5a6978c0d1e2",
+          "reference_label": "Reminder: MGT-7",
+          "scheduled_for": null,
+          "not_after": "2026-10-13T18:29:59Z",
+          "queued_at": "2026-10-11T04:30:00Z",
+          "provider_accepted_at": null,
+          "delivered_at": null,
+          "failed_at": null,
+          "provider_message_id": null,
+          "failure_code": null,
+          "failure_detail": null,
+          "outcome": "queued",
+          "detail": "Queued to send.",
+          "delivery_note": "Provider acceptance is not delivery."
+        },
+        "message": "Queued to send."
+      }
+    },
+    "send_sent": {
+      "status": 202,
+      "body": {
+        "data": {
+          "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "message_id": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "conversation_uuid": "0b7e1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d",
+          "status": "provider_accepted",
+          "status_label": "provider_accepted",
+          "delivery_state": "sent",
+          "reason_code": null,
+          "reason": null,
+          "delivered": false,
+          "terminal": false,
+          "channel": "whatsapp",
+          "kind": "compliance_reminder",
+          "reference": "ntf-3f2a9c0d1e4b5a6978c0d1e2",
+          "reference_label": "Reminder: MGT-7",
+          "scheduled_for": null,
+          "not_after": "2026-10-13T18:29:59Z",
+          "queued_at": "2026-10-11T04:30:00Z",
+          "provider_accepted_at": null,
+          "delivered_at": null,
+          "failed_at": null,
+          "provider_message_id": null,
+          "failure_code": null,
+          "failure_detail": null,
+          "outcome": "sent",
+          "detail": "Accepted by the provider.",
+          "delivery_note": "Provider acceptance is not delivery."
+        },
+        "message": "Accepted by the provider."
+      }
+    },
+    "send_unknown": {
+      "status": 202,
+      "body": {
+        "data": {
+          "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "message_id": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "conversation_uuid": "0b7e1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d",
+          "status": "submission_unknown",
+          "status_label": "submission_unknown",
+          "delivery_state": "unknown",
+          "reason_code": null,
+          "reason": "The provider did not answer in time.",
+          "delivered": false,
+          "terminal": false,
+          "channel": "whatsapp",
+          "kind": "compliance_reminder",
+          "reference": "ntf-3f2a9c0d1e4b5a6978c0d1e2",
+          "reference_label": "Reminder: MGT-7",
+          "scheduled_for": null,
+          "not_after": "2026-10-13T18:29:59Z",
+          "queued_at": "2026-10-11T04:30:00Z",
+          "provider_accepted_at": null,
+          "delivered_at": null,
+          "failed_at": null,
+          "provider_message_id": null,
+          "failure_code": null,
+          "failure_detail": null,
+          "outcome": "unknown",
+          "detail": "Outcome unknown.",
+          "delivery_note": "Provider acceptance is not delivery."
+        },
+        "message": "Outcome unknown."
+      }
+    },
+    "status_delivered": {
+      "status": 200,
+      "body": {
+        "data": {
+          "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "message_id": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "conversation_uuid": "0b7e1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d",
+          "status": "delivered",
+          "status_label": "delivered",
+          "delivery_state": "delivered",
+          "reason_code": null,
+          "reason": null,
+          "delivered": true,
+          "terminal": true,
+          "channel": "whatsapp",
+          "kind": "compliance_reminder",
+          "reference": "ntf-3f2a9c0d1e4b5a6978c0d1e2",
+          "reference_label": "Reminder: MGT-7",
+          "scheduled_for": null,
+          "not_after": "2026-10-13T18:29:59Z",
+          "queued_at": "2026-10-11T04:30:00Z",
+          "provider_accepted_at": null,
+          "delivered_at": null,
+          "failed_at": null,
+          "provider_message_id": null,
+          "failure_code": null,
+          "failure_detail": null,
+          "events": [
+            {
+              "event_type": "delivered",
+              "error_code": null,
+              "error_detail": null,
+              "occurred_at": "2026-10-11T04:31:10Z",
+              "received_at": "2026-10-11T04:31:12Z"
+            }
+          ]
+        }
+      }
+    },
+    "send_failed": {
+      "status": 502,
+      "body": {
+        "data": {
+          "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "message_id": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "conversation_uuid": "0b7e1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d",
+          "status": "failed",
+          "status_label": "failed",
+          "delivery_state": "failed",
+          "reason_code": "provider_rejected",
+          "reason": "Provider rejected the template.",
+          "delivered": false,
+          "terminal": true,
+          "channel": "whatsapp",
+          "kind": "compliance_reminder",
+          "reference": "ntf-3f2a9c0d1e4b5a6978c0d1e2",
+          "reference_label": "Reminder: MGT-7",
+          "scheduled_for": null,
+          "not_after": "2026-10-13T18:29:59Z",
+          "queued_at": "2026-10-11T04:30:00Z",
+          "provider_accepted_at": null,
+          "delivered_at": null,
+          "failed_at": null,
+          "provider_message_id": null,
+          "failure_code": null,
+          "failure_detail": null,
+          "outcome": "failed",
+          "detail": "Provider rejected the template.",
+          "delivery_note": "Provider acceptance is not delivery."
+        },
+        "message": "Provider rejected the template.",
+        "error": {
+          "code": "send_failed",
+          "message": "Provider rejected the template.",
+          "details": {
+            "retryable": false,
+            "delivery_state": "failed",
+            "reason_code": "provider_rejected",
+            "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f"
+          }
+        }
+      }
+    },
+    "consent_refused": {
+      "status": 422,
+      "body": {
+        "error": {
+          "code": "no_consent",
+          "message": "No consent is recorded for this number.",
+          "details": {
+            "retryable": false,
+            "customer_decision": true,
+            "purpose": "transactional",
+            "delivery_state": "suppressed",
+            "reason_code": "no_consent",
+            "consent_recorded": null
+          }
+        },
+        "message": "No consent is recorded for this number.",
+        "data": {
+          "message_uuid": null,
+          "delivery_state": "suppressed",
+          "reason_code": "no_consent",
+          "reason": "No consent is recorded for this number.",
+          "terminal": true
+        }
+      }
+    },
+    "template_not_approved": {
+      "status": 422,
+      "body": {
+        "error": {
+          "code": "template_not_approved",
+          "message": "The template \"secretarial_notice\" has no provider-approved version in en.",
+          "details": {
+            "retryable": false
+          }
+        },
+        "message": "The template \"secretarial_notice\" has no provider-approved version in en."
+      }
+    },
+    "template_missing": {
+      "status": 404,
+      "body": {
+        "error": {
+          "code": "template_missing",
+          "message": "No template named \"secretarial_notice\" exists on the whatsapp channel for this company.",
+          "details": {
+            "retryable": false
+          }
+        },
+        "message": "No template named \"secretarial_notice\" exists."
+      }
+    },
+    "company_not_bound": {
+      "status": 403,
+      "body": {
+        "error": {
+          "code": "service_company_not_bound",
+          "message": "This company has not allowed secretarial to send through Messaging.",
+          "details": {}
+        },
+        "message": "This company has not allowed secretarial to send through Messaging."
+      }
+    },
+    "environment_mismatch": {
+      "status": 401,
+      "body": {
+        "error": {
+          "code": "service_environment_mismatch",
+          "message": "X-AIC-Environment does not match this server.",
+          "details": {}
+        },
+        "message": "X-AIC-Environment does not match this server."
+      }
+    },
+    "cancelled": {
+      "status": 200,
+      "body": {
+        "data": {
+          "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "message_id": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "conversation_uuid": "0b7e1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d",
+          "status": "cancelled",
+          "status_label": "cancelled",
+          "delivery_state": "cancelled",
+          "reason_code": "cancelled",
+          "reason": "Withdrawn by Secretarial.",
+          "delivered": false,
+          "terminal": true,
+          "channel": "whatsapp",
+          "kind": "compliance_reminder",
+          "reference": "ntf-3f2a9c0d1e4b5a6978c0d1e2",
+          "reference_label": "Reminder: MGT-7",
+          "scheduled_for": null,
+          "not_after": "2026-10-13T18:29:59Z",
+          "queued_at": "2026-10-11T04:30:00Z",
+          "provider_accepted_at": null,
+          "delivered_at": null,
+          "failed_at": null,
+          "provider_message_id": null,
+          "failure_code": null,
+          "failure_detail": null,
+          "cancelled": true
+        }
+      }
+    },
+    "already_dispatched": {
+      "status": 409,
+      "body": {
+        "error": {
+          "code": "already_dispatched",
+          "message": "The provider already holds this message (or it is already finished), so it cannot be withdrawn.",
+          "details": {
+            "retryable": false,
+            "delivery_state": "sent"
+          }
+        },
+        "data": {
+          "message_uuid": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "message_id": "6f1c2b8e-1d2a-4c3b-9e8f-0a1b2c3d4e5f",
+          "conversation_uuid": "0b7e1c2d-3e4f-4a5b-8c9d-0e1f2a3b4c5d",
+          "status": "provider_accepted",
+          "status_label": "provider_accepted",
+          "delivery_state": "sent",
+          "reason_code": null,
+          "reason": null,
+          "delivered": false,
+          "terminal": false,
+          "channel": "whatsapp",
+          "kind": "compliance_reminder",
+          "reference": "ntf-3f2a9c0d1e4b5a6978c0d1e2",
+          "reference_label": "Reminder: MGT-7",
+          "scheduled_for": null,
+          "not_after": "2026-10-13T18:29:59Z",
+          "queued_at": "2026-10-11T04:30:00Z",
+          "provider_accepted_at": null,
+          "delivered_at": null,
+          "failed_at": null,
+          "provider_message_id": null,
+          "failure_code": null,
+          "failure_detail": null,
+          "cancelled": false
+        },
+        "message": "The message could not be withdrawn."
+      }
+    }
+  }
+}
