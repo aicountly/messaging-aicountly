@@ -16,8 +16,19 @@ use Aicountly\Api\Env;
  * Messaging's AI runs through AI Pulse and resolves no model key — see
  * Ai/AiClient. What is resolved here is a WhatsApp, Twilio or RCS secret. It
  * goes through Console's credential endpoint (`GET /ai/credentials/resolve`,
- * domain `messaging`, module `channel:<name>`) because that is where Console
- * keeps a product's named secrets.
+ * module `channel:<name>`) because that is where Console keeps a product's
+ * named secrets.
+ *
+ * ## Messaging's own identity (E8-PUL F104)
+ *
+ * The domain is Messaging's real hostname — messaging.aicountly.com in
+ * production, messaging.gh.aicountly.com in sandbox/local, or
+ * MESSAGING_CONSOLE_DOMAIN when set — never the slug `messaging`, which Console
+ * answers 404 unknown_domain. The key is Messaging's own Console AI service
+ * identity key, CONSOLE_AI_SERVICE_KEY (minted in Console with
+ * `scripts/ai_service_identity.php mint messaging|messaging-sandbox`, which own
+ * those domains since Console migration 061). The estate CONSOLE_SERVICE_KEY is
+ * not used: Console refuses it for every *.aicountly.com domain.
  *
  * Once Messaging's domain is switched to "Using AI Pulse" in Console, Console
  * answers that endpoint with 409 for every module not marked
@@ -43,7 +54,28 @@ final class ConsoleSecrets
 
     public static function isConfigured(): bool
     {
-        return self::baseUrl() !== '' && Env::get('CONSOLE_SERVICE_KEY') !== '';
+        return self::baseUrl() !== '' && self::serviceKey() !== '' && self::domain() !== '';
+    }
+
+    /** Messaging's own Console identity key (F104); never the estate CONSOLE_SERVICE_KEY. */
+    private static function serviceKey(): string
+    {
+        return trim(Env::get('CONSOLE_AI_SERVICE_KEY'));
+    }
+
+    /** The hostname Console knows Messaging by, from configuration only — never the request's Host. */
+    public static function domain(): string
+    {
+        $configured = strtolower(trim(Env::get('MESSAGING_CONSOLE_DOMAIN')));
+        if ($configured !== '') {
+            return $configured;
+        }
+
+        return match (\Aicountly\Api\Environment::siblingTier()) {
+            'production' => 'messaging.aicountly.com',
+            'sandbox'    => 'messaging.gh.aicountly.com',
+            default      => '',
+        };
     }
 
     /** The secret Console holds under `channel:<name>`, or '' when it has none (or will not say). */
@@ -92,7 +124,7 @@ final class ConsoleSecrets
     /** @return array<string, mixed>|null the decoded `data` envelope */
     private static function fetch(string $module): ?array
     {
-        $url = self::baseUrl() . '/ai/credentials/resolve?domain=' . rawurlencode('messaging')
+        $url = self::baseUrl() . '/ai/credentials/resolve?domain=' . rawurlencode(self::domain())
             . '&module=' . rawurlencode($module);
 
         $ch = curl_init($url);
@@ -101,7 +133,7 @@ final class ConsoleSecrets
         }
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . Env::get('CONSOLE_SERVICE_KEY')],
+            CURLOPT_HTTPHEADER     => ['Authorization: Bearer ' . self::serviceKey()],
             CURLOPT_TIMEOUT        => self::TIMEOUT,
             CURLOPT_CONNECTTIMEOUT => 2,
         ]);
