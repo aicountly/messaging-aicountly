@@ -115,7 +115,7 @@ function service(Router $router, string $method, string $path, ?array $body, ?st
     $_SERVER['REQUEST_METHOD'] = $method;
     $_SERVER['HTTP_X_SERVICE_KEY'] = $app;
     // A service call names the environment it is for, and it must be this one (G19#7).
-    $_SERVER['HTTP_X_AIC_ENVIRONMENT'] = 'local';
+    $_SERVER['HTTP_X_AIC_ENVIRONMENT'] = $GLOBALS['serviceEnvironment'] ?? 'local';
     $_GET = $query;
     Http::setBodyForTesting($body);
     if ($key === null) {
@@ -377,6 +377,27 @@ check('no cmp_id is a 400 context_required (and cmp_id in the BODY is enough)', 
     assertSame(400, $response['status'], 'a company is required');
     assertSame('context_required', $response['body']['error']['code'] ?? null, 'named');
     fixture('context_required', $body, $response);
+});
+
+check('a call naming another deployment is 401 service_environment_mismatch (E8-PAY F024)', static function () use ($router): void {
+    $body = notice('+919000000015');
+    $GLOBALS['serviceEnvironment'] = 'production';
+    try {
+        $response = service($router, 'POST', 'v1/messages', $body, idem('t-env'));
+    } finally {
+        unset($GLOBALS['serviceEnvironment']);
+    }
+    assertSame(401, $response['status'], 'refused');
+    assertSame('service_environment_mismatch', $response['body']['error']['code'] ?? null, 'named');
+    fixture('environment_mismatch', $body, $response);
+});
+
+check('a company that has not allowed Appointments is 403 service_company_not_bound, whoever asks (E8-PAY F024)', static function () use ($router): void {
+    $body = notice('+919000000016', ['cmp_id' => 9399]);
+    $response = service($router, 'POST', 'v1/messages', $body, idem('t-unbound'));
+    assertSame(403, $response['status'], 'refused');
+    assertSame('service_company_not_bound', $response['body']['error']['code'] ?? null, 'named');
+    fixture('service_company_not_bound', $body, $response);
 });
 
 check('a local-format phone number is refused invalid_address, never guessed', static function () use ($router, $adapter): void {
