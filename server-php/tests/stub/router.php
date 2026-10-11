@@ -523,8 +523,11 @@ if ($path === '/api/ai/v1/generate' && ($_SERVER['REQUEST_METHOD'] ?? 'GET') ===
 // ---------------------------------------------------------------------------
 
 if ($path === '/api/ai/credentials/resolve') {
-    if (header_value('Authorization') !== 'Bearer test-console-service-key-0123456789') {
+    if (header_value('Authorization') !== 'Bearer test-console-ai-service-key-messaging-0123') {
         send(401, ['status' => 0, 'message' => 'Unauthorised.']);
+    }
+    if (!in_array((string) ($query['domain'] ?? ''), ['messaging.aicountly.com', 'messaging.gh.aicountly.com'], true)) {
+        send(404, ['status' => 0, 'code' => 'unknown_domain', 'message' => 'Unknown or disabled domain.']);
     }
     $module = (string) ($query['module'] ?? '');
     if (!str_starts_with($module, 'channel:')) {

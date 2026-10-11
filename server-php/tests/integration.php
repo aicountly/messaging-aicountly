@@ -2001,7 +2001,7 @@ check('with suggestions switched off, the narration never asks AI Pulse anything
 check('a channel secret kept in Console still resolves — channels are not AI', static function (): void {
     reset();
     putenv('CONSOLE_API_URL=' . Env::get('MANAGE_API_BASE'));
-    putenv('CONSOLE_SERVICE_KEY=test-console-service-key-0123456789');
+    putenv('CONSOLE_AI_SERVICE_KEY=test-console-ai-service-key-messaging-0123');
 
     try {
         connection();
@@ -2013,9 +2013,18 @@ check('a channel secret kept in Console still resolves — channels are not AI',
         assertSame('stub-secret-for-wa_main', ChannelConnection::find(CMP, CONNECTION)->credential(),
             'a console:<name> credential is resolved from Console at the moment of use');
         assertSame('', ConsoleSecrets::get(''), 'and an empty name resolves nothing');
+        assertSame('messaging.gh.aicountly.com', ConsoleSecrets::domain(), 'a local server asks for the sandbox hostname, never the slug "messaging" (F104)');
+
+        // The estate key alone no longer configures it (Console refuses it for *.aicountly.com).
+        ConsoleSecrets::forgetForTesting();
+        putenv('CONSOLE_AI_SERVICE_KEY');
+        putenv('CONSOLE_SERVICE_KEY=test-console-service-key-0123456789');
+        assertFalse(ConsoleSecrets::isConfigured(), 'CONSOLE_SERVICE_KEY alone does not configure Console secrets');
+        assertSame('', ConsoleSecrets::get('wa_main'), 'and nothing is resolved with it');
     } finally {
         putenv('CONSOLE_API_URL');
         putenv('CONSOLE_SERVICE_KEY');
+        putenv('CONSOLE_AI_SERVICE_KEY');
     }
 });
 
