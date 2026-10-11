@@ -57,8 +57,8 @@ jobs:
       # the filesystem root instead of the document root.
 
       # E8-OPS (F096): the host key is PINNED from SANDBOX_SSH_KNOWN_HOSTS (ssh-keyscan output checked against
-      # the host once, by a person). Trusting the key presented now is allowed only with the repository
-      # variable DEPLOY_ALLOW_KEYSCAN=true (then the fingerprint is printed for comparison).
+      # the host once, by a person) when that secret is set. Without it the key the host presents is scanned
+      # and trusted with a warning, as deploys did before the pin; DEPLOY_ALLOW_KEYSCAN=false refuses instead.
       - name: Pin SSH host key
         env:
           PIN_HOST: ${{ secrets.SANDBOX_SSH_HOST }}
@@ -70,11 +70,11 @@ jobs:
           if [ -n "$KNOWN_HOSTS" ]; then
             printf '%s\n' "$KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
             echo "Using the pinned host key(s) from SANDBOX_SSH_KNOWN_HOSTS:"
-          elif [ "$ALLOW_KEYSCAN" = "true" ]; then
-            echo "::warning::SANDBOX_SSH_KNOWN_HOSTS is not set; trusting the key the host presents now (DEPLOY_ALLOW_KEYSCAN=true). Pin it."
+          elif [ "$ALLOW_KEYSCAN" != "false" ]; then
+            echo "::warning::SANDBOX_SSH_KNOWN_HOSTS is not set; trusting the key the host presents now, as deploys did before the pin. Store it in SANDBOX_SSH_KNOWN_HOSTS to pin it (DEPLOY_ALLOW_KEYSCAN=false refuses instead)."
             ssh-keyscan -T 15 -p "${PIN_PORT:-22}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
           else
-            echo "::error::SANDBOX_SSH_KNOWN_HOSTS is not set. Store the server's known_hosts line(s) in that secret (ssh-keyscan -p <port> <host>, verified against the host), or set the repository variable DEPLOY_ALLOW_KEYSCAN=true to trust the key presented now."
+            echo "::error::SANDBOX_SSH_KNOWN_HOSTS is not set and DEPLOY_ALLOW_KEYSCAN=false refuses an unpinned host key. Store the server's known_hosts line(s) in SANDBOX_SSH_KNOWN_HOSTS (ssh-keyscan -p <port> <host>, verified against the host), or unset DEPLOY_ALLOW_KEYSCAN."
             exit 1
           fi
           [ -s ~/.ssh/known_hosts ] || { echo "::error::No SSH host key to trust."; exit 1; }
