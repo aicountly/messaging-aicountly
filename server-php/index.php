@@ -238,7 +238,16 @@ if ($path === 'session') {
         send_json(401, ['message' => 'Missing bearer session key.']);
     }
 
-    $session = Portal::validateSesKey($sesKey);
+    $checked = Portal::checkSesKey($sesKey);
+    if ($checked['state'] === 'unavailable') {
+        // The portal could not say. Not a sign-out: 503 + Retry-After (E8-ID / MY-AW-04).
+        header('Retry-After: ' . max(1, (int) $checked['retry_after']));
+        send_json(503, [
+            'error'   => ['code' => 'auth_unavailable', 'message' => 'Sign-in could not be checked right now. Please retry in a moment.'],
+            'message' => 'Sign-in could not be checked right now. Please retry in a moment.',
+        ]);
+    }
+    $session = $checked['session'];
     if ($session === null) {
         send_json(401, ['message' => 'Invalid or expired session.']);
     }

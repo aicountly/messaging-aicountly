@@ -25,6 +25,14 @@ final class Portal
     private const CONNECT_TIMEOUT_SECONDS = 8;
     private const REQUEST_TIMEOUT_SECONDS = 15;
 
+    /**
+     * validatesession runs in front of EVERY authenticated request: a portal that is up but not
+     * answering must not hold each of them for 15 s (E8-ID). 2 s to connect, 6 s in all; past that
+     * the answer is "unavailable" (503 + Retry-After), never a sign-out.
+     */
+    private const VALIDATE_CONNECT_TIMEOUT_SECONDS = 2;
+    private const VALIDATE_TIMEOUT_SECONDS = 6;
+
     public static function base(): string
     {
         return rtrim(Env::get('PORTAL_AUTH_BASE', self::DEFAULT_AUTH_BASE), '/');
@@ -36,7 +44,7 @@ final class Portal
      * @param array<int, string> $headers
      * @return array{status: int, body: string, contentType: string}
      */
-    public static function forward(string $method, string $path, array $headers, string $body): array
+    public static function forward(string $method, string $path, array $headers, string $body, int $connectTimeout = self::CONNECT_TIMEOUT_SECONDS, int $timeout = self::REQUEST_TIMEOUT_SECONDS): array
     {
         $url = self::base() . '/api/' . ltrim($path, '/');
 
@@ -49,8 +57,8 @@ final class Portal
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CUSTOMREQUEST => strtoupper($method),
             CURLOPT_HTTPHEADER => $headers,
-            CURLOPT_CONNECTTIMEOUT => self::CONNECT_TIMEOUT_SECONDS,
-            CURLOPT_TIMEOUT => self::REQUEST_TIMEOUT_SECONDS,
+            CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+            CURLOPT_TIMEOUT => $timeout,
             CURLOPT_HEADER => false,
         ];
 
@@ -80,30 +88,59 @@ final class Portal
     }
 
     /**
-     * Validate a Bearer ses_key.
+     * Ask my.aicountly whether a Bearer ses_key is live — and say WHICH kind of "no" it is
+     * (E8-ID, the fleet's tri-state as Purchases, Contacts and Appointments classify it).
      *
-     * The portal answers with `status: 1` and the caller's uuid when the key is
-     * live. Anything else — a transport failure included — is treated as "not
-     * authenticated", so a portal outage denies access rather than granting it.
+     *   valid        200 {status: 1, uuid_aictly, ...}: the session.
+     *   invalid      the portal's own 401 (or 403), or a 200 that says status != 1: this token is
+     *                not a session. Sign in again.
+     *   unavailable  anything else — a 503, a bare 500, a gateway timeout, no answer, an answer
+     *                that is not JSON: the portal could not say. That is not a statement about the
+     *                token; answering 401 would have the SPA discard a good one. The caller answers
+     *                503 + Retry-After instead. Nothing is granted either way, and nothing is cached.
+     *
+     * @return array{state: 'valid'|'invalid'|'unavailable', session: ?array<string, mixed>, retry_after: int}
+     */
+    public static function checkSesKey(string $sesKey): array
+    {
+        if (trim($sesKey) === '') {
+            return ['state' => 'invalid', 'session' => null, 'retry_after' => 5];
+        }
+
+        $result = self::forward('POST', 'validatesession', [
+            'Authorization: Bearer ' . $sesKey,
+            'Content-Type: application/json',
+        ], '', self::VALIDATE_CONNECT_TIMEOUT_SECONDS, self::VALIDATE_TIMEOUT_SECONDS);
+
+        $retry = max(1, min(60, (int) ($result['retryAfter'] ?? 0) ?: 5));
+        $status = (int) $result['status'];
+
+        if (in_array($status, [401, 403], true)) {
+            return ['state' => 'invalid', 'session' => null, 'retry_after' => $retry];
+        }
+        if ($status !== 200 || (string) $result['body'] === '') {
+            return ['state' => 'unavailable', 'session' => null, 'retry_after' => $retry];
+        }
+
+        $data = json_decode((string) $result['body'], true);
+        if (!is_array($data) || !array_key_exists('status', $data)) {
+            return ['state' => 'unavailable', 'session' => null, 'retry_after' => $retry];
+        }
+        if ((int) $data['status'] !== 1) {
+            return ['state' => 'invalid', 'session' => null, 'retry_after' => $retry];
+        }
+
+        return ['state' => 'valid', 'session' => $data, 'retry_after' => $retry];
+    }
+
+    /**
+     * The session, or null when there is none — for a caller that does not need to tell a refusal
+     * from an outage (a command-line script). Request authentication uses checkSesKey().
      *
      * @return array<string, mixed>|null
      */
     public static function validateSesKey(string $sesKey): ?array
     {
-        $result = self::forward('POST', 'validatesession', [
-            'Authorization: Bearer ' . $sesKey,
-            'Content-Type: application/json',
-        ], '');
-
-        if ($result['status'] !== 200 || $result['body'] === '') {
-            return null;
-        }
-
-        $data = json_decode($result['body'], true);
-        if (!is_array($data) || (int) ($data['status'] ?? 0) !== 1) {
-            return null;
-        }
-
-        return $data;
+        return self::checkSesKey($sesKey)['session'];
     }
 }
