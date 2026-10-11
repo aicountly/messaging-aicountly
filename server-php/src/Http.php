@@ -91,6 +91,23 @@ final class Http
         self::error(403, 'forbidden', $message);
     }
 
+    /**
+     * my.aicountly could not say whether the session is live (down, slow, 5xx, unreadable). Not
+     * "sign in again": 503 + Retry-After, so the SPA keeps the session and the person's work and
+     * retries (E8-ID; the fleet's MNY-18 rule).
+     */
+    public static function authUnavailable(int $retryAfter = 5): never
+    {
+        if (PHP_SAPI !== 'cli' && !headers_sent()) {
+            header('Retry-After: ' . max(1, $retryAfter));
+        }
+        $message = 'Sign-in could not be checked right now. Please retry in a moment.';
+        self::json(503, [
+            'error'   => ['code' => 'auth_unavailable', 'message' => $message, 'details' => ['retryable' => true, 'retry_after' => max(1, $retryAfter)]],
+            'message' => $message,
+        ]);
+    }
+
     public static function unauthorized(string $message = 'Sign in again to continue.'): never
     {
         self::error(401, 'unauthorized', $message);

@@ -140,7 +140,13 @@ final class Auth
             return null;
         }
 
-        $session = Portal::validateSesKey($sesKey);
+        $checked = Portal::checkSesKey($sesKey);
+        if ($checked['state'] === 'unavailable') {
+            // my.aicountly could not say (down, slow, 5xx, unreadable): not "sign in again" —
+            // 503 + Retry-After, so the SPA keeps the session and retries (E8-ID / MY-AW-04).
+            Http::authUnavailable($checked['retry_after']);
+        }
+        $session = $checked['session'];
         if ($session === null) {
             return null;
         }
@@ -175,7 +181,13 @@ final class Auth
             return new self('service:' . $app, 'service', $app, '', null, $claimed !== '' ? $claimed : null);
         }
 
-        $session = Portal::validateSesKey($sesKey);
+        $checked = Portal::checkSesKey($sesKey);
+        if ($checked['state'] === 'unavailable') {
+            // my.aicountly could not say (down, slow, 5xx, unreadable): not "sign in again" —
+            // 503 + Retry-After, so the SPA keeps the session and retries (E8-ID / MY-AW-04).
+            Http::authUnavailable($checked['retry_after']);
+        }
+        $session = $checked['session'];
         if ($session === null) {
             return null;
         }
