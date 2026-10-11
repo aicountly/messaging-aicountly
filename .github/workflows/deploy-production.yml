@@ -13,6 +13,11 @@ name: Deploy to cPanel Production
 
 on:
   workflow_dispatch:
+    inputs:
+      run_ci_gate:
+        description: Run the GitHub test gate before deploying (off = the suite was run locally before merge)
+        type: boolean
+        default: false
 
 # Never let two deploys to the same target overlap.
 concurrency:
@@ -24,11 +29,15 @@ permissions:
 
 jobs:
   # E8-OPS (F109): the repository's suites (tests.yml) gate the deploy.
+  # Off by default (tests run locally before merge, to save Actions minutes): tick the
+  # run_ci_gate input when starting the deploy to run the suite here first.
   verify:
+    if: ${{ inputs.run_ci_gate }}
     uses: ./.github/workflows/tests.yml
 
   deploy:
     needs: verify
+    if: ${{ !cancelled() && !failure() }}
     name: Build and deploy to Production
     runs-on: ubuntu-latest
     # E8-OPS (F096/F378): a protected GitHub environment — required reviewers and the deployment-branch
