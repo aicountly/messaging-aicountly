@@ -63,6 +63,11 @@ check_with_hint "usable is false: the database is unreachable or the schema is m
   '.app == "Messaging"' \
   '.usable == true'
 
+# E8-OPS (F378): in production an unusable API fails the deploy instead of warning.
+if [ "$target" = production ]; then
+  check json "Messaging API usable (production: fatal)" "${base}/api/health" '.app == "Messaging" and .usable == true'
+fi
+
 # The server says it is the environment this workflow deployed to (fatal). Sibling hosts — the
 # Manage tenant check included, and every CLI worker's — follow AIC_ENVIRONMENT in api/.env and
 # never a Host header, so a sandbox .env copied from the production template would talk to

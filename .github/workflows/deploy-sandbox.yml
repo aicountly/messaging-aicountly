@@ -23,9 +23,19 @@ permissions:
   contents: read
 
 jobs:
+  # E8-OPS (F109): the repository's suites (tests.yml) gate the deploy.
+  verify:
+    uses: ./.github/workflows/tests.yml
+
   deploy:
+    needs: verify
     name: Build and deploy to Sandbox
     runs-on: ubuntu-latest
+    # E8-OPS (F096/F378): a protected GitHub environment — required reviewers and the deployment-branch
+    # rule are set in Settings > Environments > sandbox (an operator step).
+    environment:
+      name: sandbox
+      url: https://messaging.gh.aicountly.com
     timeout-minutes: 15
 
     steps:
@@ -36,6 +46,32 @@ jobs:
       # configured. Without this an unset secret would silently expand to an
       # empty string, and `rsync --delete` against "user@host:/" would target
       # the filesystem root instead of the document root.
+
+      # E8-OPS (F096): the host key is PINNED from SANDBOX_SSH_KNOWN_HOSTS (ssh-keyscan output checked against
+      # the host once, by a person). Trusting the key presented now is allowed only with the repository
+      # variable DEPLOY_ALLOW_KEYSCAN=true (then the fingerprint is printed for comparison).
+      - name: Pin SSH host key
+        env:
+          PIN_HOST: ${{ secrets.SANDBOX_SSH_HOST }}
+          PIN_PORT: ${{ secrets.SANDBOX_SSH_PORT }}
+          KNOWN_HOSTS: ${{ secrets.SANDBOX_SSH_KNOWN_HOSTS }}
+          ALLOW_KEYSCAN: ${{ vars.DEPLOY_ALLOW_KEYSCAN }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          if [ -n "$KNOWN_HOSTS" ]; then
+            printf '%s\n' "$KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
+            echo "Using the pinned host key(s) from SANDBOX_SSH_KNOWN_HOSTS:"
+          elif [ "$ALLOW_KEYSCAN" = "true" ]; then
+            echo "::warning::SANDBOX_SSH_KNOWN_HOSTS is not set; trusting the key the host presents now (DEPLOY_ALLOW_KEYSCAN=true). Pin it."
+            ssh-keyscan -T 15 -p "${PIN_PORT:-22}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
+          else
+            echo "::error::SANDBOX_SSH_KNOWN_HOSTS is not set. Store the server's known_hosts line(s) in that secret (ssh-keyscan -p <port> <host>, verified against the host), or set the repository variable DEPLOY_ALLOW_KEYSCAN=true to trust the key presented now."
+            exit 1
+          fi
+          [ -s ~/.ssh/known_hosts ] || { echo "::error::No SSH host key to trust."; exit 1; }
+          chmod 600 ~/.ssh/known_hosts
+          ssh-keygen -l -f ~/.ssh/known_hosts | sed 's/^/    /'
+
       - name: Validate deployment configuration
         env:
           SSH_HOST: ${{ secrets.SANDBOX_SSH_HOST }}
@@ -166,11 +202,7 @@ jobs:
 
           # Pin the host key so deploys fail closed rather than trusting
           # whatever answers on that address.
-          if ! ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/tmp/keyscan.err; then
-            echo "::error::ssh-keyscan could not reach the host on the configured port."
-            sed 's/^/    /' /tmp/keyscan.err
-            exit 1
-          fi
+          # E8-OPS (F096): unverified ssh-keyscan removed; the key was pinned in "Pin SSH host key".
           if [ ! -s ~/.ssh/known_hosts ]; then
             echo "::error::The host returned no SSH host key. Check SANDBOX_SSH_HOST and SANDBOX_SSH_PORT."
             exit 1
@@ -197,6 +229,7 @@ jobs:
 
       # Authenticate before touching the document root, so a key problem is
       # reported as a key problem rather than as an rsync exit code.
+
       - name: Verify SSH authentication
         run: |
           if ssh deploy-target 'echo connected' > /tmp/ssh.out 2>/tmp/ssh.err; then
@@ -334,6 +367,7 @@ jobs:
       # deploy — the first breaks quietly for users, the second breaks loudly
       # for us. The one expected failure is a very first deploy, where
       # api/.env does not exist yet; create it and re-run.
+
       - name: Apply database migrations
         env:
           REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
@@ -378,6 +412,7 @@ jobs:
       # The paths that must never be served (api/.env, error_log, SQL, tests,
       # bin, .git) are asked from the server only: the host's WAF graylists a
       # runner that asks for them, and the graylist drops SSH.
+
       - name: Verify the live app
         env:
           VERIFY_SSH: ssh deploy-target
