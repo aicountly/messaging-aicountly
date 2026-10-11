@@ -1,0 +1,80 @@
+name: Tests
+
+# E8-OPS (F109): the repository's own suites as a gate. Manual (workflow_dispatch) or called by the
+# deploy workflows (workflow_call, job `verify`), whose deploy job `needs:` it — a red suite stops a
+# production or sandbox deploy. Never deploys, never reads a deployment secret, never calls a live
+# service: PostgreSQL is the job's own throwaway service container and every sibling product is a
+# local stub.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  php:
+    name: server-php (syntax + suite on PostgreSQL 16)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: messaging_test
+          POSTGRES_PASSWORD: messaging_test
+          POSTGRES_DB: messaging_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U messaging_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, curl, pdo_pgsql, sodium, intl
+          coverage: none
+
+      - name: PHP syntax check
+        working-directory: server-php
+        run: |
+          set -euo pipefail
+          find . -name '*.php' -not -path '*/vendor/*' -print0 | xargs -0 -n1 -P4 php -l > /tmp/lint.log
+          ! grep -v '^No syntax errors detected' /tmp/lint.log
+
+      - name: Suite (server-php/tests/run.sh — throwaway database, local stubs)
+        env:
+          TEST_DB_HOST: 127.0.0.1
+          TEST_DB_PORT: "5432"
+          TEST_DB_NAME: messaging_test
+          TEST_DB_USER: messaging_test
+          TEST_DB_PASS: messaging_test
+        run: bash server-php/tests/run.sh
+
+  web:
+    name: web (typecheck, test:ui)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: npm run typecheck
+        run: npm run typecheck
+
+      - name: npm run test:ui
+        run: npm run test:ui

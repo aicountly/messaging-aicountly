@@ -23,7 +23,12 @@ permissions:
   contents: read
 
 jobs:
+  # E8-OPS (F109): the repository's suites (tests.yml) gate the deploy.
+  verify:
+    uses: ./.github/workflows/tests.yml
+
   deploy:
+    needs: verify
     name: Build and deploy to Sandbox
     runs-on: ubuntu-latest
     # E8-OPS (F096/F378): a protected GitHub environment — required reviewers and the deployment-branch
