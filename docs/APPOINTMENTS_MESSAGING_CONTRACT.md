@@ -38,6 +38,12 @@ Lobby).
   comes back on) it records the moment. Every notice still scheduled for a time
   before it is recorded `expired` — “Its time passed before client messaging was
   switched on” — never sent late. Notices due after it are untouched.
+* **Messaging must allow Appointments for each company.** A notice is sent with
+  nobody signed in, so Messaging accepts it only for a company bound to Appointments:
+  a Messaging administrator (`messaging.access.manage`) allows Appointments under
+  Settings → service products, or ops list the company in
+  `SERVICE_KEY_COMPANIES=appointments:<cmp_id>[|…]`. Otherwise every notice for it is
+  `403 service_company_not_bound` (§11).
 * The checklist that turns it on is `docs/MESSAGING_ACTIVATION_CHECKLIST.md`
   (Appointments).
 
@@ -48,6 +54,7 @@ Lobby).
 | Header | |
 | --- | --- |
 | `X-Service-Key` | Appointments' key. Messaging maps it to the product `appointments` (`SERVICE_KEYS=appointments:<key>`); the message's `origin` and `service_app` come from the key, never the body |
+| `X-AIC-Environment` | required: the deployment this call is for (`production` / `sandbox` / `local`). It must equal Messaging's own `AIC_ENVIRONMENT` (or `APP_ENV`), or the call is `401 service_environment_mismatch` |
 | `Idempotency-Key` | required, §9 |
 | `Content-Type: application/json` | |
 
@@ -294,7 +301,9 @@ must be present and recognised, or the answer is “no usable answer” (retry).
 | 422 | — (`invalid_address`, `validation_failed`, `variables_missing`, `email_not_enabled`, `unknown_channel`) | the request is wrong (`error.details.retryable:false`) | `failed` |
 | 422/404 | — (`template_not_approved`, `template_missing`, `channel_not_configured`; `retryable:true`) | an administrator can fix it | retry, counts |
 | 400 | — (`context_required`) | Appointments bug/config | retry, counts |
-| 401/403 | — | the key is refused | retry, counts |
+| 401 | — (`service_environment_mismatch`) | the call named another deployment (or none): the two `AIC_ENVIRONMENT` / `APP_ENV` values differ | retry, counts |
+| 401 | — (`unauthorized`) | the key is refused | retry, counts |
+| 403 | — (`service_company_not_bound`) | this company has not allowed Appointments in Messaging (§2): a Messaging administrator allows it | retry, counts |
 | 429 / 5xx / 409 `in_progress` / no HTTP answer / unreadable body | — | no usable answer | retry, same key |
 
 When a message row exists the error body **also** carries `data.message_uuid`
@@ -406,7 +415,7 @@ companies keep their rules (their `email` step is recorded `not_sent`).
   `tests/fixtures/service-api/*.json` — one exchange per scenario (accepted, queued,
   unknown, failed, no_consent, consent_pending, withdrawn, suppressed, expired,
   template_not_approved, invalid_address, email_not_enabled, rate_limited,
-  context_required, status_*, cancel_*) plus `contract.json` (E.164 pattern, kinds,
+  context_required, environment_mismatch, service_company_not_bound, status_*, cancel_*) plus `contract.json` (E.164 pattern, kinds,
   templates and variables, built-ins, required request fields, key pattern, states).
   It fails when the receiver's output changes (`REGENERATE_FIXTURES=1` rewrites them).
 * `appointments-aicountly/server-php/tests/fixtures/messaging-service-api/` holds the
@@ -428,6 +437,8 @@ this file, to the fixtures in **both** repositories, and to `contract.json`.
 | --- | --- | --- |
 | Switch | `APPOINTMENTS_MESSAGING_ENABLED=1` (default off) | — |
 | Credential | `MESSAGING_SERVICE_KEY` | `SERVICE_KEYS=appointments:<same key>` |
+| Deployment | `AIC_ENVIRONMENT` / `APP_ENV`, sent as `X-AIC-Environment` | `AIC_ENVIRONMENT` / `APP_ENV` — the same value |
+| Company binding | — | Settings → service products → Appointments (per company), or `SERVICE_KEY_COMPANIES=appointments:<cmp_id>` |
 | Origin | `MESSAGING_API_BASE` (explicit, required for the worker) | — |
 | Company default country | `phone_default_country` (settings) | — |
 | Consent | — | `CONSENT_SERVICE_APPS`, `CONSENT_ACCEPT_UNVERIFIED` |
