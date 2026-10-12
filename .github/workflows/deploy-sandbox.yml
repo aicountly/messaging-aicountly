@@ -56,27 +56,14 @@ jobs:
       # empty string, and `rsync --delete` against "user@host:/" would target
       # the filesystem root instead of the document root.
 
-      # E8-OPS (F096): the host key is PINNED from SANDBOX_SSH_KNOWN_HOSTS (ssh-keyscan output checked against
-      # the host once, by a person) when that secret is set. Without it the key the host presents is scanned
-      # and trusted with a warning, as deploys did before the pin; DEPLOY_ALLOW_KEYSCAN=false refuses instead.
-      - name: Pin SSH host key
+      # Trust the host key the server presents (scanned on each run).
+      - name: Trust SSH host key
         env:
           PIN_HOST: ${{ secrets.SANDBOX_SSH_HOST }}
           PIN_PORT: ${{ secrets.SANDBOX_SSH_PORT }}
-          KNOWN_HOSTS: ${{ secrets.SANDBOX_SSH_KNOWN_HOSTS }}
-          ALLOW_KEYSCAN: ${{ vars.DEPLOY_ALLOW_KEYSCAN }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          if [ -n "$KNOWN_HOSTS" ]; then
-            printf '%s\n' "$KNOWN_HOSTS" | sed 's/\r$//' > ~/.ssh/known_hosts
-            echo "Using the pinned host key(s) from SANDBOX_SSH_KNOWN_HOSTS:"
-          elif [ "$ALLOW_KEYSCAN" != "false" ]; then
-            echo "::warning::SANDBOX_SSH_KNOWN_HOSTS is not set; trusting the key the host presents now, as deploys did before the pin. Store it in SANDBOX_SSH_KNOWN_HOSTS to pin it (DEPLOY_ALLOW_KEYSCAN=false refuses instead)."
-            ssh-keyscan -T 15 -p "${PIN_PORT:-22}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
-          else
-            echo "::error::SANDBOX_SSH_KNOWN_HOSTS is not set and DEPLOY_ALLOW_KEYSCAN=false refuses an unpinned host key. Store the server's known_hosts line(s) in SANDBOX_SSH_KNOWN_HOSTS (ssh-keyscan -p <port> <host>, verified against the host), or unset DEPLOY_ALLOW_KEYSCAN."
-            exit 1
-          fi
+          ssh-keyscan -T 15 -p "${PIN_PORT:-22}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
           [ -s ~/.ssh/known_hosts ] || { echo "::error::No SSH host key to trust."; exit 1; }
           chmod 600 ~/.ssh/known_hosts
           ssh-keygen -l -f ~/.ssh/known_hosts | sed 's/^/    /'
@@ -211,7 +198,7 @@ jobs:
 
           # Pin the host key so deploys fail closed rather than trusting
           # whatever answers on that address.
-          # E8-OPS (F096): unverified ssh-keyscan removed; the key was pinned in "Pin SSH host key".
+          # The host key was added in "Trust SSH host key".
           if [ ! -s ~/.ssh/known_hosts ]; then
             echo "::error::The host returned no SSH host key. Check SANDBOX_SSH_HOST and SANDBOX_SSH_PORT."
             exit 1

@@ -13,7 +13,7 @@ STATIC, OPERATIONALLY-PENDING (an operator step; prepared, not performed).
 
 | Finding | Status | What was done / evidence |
 |---|---|---|
-| F096 | implemented | Staged schema-before-code release (bin/ops/release.sh: stage outside docroot, pre-migration snapshot, migrate from stage, switch, jobs) in pay/sales/purchases/billing/pos/books/Inventory; production deploys main-only, bound to GitHub environments, cancel-in-progress false, host keys pinned (StrictHostKeyChecking=yes, appleboy fingerprints) in 16+ repos. Kit/release tests EXECUTED (router 27-29/0, books 17/0, inventory 16/0). Environment reviewers and *_SSH_KNOWN_HOSTS secrets are operator settings. |
+| F096 | implemented | Staged schema-before-code release (bin/ops/release.sh: stage outside docroot, pre-migration snapshot, migrate from stage, switch, jobs) in pay/sales/purchases/billing/pos/books/Inventory; production deploys main-only, bound to GitHub environments, cancel-in-progress false, host keys pinned (StrictHostKeyChecking=yes, appleboy fingerprints) in 16+ repos — pin removed 2026-10-12 (owner decision); host keys are scanned on each run. Kit/release tests EXECUTED (router 27-29/0, books 17/0, inventory 16/0). Environment reviewers are operator settings. |
 | F109 | implemented | tests.yml (workflow_dispatch/workflow_call) + deploy job needs: verify in crm, appointments, messaging, advisor, vault, drive, lobby, calendar (hrms already gated). Suites EXECUTED locally on PostgreSQL: crm 109/0, appointments 54/0, messaging 43/0, advisor 174/0, vault 96/0, drive 33/33 files, calendar 152/0 + HTTP 97/0, lobby 152/152; web checks all green. |
 | F378 | implemented | Production deploys: main-only + environment; cancel-in-progress false (drive/hrms included); usable:false is fatal in production post-deploy for crm, appointments, messaging, drive (advisor, vault, calendar, hrms already fatal). |
 
@@ -26,8 +26,9 @@ STATIC, OPERATIONALLY-PENDING (an operator step; prepared, not performed).
 ## Operator steps this package leaves (none performed here)
 
 * GitHub: set required reviewers and the deployment-branch rule on the `production` / `sandbox`
-  environments; store each product's `*_SSH_KNOWN_HOSTS` (and `*_SSH_FINGERPRINT` for appleboy
-  actions) — deploys refuse to trust an unpinned host key unless `DEPLOY_ALLOW_KEYSCAN=true`.
+  environments.
+  (Host-key pinning through `*_SSH_KNOWN_HOSTS` / `*_SSH_FINGERPRINT` was removed on 2026-10-12 at the
+  owner's decision: deploys scan and trust the host key the server presents.)
 * Deploy receivers before their consumers (the receiver preflight stops a deploy otherwise; the order
   is in `console-react-app/ops/estate/CONTRACT_GRAPH.md`).
 * A08: access-log review, rotation in the documented order, provider revocation (Alankit), evidence in
