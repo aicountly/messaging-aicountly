@@ -20,6 +20,10 @@ DB_PASS="${TEST_DB_PASS:-messaging_test}"
 DB_HOST="${TEST_DB_HOST:-127.0.0.1}"
 DB_PORT="${TEST_DB_PORT:-5432}"
 STUB_PORT="${STUB_PORT:-8795}"
+# Where the stub keeps Drive's state (custodian documents, stored bytes); the
+# integration suite reads it and writes its control file.
+export DRIVE_STUB_DIR="${DRIVE_STUB_DIR:-$(mktemp -d)}"
+export MESSAGING_ATTACHMENT_DIR="${MESSAGING_ATTACHMENT_DIR:-$(mktemp -d)}"
 
 cat > "$ROOT/.env" <<ENVEOF
 APP_ENV=local

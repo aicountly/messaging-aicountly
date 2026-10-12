@@ -375,7 +375,7 @@ final class MessagesController extends Controller
             Http::validationFailed('No file was uploaded.');
         }
 
-        $result = AttachmentService::store($ctx, $messageUuid, $upload, $auth->sesKey());
+        $result = AttachmentService::store($ctx, $messageUuid, $upload, $auth);
         if (!$result['ok']) {
             self::fail($result['code'], $result['detail']);
         }

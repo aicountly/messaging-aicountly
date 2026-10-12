@@ -256,12 +256,28 @@ final class DispatchService
             ['uuid' => $message['conversation_uuid']],
         );
 
+        // Every attachment the message carries must be fetchable NOW, before the
+        // message is marked as going out. A Drive attachment Drive will not hand
+        // over yet (an outage, or no verified scan) holds the message back —
+        // never "sent without its attachment".
+        $attachments = self::resolveAttachments($ctx, $messageUuid);
+        if ($attachments['blocked'] !== null) {
+            if ($attachments['blocked']['retryable']) {
+                self::defer($job, 'attachment_unavailable', $attachments['blocked']['detail']);
+
+                return ['outcome' => 'deferred', 'detail' => $attachments['blocked']['detail']];
+            }
+            self::fail($ctx, $message, $job, 'attachment_unavailable', $attachments['blocked']['detail'], false);
+
+            return ['outcome' => 'failed', 'detail' => $attachments['blocked']['detail']];
+        }
+
         Db::run(
             'UPDATE messaging_messages SET status = :dispatching, dispatched_at = :now WHERE message_uuid = :uuid',
             ['dispatching' => MessageState::DISPATCHING, 'now' => Clock::nowSql(), 'uuid' => $messageUuid],
         );
 
-        $outbound = self::buildOutbound($ctx, $message, (string) $conversation['customer_address']);
+        $outbound = self::buildOutbound($ctx, $message, (string) $conversation['customer_address'], $attachments['list']);
         $result = $adapter->send($connection, $outbound, (string) $job['idempotency_key']);
 
         return self::recordSendResult($ctx, $message, $job, $result);
@@ -485,7 +501,42 @@ final class DispatchService
     // -----------------------------------------------------------------------
 
     /** @param array<string, mixed> $message */
-    private static function buildOutbound(Context $ctx, array $message, string $toAddress): OutboundMessage
+    /**
+     * The attachments of a message as the channel will receive them.
+     *
+     * @return array{list: list<array{url:string, media_type:string, filename:string}>, blocked: ?array{retryable:bool, detail:string}}
+     */
+    private static function resolveAttachments(Context $ctx, string $messageUuid): array
+    {
+        $list = [];
+        foreach (Db::all(
+            'SELECT attachment_uuid, storage, storage_ref, media_type, filename
+             FROM messaging_message_attachments WHERE message_uuid = :uuid',
+            ['uuid' => $messageUuid],
+        ) as $row) {
+            if ((string) $row['storage'] === 'drive') {
+                $link = AttachmentService::driveLink($row);
+                if ($link['url'] === null) {
+                    return ['list' => [], 'blocked' => ['retryable' => $link['retryable'], 'detail' => $link['detail']]];
+                }
+                $url = $link['url'];
+            } else {
+                $url = AttachmentService::authorisedUrl($ctx, $row);
+            }
+            if ($url !== null) {
+                $list[] = [
+                    'url'        => $url,
+                    'media_type' => (string) $row['media_type'],
+                    'filename'   => (string) $row['filename'],
+                ];
+            }
+        }
+
+        return ['list' => $list, 'blocked' => null];
+    }
+
+    /** @param list<array{url:string, media_type:string, filename:string}> $attachments */
+    private static function buildOutbound(Context $ctx, array $message, string $toAddress, array $attachments): OutboundMessage
     {
         $variables = Db::jsonColumn($message['template_variables'] ?? null);
         $providerTemplateId = null;
@@ -515,22 +566,6 @@ final class DispatchService
                     }
                 }
                 $variables = $ordered;
-            }
-        }
-
-        $attachments = [];
-        foreach (Db::all(
-            'SELECT attachment_uuid, storage, storage_ref, media_type, filename
-             FROM messaging_message_attachments WHERE message_uuid = :uuid',
-            ['uuid' => $message['message_uuid']],
-        ) as $row) {
-            $url = AttachmentService::authorisedUrl($ctx, $row);
-            if ($url !== null) {
-                $attachments[] = [
-                    'url'        => $url,
-                    'media_type' => (string) $row['media_type'],
-                    'filename'   => (string) $row['filename'],
-                ];
             }
         }
 

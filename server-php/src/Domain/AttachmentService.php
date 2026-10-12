@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Aicountly\Api\Domain;
 
+use Aicountly\Api\Auth;
 use Aicountly\Api\Clients\DriveClient;
 use Aicountly\Api\Context;
 use Aicountly\Api\Db;
@@ -30,8 +31,10 @@ use Aicountly\Api\Support\Uuid;
  *
  * ## Where the bytes live
  *
- * Drive, when Drive is configured — it owns documents and applies its own
- * access controls. Otherwise this product's own private object directory, which
+ * Drive, when Drive is configured — held through Drive's custodian API (see
+ * Clients/DriveClient for why) — and a Drive failure refuses the attachment
+ * rather than keeping it here. Audio and video stay here until Drive accepts
+ * them. Otherwise this product's own private object directory, which
  * is deliberately the lesser option: it is outside the document root, the key
  * is random rather than derived from the filename, and Channels & Trust reports
  * that Drive is not connected rather than implying it is.
@@ -62,7 +65,7 @@ final class AttachmentService
      * @param array{tmp_name:string, name:string, size:int, type:string, error:int} $upload
      * @return array{ok:bool, code:string, detail:string, attachment_uuid:?string}
      */
-    public static function store(Context $ctx, string $messageUuid, array $upload, string $sesKey = ''): array
+    public static function store(Context $ctx, string $messageUuid, array $upload, ?Auth $auth = null): array
     {
         if (($upload['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
             return self::reject('upload_failed', 'The file did not upload completely. Try again.');
@@ -100,23 +103,53 @@ final class AttachmentService
         $checksum = (string) hash_file('sha256', $tmp);
         $filename = self::safeFilename((string) ($upload['name'] ?? 'attachment'), self::ALLOWED_TYPES[$sniffed]);
 
+        $uuid = Uuid::v4();
         $drive = new DriveClient();
         $storage = 'local';
         $storageRef = '';
+        $scan = null;
 
-        if ($drive->configured()) {
-            $result = ($sesKey !== '' ? $drive->withSession($sesKey) : $drive)->store($ctx, [
-                'filename'    => $filename,
-                'media_type'  => $sniffed,
-                'byte_size'   => $size,
-                'checksum'    => $checksum,
-                'content_b64' => base64_encode((string) file_get_contents($tmp)),
-                'purpose'     => 'messaging_attachment',
-            ], 'att-' . $checksum);
+        // Drive, when connected, holds the bytes — except audio and video, which
+        // Drive does not accept yet; those stay in this product's private store,
+        // and the answer says so. A Drive failure refuses the attachment: it is
+        // never quietly kept here instead.
+        if ($drive->configured() && !self::driveRefusesType($sniffed)) {
+            // Scanned here first, when a scanner is configured, so a file found
+            // infected is never sent anywhere.
+            $scan = self::scan($tmp);
+            if ($scan['status'] === 'infected') {
+                return self::reject('infected', 'That file failed a malware scan and was not attached.');
+            }
+            $fyId = $auth !== null ? $ctx->fyFor($auth, Clock::now()->format('Y-m-d')) : null;
+            $boId = $auth !== null ? $ctx->branchForFiling($auth) : null;
+            if ($fyId === null || $boId === null) {
+                return self::reject('storage_unavailable', 'Aicountly Drive needs the company\'s financial year and branch from Manage, and Manage did not name them.');
+            }
+            $result = $drive->storeFile(
+                $ctx->cmpId,
+                $fyId,
+                $boId,
+                (string) file_get_contents($tmp),
+                $filename,
+                $sniffed,
+                $uuid,
+                'att-' . $uuid,
+                $auth->uuid,
+            );
+            if (!$result['ok']) {
+                if ($result['scan'] === 'infected') {
+                    return self::reject('infected', 'That file failed a malware scan and was not attached.');
+                }
+                error_log('[attachments] Drive did not store the attachment: ' . $result['error']);
 
-            if ($result['ok']) {
-                $storage = 'drive';
-                $storageRef = (string) ($result['body']['data']['document_uuid'] ?? $result['body']['document_uuid'] ?? '');
+                return self::reject('storage_unavailable', 'Aicountly Drive did not store the attachment: ' . $result['error']);
+            }
+            $storage = 'drive';
+            $storageRef = (string) $result['ref'];
+            if ($result['scan'] === 'clean') {
+                $scan = ['status' => 'clean', 'detail' => null];
+            } elseif ($scan['status'] !== 'clean') {
+                $scan = ['status' => 'skipped', 'detail' => 'Stored in Aicountly Drive without a verified malware scan; Drive releases it once its scanner has verified it.'];
             }
         }
 
@@ -128,11 +161,10 @@ final class AttachmentService
             $storageRef = $stored;
         }
 
-        $uuid = Uuid::v4();
         // Scanning is a real step, not a rubber stamp: `skipped` is recorded
         // honestly when no scanner is configured, and Channels & Trust says so
         // rather than showing a green tick nobody earned.
-        $scan = self::scan($storage === 'local' ? self::localPath($storageRef) : null);
+        $scan ??= self::scan(self::localPath($storageRef));
 
         Db::insert('messaging_message_attachments', [
             'attachment_uuid' => $uuid,
@@ -173,13 +205,7 @@ final class AttachmentService
         $ref = (string) $attachment['storage_ref'];
 
         if ($storage === 'drive') {
-            $result = (new DriveClient())->downloadUrl($ctx, $ref);
-            if (!$result['ok']) {
-                return null;
-            }
-            $url = (string) ($result['body']['data']['url'] ?? $result['body']['url'] ?? '');
-
-            return $url !== '' ? $url : null;
+            return self::driveLink($attachment)['url'];
         }
 
         if ($storage === 'provider') {
@@ -206,6 +232,34 @@ final class AttachmentService
 
         return $base . '/api/v1/attachments/' . rawurlencode($attachmentUuid)
             . '?expires=' . $expires . '&signature=' . $signature;
+    }
+
+    /**
+     * Drive's short-lived URL for a Drive-held attachment, with the reason when
+     * there is none — so a send can wait for Drive (retryable) or fail saying
+     * why, instead of going out without the attachment.
+     *
+     * @param array<string, mixed> $attachment
+     * @return array{url:?string, retryable:bool, detail:string}
+     */
+    public static function driveLink(array $attachment, string $actorUuid = ''): array
+    {
+        $result = (new DriveClient())->downloadUrl((string) $attachment['storage_ref'], $actorUuid);
+        if ($result['ok']) {
+            return ['url' => $result['url'], 'retryable' => false, 'detail' => ''];
+        }
+        $detail = match (true) {
+            $result['status'] === 423 => 'Aicountly Drive has not released this attachment: it has no verified malware scan yet.',
+            default                   => 'Aicountly Drive did not provide the attachment: ' . (string) $result['error'],
+        };
+
+        return ['url' => null, 'retryable' => $result['retryable'], 'detail' => $detail];
+    }
+
+    /** Drive's allowlist has no audio or video yet (drive-react-app DocumentService::ALLOWED_MIME_PREFIXES). */
+    private static function driveRefusesType(string $mediaType): bool
+    {
+        return str_starts_with($mediaType, 'audio/') || str_starts_with($mediaType, 'video/');
     }
 
     /**

@@ -62,6 +62,7 @@ use Aicountly\Api\Domain\BusinessContextService;
 use Aicountly\Api\Domain\ConsentService;
 use Aicountly\Api\Domain\ConversationService;
 use Aicountly\Api\Domain\DispatchGuard;
+use Aicountly\Api\Domain\AttachmentService;
 use Aicountly\Api\Domain\DispatchService;
 use Aicountly\Api\Domain\JourneyDefinition;
 use Aicountly\Api\Domain\JourneyService;
@@ -2160,6 +2161,134 @@ check('sibling hosts follow the configured environment, never the Host or its ab
 // ===========================================================================
 // Summary
 // ===========================================================================
+
+// ===========================================================================
+section('Attachments in Aicountly Drive (custodian API)');
+// ===========================================================================
+
+/** Drive on, the stub's custodian key, the stub told how to scan. */
+function withDrive(callable $body, array $control = ['scan' => 'clean']): void
+{
+    $dir = (string) getenv('DRIVE_STUB_DIR');
+    file_put_contents($dir . '/control.json', json_encode($control));
+    @unlink($dir . '/requests.jsonl');
+    putenv('MESSAGING_DRIVE_ENABLED=1');
+    putenv('DRIVE_SERVICE_KEY=test-messaging-drive-custodian-key-0123456789');
+    Features::overrideForTesting(null);
+    try {
+        reset();
+        // Manage names the year and the head-office branch Drive files under.
+        Context::trustForTesting(CMP, owner(), true, [['fy_id' => 7, 'fy_start' => '2026-04-01', 'fy_end' => '2027-03-31']], 21);
+        $body();
+    } finally {
+        putenv('MESSAGING_DRIVE_ENABLED');
+        putenv('DRIVE_SERVICE_KEY');
+        Features::overrideForTesting(null);
+        @unlink($dir . '/control.json');
+    }
+}
+
+/** @return list<array<string, mixed>> */
+function driveRequests(): array
+{
+    $file = (string) getenv('DRIVE_STUB_DIR') . '/requests.jsonl';
+
+    return is_file($file) ? array_map(static fn (string $l): array => json_decode($l, true), array_values(array_filter(explode("\n", (string) file_get_contents($file))))) : [];
+}
+
+/** @return list<string> */
+function localAttachmentFiles(): array
+{
+    $root = (string) getenv('MESSAGING_ATTACHMENT_DIR');
+    $out = [];
+    foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS)) as $file) {
+        $out[] = (string) $file;
+    }
+    sort($out);
+
+    return $out;
+}
+
+/** A draft carrying one PDF, attached by the owner. */
+function draftWithPdf(string $conversationUuid, string $label): array
+{
+    $saved = MessageService::saveDraft(ctx(), owner(), $conversationUuid, ['body' => 'Please find attached your invoice.']);
+    assertTrue($saved['ok'], 'fixture: draft — ' . $saved['detail']);
+    $tmp = tempnam(sys_get_temp_dir(), 'matt');
+    file_put_contents($tmp, "%PDF-1.4\n% " . $label . "\n1 0 obj << /Type /Catalog >> endobj\ntrailer << /Root 1 0 R >>\n%%EOF\n");
+    $stored = AttachmentService::store(ctx(), (string) $saved['message_uuid'], ['tmp_name' => $tmp, 'name' => $label . '.pdf', 'size' => filesize($tmp), 'type' => 'application/pdf', 'error' => UPLOAD_ERR_OK], owner());
+
+    return ['message_uuid' => (string) $saved['message_uuid'], 'stored' => $stored];
+}
+
+check('with Drive on, an attachment is stored through Drive\'s signed custodian API and nowhere else', static function (): void {
+    withDrive(static function (): void {
+        connection();
+        $before = localAttachmentFiles();
+        $draft = draftWithPdf(conversation(), 'invoice-0042');
+        assertTrue($draft['stored']['ok'], 'attached: ' . $draft['stored']['detail']);
+        assertSame($before, localAttachmentFiles(), 'no copy kept on this server');
+
+        $row = Db::first('SELECT * FROM messaging_message_attachments WHERE attachment_uuid = :u', ['u' => $draft['stored']['attachment_uuid']]);
+        assertSame('drive', $row['storage'], 'stored in Drive');
+        assertTrue(preg_match('/^drive:9001:7:21:\d+$/', (string) $row['storage_ref']) === 1, 'the reference names company, year and head-office branch: ' . $row['storage_ref']);
+        assertSame('clean', $row['scan_status'], 'Drive\'s verified scan is recorded');
+
+        $calls = driveRequests();
+        $paths = array_column($calls, 'path');
+        assertCount(2, $paths, 'two Drive calls: ' . json_encode($paths));
+        assertTrue($paths[0] === '/custodian/upload-sessions' && preg_match('#^/custodian/upload-sessions/\d+/finalize$#', (string) $paths[1]) === 1, 'open, then finalize — every call signed (the stub verifies it)');
+        assertSame(['messaging', 'user-owner', 'att-' . $draft['stored']['attachment_uuid']], [$calls[0]['key_id'], $calls[0]['actor'], $calls[0]['idempotency_key']], 'Messaging\'s credential, the person behind it, idempotent per attachment');
+        assertSame(['cmp_id' => 9001, 'fy_id' => 7, 'bo_id' => 21], $calls[0]['body']['context'], 'the context Drive files it under');
+        assertSame('product_restricted', $calls[0]['body']['scope'], 'readable only through Messaging');
+    });
+});
+
+check('the worker sends a Drive attachment with Drive\'s short-lived URL, without anybody signed in', static function (): void {
+    withDrive(static function (): void {
+        connection();
+        $adapter = new RecordingAdapter();
+        readyToSend($adapter);
+        $draft = draftWithPdf(conversation(), 'invoice-0043');
+        assertTrue(MessageService::approve(ctx(), owner(), $draft['message_uuid'], 0)['ok'], 'approved');
+        assertTrue(DispatchService::enqueue(ctx(), owner(), $draft['message_uuid'])['ok'], 'queued');
+        $outcome = DispatchService::process(DispatchService::claim('test-worker', 5)[0]);
+        assertCount(1, $adapter->sent, 'sent: ' . json_encode($outcome));
+        $attachments = $adapter->sent[0]['attachments'];
+        assertCount(1, $attachments, 'with its attachment');
+        assertContains('/drive-storage/doc-', (string) $attachments[0]['url'], 'Drive\'s URL');
+    });
+});
+
+check('a Drive attachment Drive will not release yet holds the message back — never sent without it', static function (): void {
+    withDrive(static function (): void {
+        connection();
+        $adapter = new RecordingAdapter();
+        readyToSend($adapter);
+        $draft = draftWithPdf(conversation(), 'invoice-0044');
+        assertTrue($draft['stored']['ok'], 'attached');
+        assertSame('skipped', (string) Db::scalar('SELECT scan_status FROM messaging_message_attachments WHERE attachment_uuid = :u', ['u' => $draft['stored']['attachment_uuid']]), 'no verified scan is recorded as such');
+        assertTrue(MessageService::approve(ctx(), owner(), $draft['message_uuid'], 0)['ok'], 'approved');
+        assertTrue(DispatchService::enqueue(ctx(), owner(), $draft['message_uuid'])['ok'], 'queued');
+        $outcome = DispatchService::process(DispatchService::claim('test-worker', 5)[0]);
+        assertCount(0, $adapter->sent, 'nothing reached the provider');
+        assertSame('failed', $outcome['outcome'], 'the send fails, saying why');
+        assertContains('no verified malware scan', $outcome['detail'], 'the reason: ' . $outcome['detail']);
+    }, ['scan' => 'unverified']);
+});
+
+check('when Drive is down, the attachment is refused — never quietly kept on this server', static function (): void {
+    withDrive(static function (): void {
+        connection();
+        $before = localAttachmentFiles();
+        $count = (int) Db::scalar('SELECT COUNT(*) FROM messaging_message_attachments WHERE cmp_id = :c', ['c' => CMP]);
+        $draft = draftWithPdf(conversation(), 'invoice-0045');
+        assertFalse($draft['stored']['ok'], 'refused');
+        assertSame('storage_unavailable', $draft['stored']['code'], 'code');
+        assertSame($before, localAttachmentFiles(), 'no local copy');
+        assertSame($count, (int) Db::scalar('SELECT COUNT(*) FROM messaging_message_attachments WHERE cmp_id = :c', ['c' => CMP]), 'no attachment row');
+    }, ['scan' => 'clean', 'fail' => '/custodian/upload-sessions']);
+});
 
 Clock::freeze(null);
 

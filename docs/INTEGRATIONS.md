@@ -15,7 +15,7 @@ distinction is not already clear.
 | **Sales** | Orders and their fulfilment state | `SALES` | `SALES_SERVICE_KEY`, `SALES_API_BASE` |
 | **Pay** | A payment request Messaging raised (`GET v1/payment-requests/{id}`): its status, what it collected and its link — as the signed-in person, with the key, `X-AIC-Environment`, their id and their session on every call. Messaging raises none yet | `PAY` | `PAY_SERVICE_KEY`, `PAY_API_BASE`, `AIC_ENVIRONMENT` |
 | **Appointments** | Bookings for a customer (read live, by booking **uuid**, for the inbox panel and outcomes) | `APPOINTMENTS` | `APPOINTMENTS_SERVICE_KEY`, `APPOINTMENTS_API_BASE` |
-| **Drive / Vault** | A document and its malware-scan verdict | `DRIVE` | `DRIVE_SERVICE_KEY`, `DRIVE_API_BASE` |
+| **Drive** | Attachment storage, as Drive's custodian (`/api/custodian/*`, signed with the product key): upload-sessions → PUT → finalize; a short-lived download URL only after Drive's verified scan. Drive must list `messaging` in `DOCS_CUSTODIAN_PRODUCTS` and hold the key in `DRIVE_SERVICE_KEYS` | `DRIVE` | `DRIVE_SERVICE_KEY` (+ `DRIVE_SERVICE_KEY_ID`, default `messaging`), `DRIVE_API_BASE` |
 | **Reach** | Campaign context, so Messaging does not rebuild campaign planning | `REACH` | `REACH_SERVICE_KEY`, `REACH_API_BASE` |
 | **Billing** | Subscription and plan context | `BILLING` | `BILLING_SERVICE_KEY` |
 | **AI Pulse** | Every AI task — drafts, translation, rewrites, summaries, classification, journey proposals, narration — on the model Console binds to Pulse | `AI` (on by default) | `PULSE_SERVICE_KEY` (Messaging's own gateway key, on every call; required by 2026-11-15); `PULSE_API_ORIGIN` (optional) |
