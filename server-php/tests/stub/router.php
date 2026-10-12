@@ -324,6 +324,109 @@ if (preg_match('#^/api/vouchers/(\d+)$#', $path, $m) === 1) {
 }
 
 // ---------------------------------------------------------------------------
+// Drive — the custodian API (drive-react-app CustodianController), signed with
+// the product credential exactly as Drive verifies it (ProductSignature), and
+// Drive's object storage behind it.
+//
+// State lives in DRIVE_STUB_DIR (default: a temp dir per port). A test writes
+// control.json there: {"scan": "clean"|"unverified", "fail": "<route fragment>"}.
+// ---------------------------------------------------------------------------
+
+$driveDir = (getenv('DRIVE_STUB_DIR') ?: sys_get_temp_dir() . '/messaging-drive-stub-' . ($_SERVER['SERVER_PORT'] ?? '0'));
+@mkdir($driveDir, 0777, true);
+$rawPath = parse_url($_SERVER['REQUEST_URI'] ?? '/', PHP_URL_PATH) ?: '/';
+
+if (str_starts_with($path, '/api/custodian/')) {
+    $control = json_decode((string) @file_get_contents($driveDir . '/control.json'), true) ?: [];
+    $raw = (string) file_get_contents('php://input');
+    file_put_contents($driveDir . '/requests.jsonl', json_encode(['method' => $_SERVER['REQUEST_METHOD'], 'path' => $rawPath, 'query' => $query,
+        'key_id' => $_SERVER['HTTP_X_AIC_KEY_ID'] ?? '', 'actor' => $_SERVER['HTTP_X_AIC_ACTOR_UUID'] ?? '',
+        'idempotency_key' => $_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? '', 'body' => json_decode($raw, true)]) . "\n", FILE_APPEND);
+
+    // R6: the signature, over exactly what Drive signs.
+    $key = 'test-messaging-drive-custodian-key-0123456789';
+    $sig = (string) ($_SERVER['HTTP_X_AIC_SIGNATURE'] ?? '');
+    $t = preg_match('/t=(\d+)/', $sig, $tm) === 1 ? (int) $tm[1] : 0;
+    $v1 = preg_match('/v1=([0-9a-f]{64})/', $sig, $vm) === 1 ? $vm[1] : '';
+    $pairs = [];
+    foreach ($query as $n => $v) {
+        $pairs[] = [(string) $n, (string) $v];
+    }
+    usort($pairs, static fn (array $a, array $b): int => [$a[0], $a[1]] <=> [$b[0], $b[1]]);
+    $canonical = implode('&', array_map(static fn (array $p): string => rawurlencode($p[0]) . '=' . rawurlencode($p[1]), $pairs));
+    $toSign = implode("\n", ['v1', (string) $t, strtoupper($_SERVER['REQUEST_METHOD']), $rawPath, $canonical, hash('sha256', $raw), '', '', (string) ($_SERVER['HTTP_X_AIC_ACTOR_UUID'] ?? '')]);
+    if (($_SERVER['HTTP_X_AIC_KEY_ID'] ?? '') !== 'messaging' || $v1 === '' || abs(time() - $t) > 300 || !hash_equals(hash_hmac('sha256', $toSign, $key), $v1)) {
+        send(401, ['success' => false, 'error' => ['code' => 'signature_invalid', 'message' => 'The product credential or its signature is not valid.']]);
+    }
+    if (!ctype_digit((string) ($query['cmp_id'] ?? ''))) {
+        send(400, ['success' => false, 'error' => ['code' => 'cmp_id_required', 'message' => 'The signed query must name cmp_id.']]);
+    }
+    if (!empty($control['fail']) && str_contains($rawPath, (string) $control['fail'])) {
+        send(503, ['success' => false, 'error' => ['code' => 'unavailable', 'message' => 'Drive is pretending to be down.']]);
+    }
+    $route = substr($path, strlen('/api/custodian/'));
+    $self = 'http://' . ($_SERVER['HTTP_HOST'] ?? '127.0.0.1');
+    if ($route === 'upload-sessions' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+        $b = json_decode($raw, true) ?: [];
+        foreach (['cmp_id', 'fy_id', 'bo_id'] as $f) {
+            if ((int) ($b['context'][$f] ?? 0) <= 0) {
+                send(422, ['success' => false, 'error' => ['code' => 'context_required', 'message' => 'context.cmp_id, context.fy_id and context.bo_id are required positive integers.']]);
+            }
+        }
+        if (($b['scope'] ?? '') !== 'product_restricted' || ($b['custodian'] ?? '') !== 'messaging' || ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? '') === '') {
+            send(422, ['success' => false, 'error' => ['code' => 'scope_invalid', 'message' => 'product_restricted, this custodian and an Idempotency-Key are required.']]);
+        }
+        if (str_starts_with((string) ($b['content_type'] ?? ''), 'audio/') || str_starts_with((string) ($b['content_type'] ?? ''), 'video/')) {
+            send(422, ['success' => false, 'error' => ['code' => 'upload_session_failed', 'message' => 'File type is not allowed.']]);
+        }
+        $n = (int) (@file_get_contents($driveDir . '/session-seq') ?: 600) + 1;
+        file_put_contents($driveDir . '/session-seq', (string) $n);
+        file_put_contents($driveDir . '/session-' . $n . '.json', json_encode($b['context']));
+        send(201, ['success' => true, 'data' => ['session_id' => $n, 'upload_url' => $self . '/drive-storage/upload-' . $n, 'method' => 'PUT', 'headers' => ['Content-Type' => (string) $b['content_type']], 'status' => 'pending']]);
+    }
+    if (preg_match('#^upload-sessions/(\d+)/finalize$#', $route, $mm) === 1) {
+        $bytes = @file_get_contents($driveDir . '/stored-upload-' . $mm[1]);
+        $b = json_decode($raw, true) ?: [];
+        if ($bytes === false || hash('sha256', $bytes) !== ($b['sha256'] ?? '')) {
+            send(409, ['success' => false, 'error' => ['code' => 'sha256_mismatch', 'message' => 'The stored bytes do not match the declared sha256.']]);
+        }
+        $n = (int) (@file_get_contents($driveDir . '/doc-seq') ?: 7000) + 1;
+        file_put_contents($driveDir . '/doc-seq', (string) $n);
+        file_put_contents($driveDir . '/doc-' . $n . '.bin', $bytes);
+        $scan = (string) ($control['scan'] ?? 'clean');
+        file_put_contents($driveDir . '/doc-' . $n . '.json', json_encode(['cmp_id' => (int) $query['cmp_id'], 'scan' => $scan]));
+        send(201, ['success' => true, 'data' => ['document_id' => $n, 'doc_ref' => 'DOC0' . $n, 'custodian' => 'messaging', 'scope' => 'product_restricted',
+            'context' => json_decode((string) file_get_contents($driveDir . '/session-' . $mm[1] . '.json'), true), 'scan' => ['status' => $scan, 'provider' => $scan === 'clean' ? 'clamav' : 'stub']]]);
+    }
+    if (preg_match('#^documents/(\d+)/download$#', $route, $mm) === 1) {
+        $doc = json_decode((string) @file_get_contents($driveDir . '/doc-' . $mm[1] . '.json'), true);
+        if (!is_array($doc) || $doc['cmp_id'] !== (int) $query['cmp_id']) {
+            send(404, ['success' => false, 'error' => ['code' => 'NOT_FOUND', 'message' => 'Document not found.']]);
+        }
+        $scan = (string) ($control['scan'] ?? $doc['scan']);
+        if ($scan !== 'clean') {
+            send(423, ['success' => false, 'error' => ['code' => 'not_clean', 'message' => 'The document has no verified clean scan (' . $scan . ').']]);
+        }
+        send(200, ['success' => true, 'data' => ['url' => $self . '/drive-storage/doc-' . $mm[1] . '?sig=stub', 'expires_in' => 60]]);
+    }
+    send(404, ['success' => false, 'error' => ['code' => 'NOT_FOUND', 'message' => 'stub custodian: no route ' . $route]]);
+}
+if (str_starts_with($rawPath, '/drive-storage/')) {
+    $object = basename($rawPath);
+    if (($_SERVER['REQUEST_METHOD'] ?? '') === 'PUT') {
+        file_put_contents($driveDir . '/stored-' . $object, (string) file_get_contents('php://input'));
+        http_response_code(200);
+        exit;
+    }
+    if (preg_match('/^doc-(\d+)$/', $object, $mm) === 1 && is_file($driveDir . '/doc-' . $mm[1] . '.bin')) {
+        header('Content-Type: application/octet-stream');
+        readfile($driveDir . '/doc-' . $mm[1] . '.bin');
+        exit;
+    }
+    send(404, ['success' => false]);
+}
+
+// ---------------------------------------------------------------------------
 // Sales, Pay, Appointments, Drive, Reach
 // ---------------------------------------------------------------------------
 

@@ -38,7 +38,7 @@ final class Context
     /**
      * Manage's verdict per company and session, for this request.
      *
-     * @var array<string, array{owner: bool, fy_list: list<array<string, mixed>>}>
+     * @var array<string, array{owner: bool, fy_list: list<array<string, mixed>>, ho_bo?: int}>
      */
     private static array $verified = [];
 
@@ -118,7 +118,7 @@ final class Context
             Http::error(503, 'context_unavailable', 'Cannot confirm company access right now. Please retry.', ['retryable' => true]);
         }
 
-        self::$verified[$key] = ['owner' => $answer['isOwner'], 'fy_list' => $answer['fyList']];
+        self::$verified[$key] = ['owner' => $answer['isOwner'], 'fy_list' => $answer['fyList'], 'ho_bo' => $answer['headOfficeBranch']];
     }
 
     /** Does Manage say this caller owns this company? False until asked, and for every service caller. */
@@ -148,13 +148,27 @@ final class Context
         return null;
     }
 
+    /**
+     * The branch a file is filed under in Drive, which needs a real bo_id: the
+     * selected one, else Manage's head office. Null when Manage named none.
+     */
+    public function branchForFiling(Auth $auth): ?int
+    {
+        if ($this->boId > 0) {
+            return $this->boId;
+        }
+        $ho = (int) (self::$verified[$this->cmpId . ':' . $auth->fingerprint()]['ho_bo'] ?? 0);
+
+        return $ho > 0 ? $ho : null;
+    }
+
     /** CLI only — the test suite stands in for Manage rather than reaching it. */
-    public static function trustForTesting(int $cmpId, Auth $auth, bool $owner = false, array $fyList = []): void
+    public static function trustForTesting(int $cmpId, Auth $auth, bool $owner = false, array $fyList = [], int $headOfficeBranch = 0): void
     {
         if (PHP_SAPI !== 'cli') {
             return;
         }
-        self::$verified[$cmpId . ':' . $auth->fingerprint()] = ['owner' => $owner, 'fy_list' => $fyList];
+        self::$verified[$cmpId . ':' . $auth->fingerprint()] = ['owner' => $owner, 'fy_list' => $fyList, 'ho_bo' => $headOfficeBranch];
     }
 
     /** CLI only — forget every verdict, so one test cannot vouch for the next. */

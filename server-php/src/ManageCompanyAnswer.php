@@ -41,12 +41,12 @@ final class ManageCompanyAnswer
     /**
      * @param array<string, mixed>|null $json decoded body, null when absent or not JSON
      *
-     * @return array{outcome: string, isOwner: bool, companyName: string, fyList: list<array<string, mixed>>}
+     * @return array{outcome: string, isOwner: bool, companyName: string, fyList: list<array<string, mixed>>, headOfficeBranch: int}
      */
     public static function interpret(int $httpStatus, ?array $json, int $cmpId): array
     {
         $no = static fn (string $outcome): array => [
-            'outcome' => $outcome, 'isOwner' => false, 'companyName' => '', 'fyList' => [],
+            'outcome' => $outcome, 'isOwner' => false, 'companyName' => '', 'fyList' => [], 'headOfficeBranch' => 0,
         ];
 
         if ($httpStatus === 0 || $httpStatus >= 500) {
@@ -113,7 +113,37 @@ final class ManageCompanyAnswer
             }
         }
 
-        return ['outcome' => self::ALLOWED, 'isOwner' => $isOwner, 'companyName' => $name, 'fyList' => $fyList];
+        return ['outcome' => self::ALLOWED, 'isOwner' => $isOwner, 'companyName' => $name, 'fyList' => $fyList,
+            'headOfficeBranch' => self::headOfficeBranch($data)];
+    }
+
+    /**
+     * The branch a company-wide file is filed under in Drive (which needs a real
+     * bo_id): Manage's head office, else the first branch it lists. 0 when none.
+     *
+     * @param array<string, mixed> $data
+     */
+    private static function headOfficeBranch(array $data): int
+    {
+        foreach (['hobo_id', 'ho_bo_id', 'bo_id'] as $key) {
+            if (isset($data[$key]) && is_numeric($data[$key]) && (int) $data[$key] > 0) {
+                return (int) $data[$key];
+            }
+        }
+        foreach (['branch_list', 'bo_list', 'branches'] as $listKey) {
+            foreach (is_array($data[$listKey] ?? null) ? $data[$listKey] : [] as $row) {
+                if (!is_array($row)) {
+                    continue;
+                }
+                foreach (['bo_id', 'hobo_id', 'branch_id', 'id'] as $idKey) {
+                    if (isset($row[$idKey]) && is_numeric($row[$idKey]) && (int) $row[$idKey] > 0) {
+                        return (int) $row[$idKey];
+                    }
+                }
+            }
+        }
+
+        return 0;
     }
 
     private static function isTruthy(mixed $v): bool

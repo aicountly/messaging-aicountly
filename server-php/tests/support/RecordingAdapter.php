@@ -104,6 +104,7 @@ final class RecordingAdapter implements ChannelAdapter
             'body'         => $message->body,
             'key'          => $idempotencyKey,
             'content_type' => $message->contentType,
+            'attachments'  => $message->attachments,
         ];
 
         $outcome = array_shift($this->script) ?? 'accepted';
