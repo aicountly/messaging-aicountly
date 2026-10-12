@@ -65,6 +65,7 @@ final class DriveClient extends ApiClient
         return 'DRIVE_API_BASE';
     }
 
+    /** Drive has no switch: it is configured when Messaging's key is set and Drive's address resolves. */
     public function configured(): bool
     {
         return Features::enabled('DRIVE') && strlen(self::key()) >= 32 && $this->base() !== '';
@@ -72,7 +73,7 @@ final class DriveClient extends ApiClient
 
     public function unavailableMessage(): string
     {
-        return 'Aicountly Drive is not connected. Attachments use this product\'s own private storage instead.';
+        return 'Attachments are stored in Aicountly Drive, and Drive is not connected on this server (DRIVE_SERVICE_KEY).';
     }
 
     /**

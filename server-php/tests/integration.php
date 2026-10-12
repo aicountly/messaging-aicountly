@@ -2166,13 +2166,12 @@ check('sibling hosts follow the configured environment, never the Host or its ab
 section('Attachments in Aicountly Drive (custodian API)');
 // ===========================================================================
 
-/** Drive on, the stub's custodian key, the stub told how to scan. */
+/** The stub's custodian key, and the stub told how to scan. */
 function withDrive(callable $body, array $control = ['scan' => 'clean']): void
 {
     $dir = (string) getenv('DRIVE_STUB_DIR');
     file_put_contents($dir . '/control.json', json_encode($control));
     @unlink($dir . '/requests.jsonl');
-    putenv('MESSAGING_DRIVE_ENABLED=1');
     putenv('DRIVE_SERVICE_KEY=test-messaging-drive-custodian-key-0123456789');
     Features::overrideForTesting(null);
     try {
@@ -2181,7 +2180,6 @@ function withDrive(callable $body, array $control = ['scan' => 'clean']): void
         Context::trustForTesting(CMP, owner(), true, [['fy_id' => 7, 'fy_start' => '2026-04-01', 'fy_end' => '2027-03-31']], 21);
         $body();
     } finally {
-        putenv('MESSAGING_DRIVE_ENABLED');
         putenv('DRIVE_SERVICE_KEY');
         Features::overrideForTesting(null);
         @unlink($dir . '/control.json');
@@ -2288,6 +2286,31 @@ check('when Drive is down, the attachment is refused — never quietly kept on t
         assertSame($before, localAttachmentFiles(), 'no local copy');
         assertSame($count, (int) Db::scalar('SELECT COUNT(*) FROM messaging_message_attachments WHERE cmp_id = :c', ['c' => CMP]), 'no attachment row');
     }, ['scan' => 'clean', 'fail' => '/custodian/upload-sessions']);
+});
+
+check('there is no switch: without Drive\'s key a document attachment is refused, never kept here; MESSAGING_DRIVE_ENABLED=0 changes nothing', static function (): void {
+    withDrive(static function (): void {
+        connection();
+        $conversationUuid = conversation();
+        putenv('MESSAGING_DRIVE_ENABLED=0');
+        Features::overrideForTesting(null);
+        try {
+            $draft = draftWithPdf($conversationUuid, 'invoice-0046');
+            assertTrue($draft['stored']['ok'], 'an old MESSAGING_DRIVE_ENABLED=0 does not turn Drive off');
+            assertSame('drive', (string) Db::scalar('SELECT storage FROM messaging_message_attachments WHERE attachment_uuid = :u', ['u' => $draft['stored']['attachment_uuid']]), 'stored in Drive');
+        } finally {
+            putenv('MESSAGING_DRIVE_ENABLED');
+        }
+
+        putenv('DRIVE_SERVICE_KEY');
+        Features::overrideForTesting(null);
+        $before = localAttachmentFiles();
+        $draft = draftWithPdf($conversationUuid, 'invoice-0047');
+        assertFalse($draft['stored']['ok'], 'refused without Drive');
+        assertSame('storage_unavailable', $draft['stored']['code'], 'code');
+        assertContains('DRIVE_SERVICE_KEY', $draft['stored']['detail'], 'and it says what is missing');
+        assertSame($before, localAttachmentFiles(), 'no local copy');
+    });
 });
 
 Clock::freeze(null);

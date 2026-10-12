@@ -31,13 +31,12 @@ use Aicountly\Api\Support\Uuid;
  *
  * ## Where the bytes live
  *
- * Drive, when Drive is configured — held through Drive's custodian API (see
- * Clients/DriveClient for why) — and a Drive failure refuses the attachment
- * rather than keeping it here. Audio and video stay here until Drive accepts
- * them. Otherwise this product's own private object directory, which
- * is deliberately the lesser option: it is outside the document root, the key
- * is random rather than derived from the filename, and Channels & Trust reports
- * that Drive is not connected rather than implying it is.
+ * Drive, always — held through Drive's custodian API (see Clients/DriveClient
+ * for why). There is no switch: with Drive not connected, or refusing, the
+ * attachment is refused rather than kept here. Audio and video are the one
+ * exception: Drive does not accept them yet, so they go to this product's own
+ * private object directory (outside the document root, random keys), which
+ * also still holds attachments stored before Drive became the store.
  */
 final class AttachmentService
 {
@@ -109,11 +108,14 @@ final class AttachmentService
         $storageRef = '';
         $scan = null;
 
-        // Drive, when connected, holds the bytes — except audio and video, which
-        // Drive does not accept yet; those stay in this product's private store,
-        // and the answer says so. A Drive failure refuses the attachment: it is
-        // never quietly kept here instead.
-        if ($drive->configured() && !self::driveRefusesType($sniffed)) {
+        // Drive holds the bytes — except audio and video, which Drive does not
+        // accept yet; those stay in this product's private store. Drive not
+        // connected, or refusing, refuses the attachment: it is never quietly
+        // kept here instead.
+        if (!self::driveRefusesType($sniffed)) {
+            if (!$drive->configured()) {
+                return self::reject('storage_unavailable', $drive->unavailableMessage());
+            }
             // Scanned here first, when a scanner is configured, so a file found
             // infected is never sent anywhere.
             $scan = self::scan($tmp);

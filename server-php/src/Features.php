@@ -81,6 +81,15 @@ final class Features
      */
     private const ON_BY_DEFAULT = ['AI', 'JOURNEYS', 'OUTCOMES', 'REALTIME'];
 
+    /**
+     * Integrations with no switch at all: Drive is where attachments are stored
+     * (drive.aicountly.com storage architecture), so it is connected as soon as
+     * what it needs is configured, and MESSAGING_DRIVE_ENABLED is not read.
+     *
+     * @var list<string>
+     */
+    private const ALWAYS_ON = ['DRIVE'];
+
     /** @var array<string, bool>|null */
     private static ?array $memo = null;
 
@@ -133,6 +142,10 @@ final class Features
         }
 
         $missing = array_values(array_filter($required, static fn (string $key) => Env::get($key) === ''));
+        if ($missing !== [] && in_array($flag, self::ALWAYS_ON, true)) {
+            return implode(' and ', $missing) . ' ' . (count($missing) === 1 ? 'is' : 'are')
+                . ' missing from the server environment.';
+        }
         if ($missing !== []) {
             return $switch . ' is set, but ' . implode(' and ', $missing)
                 . ' ' . (count($missing) === 1 ? 'is' : 'are') . ' missing from the server environment.';
@@ -177,6 +190,9 @@ final class Features
 
     private static function switchedOn(string $flag): bool
     {
+        if (in_array($flag, self::ALWAYS_ON, true)) {
+            return true;
+        }
         $raw = strtolower(trim(Env::get('MESSAGING_' . $flag . '_ENABLED')));
 
         if ($raw === '') {
