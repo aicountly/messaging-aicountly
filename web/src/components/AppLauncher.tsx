@@ -10,6 +10,7 @@ import {
 } from '../services/appLauncher'
 import type { LauncherTile } from '../services/appLauncher'
 import { useLauncherTileIcon } from '../services/useLauncherTileIcon'
+import { isBetaApp, splitLauncherApps } from '../config/aicountlyApps'
 
 const S: Record<string, CSSProperties> = {
   wrap: { position: 'fixed', top: 16, left: 16, zIndex: 1000, display: 'inline-block' },
@@ -98,6 +99,40 @@ const S: Record<string, CSSProperties> = {
     boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
   },
   name: { fontSize: 12, fontWeight: 600, color: '#0f172a', lineHeight: 1.25 },
+  tabs: { display: 'flex', gap: 4, marginTop: 12, padding: 4, borderRadius: 8, background: '#f1f5f9' },
+  tab: {
+    flex: 1,
+    padding: '6px 12px',
+    border: 'none',
+    borderRadius: 6,
+    background: 'transparent',
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  tabActive: { background: '#fff', color: '#0f172a', boxShadow: '0 1px 2px rgba(15, 23, 42, 0.08)' },
+  tabCount: { fontWeight: 500, color: '#94a3b8' },
+  betaNote: { margin: '8px 0 0', fontSize: 11, color: '#64748b', lineHeight: 1.4 },
+  tabLink: {
+    padding: 0,
+    border: 'none',
+    background: 'none',
+    color: '#2563eb',
+    fontSize: 12,
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  betaBadge: {
+    padding: '1px 6px',
+    borderRadius: 4,
+    background: '#fef3c7',
+    color: '#92400e',
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: '0.04em',
+    textTransform: 'uppercase',
+  },
   footer: {
     marginTop: 12,
     paddingTop: 12,
@@ -199,6 +234,7 @@ function AppTile({ app, onNavigate }: AppTileProps) {
         )}
       </span>
       <span style={S.name}>{app.name}</span>
+      {isBetaApp(app.id) ? <span style={S.betaBadge}>Beta</span> : null}
       {app.isCurrent ? <span style={{ fontSize: 10, fontWeight: 600, color: '#2563eb' }}>Current</span> : null}
     </button>
   )
@@ -210,6 +246,8 @@ export function AppLauncher() {
   const [bundledVersions, setBundledVersions] = useState<Record<string, number>>({})
   const [iconChoices] = useState(readIconChoices)
   const [query, setQuery] = useState('')
+  // "core" is the launch line-up; everything else waits behind the Beta tab.
+  const [tab, setTab] = useState<'core' | 'beta'>('core')
   const rootRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   const panelId = useId()
@@ -217,6 +255,9 @@ export function AppLauncher() {
   const filteredApps = query.trim()
     ? apps.filter((app) => app.name.toLowerCase().includes(query.trim().toLowerCase()))
     : apps
+  const { core: coreApps, beta: betaApps } = splitLauncherApps(filteredApps)
+  const visibleApps = tab === 'beta' ? betaApps : coreApps
+  const otherTabCount = tab === 'beta' ? coreApps.length : betaApps.length
 
   useEffect(() => {
     preloadLauncherIcons()
@@ -247,6 +288,7 @@ export function AppLauncher() {
   useEffect(() => {
     if (!open) {
       setQuery('')
+      setTab('core')
       return undefined
     }
     const id = requestAnimationFrame(() => searchRef.current?.focus())
@@ -302,11 +344,48 @@ export function AppLauncher() {
             aria-label="Search AICOUNTLY apps"
             style={S.search}
           />
+          <div role="tablist" aria-label="App groups" style={S.tabs}>
+            {(
+              [
+                { id: 'core', label: 'Apps', count: coreApps.length },
+                { id: 'beta', label: 'Beta', count: betaApps.length },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === t.id}
+                onClick={() => setTab(t.id)}
+                style={{ ...S.tab, ...(tab === t.id ? S.tabActive : null) }}
+              >
+                {t.label} <span style={S.tabCount}>({t.count})</span>
+              </button>
+            ))}
+          </div>
+          {tab === 'beta' ? (
+            <p style={S.betaNote}>Early-access products — fully usable, but features and screens may still change.</p>
+          ) : null}
           <div style={S.grid}>
-            {filteredApps.length > 0 ? (
-              filteredApps.map((app) => <AppTile key={app.id} app={app} onNavigate={handleNavigate} />)
+            {visibleApps.length > 0 ? (
+              visibleApps.map((app) => <AppTile key={app.id} app={app} onNavigate={handleNavigate} />)
             ) : (
-              <p style={S.empty}>No apps match &ldquo;{query}&rdquo;.</p>
+              <p style={S.empty}>
+                No apps match &ldquo;{query}&rdquo; here
+                {otherTabCount > 0 ? (
+                  <>
+                    {' — '}
+                    <button
+                      type="button"
+                      style={S.tabLink}
+                      onClick={() => setTab(tab === 'beta' ? 'core' : 'beta')}
+                    >
+                      {otherTabCount} in {tab === 'beta' ? 'Apps' : 'Beta'}
+                    </button>
+                  </>
+                ) : null}
+                .
+              </p>
             )}
           </div>
           <p style={S.footer}>Opens the selected product in a new tab using your AICOUNTLY portal session.</p>
