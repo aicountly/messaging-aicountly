@@ -73,6 +73,25 @@ settings, access control and the audit history.
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | cPanel deploys, migrations, the queue worker, the two `.env` files |
 | [docs/auth/AICOUNTLY_AUTH_WORKFLOW.md](docs/auth/AICOUNTLY_AUTH_WORKFLOW.md) | Portal SSO |
 
+## Company access (registry)
+
+Companies and who may open them belong to Aicountly Manage's company registry; Messaging keeps no copy.
+
+- **App key:** `messaging` (Manage catalog id).
+- **Where the gate names the product:** every call to Manage carries `X-Saas-Origin` / `X-Source-App`
+  = `APP_PRODUCT_KEY` (`server-php/src/Clients/ApiClient.php`; keep it `messaging`), so `companyinfo` in
+  `Context::assertAllowed()` is answered for Messaging. `ManageCompanyAnswer` reads Manage's 403
+  `COMPANY_ACCESS_REQUIRED` as **denied** (never unavailable), and the API answers 403 with
+  `details.reason = COMPANY_ACCESS_REQUIRED`. The `/v1/manage/companies` rows keep Manage's
+  `can_open_in_current_app` / `app_access_status`; a company marked `false` is never selected.
+- **Users & Access:** `/settings/users-access` (nav → Users & Access, and a link on Settings) renders the shared
+  `CompanyUsersAccessPanel` and `MyWorkspacesPanel` (`web/src/company-access/`, copied verbatim from
+  manage-aicountly `Saas Common Handler/company-access`; client in `web/src/services/companyRegistry.ts`).
+  Permission profiles under Settings → Access still decide what people may do inside Messaging.
+- **Discovery ≠ access:** the company picker's "Browse all workspace companies" lists every company in the
+  person's workspaces; a restricted one opens "Request access", never the company, and the API re-checks
+  every scoped request with Manage whatever the browser shows.
+
 ## Layout
 
 ```

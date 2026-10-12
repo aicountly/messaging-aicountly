@@ -26,6 +26,11 @@ namespace Aicountly\Api;
  * shared, so a 2xx carrying that company IS the membership proof:
  *
  *   401 / 403 / 404 / other 4xx → denied      (the caller gets 403)
+ *   403 COMPANY_ACCESS_REQUIRED → denied, `reason` = that code: Manage's company
+ *                                 registry says the person may SEE the company
+ *                                 in their workspace but not open it in this
+ *                                 product (asked naming Messaging through
+ *                                 X-Saas-Origin). A refusal like any other.
  *   0 (no answer) / 5xx         → unavailable (the caller gets 503, retryable)
  *   2xx not about this company, or unreadable → unavailable — an answer we
  *                                               cannot read is never a yes.
@@ -38,22 +43,29 @@ final class ManageCompanyAnswer
     public const DENIED      = 'denied';
     public const UNAVAILABLE = 'unavailable';
 
+    /** Manage's code for "may see this company, may not open it in this application". */
+    public const ACCESS_REQUIRED = 'COMPANY_ACCESS_REQUIRED';
+
     /**
      * @param array<string, mixed>|null $json decoded body, null when absent or not JSON
      *
-     * @return array{outcome: string, isOwner: bool, companyName: string, fyList: list<array<string, mixed>>, headOfficeBranch: int}
+     * `reason` is Manage's own refusal code (e.g. ACCESS_REQUIRED) on a denial, else null.
+     *
+     * @return array{outcome: string, isOwner: bool, companyName: string, fyList: list<array<string, mixed>>, headOfficeBranch: int, reason: ?string}
      */
     public static function interpret(int $httpStatus, ?array $json, int $cmpId): array
     {
-        $no = static fn (string $outcome): array => [
-            'outcome' => $outcome, 'isOwner' => false, 'companyName' => '', 'fyList' => [], 'headOfficeBranch' => 0,
+        $no = static fn (string $outcome, ?string $reason = null): array => [
+            'outcome' => $outcome, 'isOwner' => false, 'companyName' => '', 'fyList' => [], 'headOfficeBranch' => 0, 'reason' => $reason,
         ];
 
         if ($httpStatus === 0 || $httpStatus >= 500) {
             return $no(self::UNAVAILABLE);
         }
         if ($httpStatus >= 400) {
-            return $no(self::DENIED);
+            $code = $json['code'] ?? (is_array($json['error'] ?? null) ? ($json['error']['code'] ?? null) : null);
+
+            return $no(self::DENIED, is_string($code) && $code !== '' ? $code : null);
         }
         if ($httpStatus < 200 || $httpStatus >= 300 || $json === null) {
             return $no(self::UNAVAILABLE);
@@ -114,7 +126,7 @@ final class ManageCompanyAnswer
         }
 
         return ['outcome' => self::ALLOWED, 'isOwner' => $isOwner, 'companyName' => $name, 'fyList' => $fyList,
-            'headOfficeBranch' => self::headOfficeBranch($data)];
+            'headOfficeBranch' => self::headOfficeBranch($data), 'reason' => null];
     }
 
     /**

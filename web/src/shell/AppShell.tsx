@@ -19,8 +19,9 @@ import { AppLauncher } from '../components/AppLauncher'
 import { useMessaging } from '../context/MessagingContext'
 import { NAV } from './navConfig'
 import { Button, EmptyState, ErrorState, LoadingRows, Notice } from '../ui'
-import { api } from '../services/api'
+import { api, ApiError } from '../services/api'
 import { CompanyPicker } from './CompanyPicker'
+import { BrowseCompaniesButton, RequestAccessButton } from './CompanyDiscovery'
 import { GlobalSearch } from '../components/GlobalSearch'
 import { NotificationCentre } from '../components/NotificationCentre'
 import { APP_ENV } from '../config'
@@ -222,6 +223,21 @@ export function AppShell() {
                 anything until it answers. Nothing has been substituted.
               </Notice>
             </div>
+          ) : error !== null && error instanceof ApiError && error.details.reason === 'COMPANY_ACCESS_REQUIRED' ? (
+            <div className="msg-ui">
+              {/* Manage's company registry: the person may see this company, not open it in Messaging. */}
+              <EmptyState
+                title="You do not have access to this company in Messaging"
+                action={
+                  <>
+                    <RequestAccessButton />
+                    <BrowseCompaniesButton label="Browse all workspace companies" />
+                  </>
+                }
+              >
+                {error.message}
+              </EmptyState>
+            </div>
           ) : error !== null ? (
             <div className="msg-ui">
               <ErrorState error={error} onRetry={reload} context="This company could not be opened" />
@@ -237,8 +253,10 @@ export function AppShell() {
             </div>
           ) : companies.length === 0 && session === null ? (
             <div className="msg-ui">
-              <EmptyState title="No companies yet">
-                Aicountly Manage has no company you can open. Create one in Manage, then come back.
+              <EmptyState title="No companies yet" action={<BrowseCompaniesButton label="Browse all workspace companies" />}>
+                Aicountly Manage has no company you can open in Messaging. Search your workspace companies first — the
+                company may already be registered, and its owner can give you access. Only if it is not there, create it
+                in Manage.
               </EmptyState>
             </div>
           ) : lockedOut ? (

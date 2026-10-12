@@ -110,6 +110,13 @@ final class Context
         );
 
         if ($answer['outcome'] === ManageCompanyAnswer::DENIED) {
+            if ($answer['reason'] === ManageCompanyAnswer::ACCESS_REQUIRED) {
+                // In the person's workspace, not granted in Messaging (company registry):
+                // still a 403, with the reason so the browser can offer "Request access".
+                Http::error(403, 'forbidden',
+                    'You can see this company in your workspace, but you do not have access to it in Messaging. Ask the company owner for access.',
+                    ['reason' => ManageCompanyAnswer::ACCESS_REQUIRED, 'cmp_id' => $this->cmpId]);
+            }
             Http::forbidden('You do not have access to this company.');
         }
         if ($answer['outcome'] !== ManageCompanyAnswer::ALLOWED) {

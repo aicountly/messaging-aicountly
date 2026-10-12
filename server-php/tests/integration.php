@@ -1502,6 +1502,18 @@ check('ownership is Manage\'s companyinfo answer, never the portal session (I-18
     assertSame(403, $refusal(9998, $owner), 'Manage\'s 404 (not found or access denied) is a 403');
     assertSame(503, $refusal(9999, $owner), 'an answer about a different company is a 503, never an allow');
     assertSame(503, $refusal(9997, $owner), 'Manage failing is a 503, never an allow');
+
+    // Company registry: Manage is asked naming Messaging (X-Saas-Origin), and its 403
+    // COMPANY_ACCESS_REQUIRED (may see the company, may not open it here) is a 403 that says so.
+    try {
+        Context::forCompany(9996)->assertAllowed($owner);
+        assertTrue(false, 'a company restricted in Messaging was opened');
+    } catch (ResponseSent $e) {
+        assertSame(403, $e->status, 'Manage\'s 403 COMPANY_ACCESS_REQUIRED is a 403');
+        assertSame('COMPANY_ACCESS_REQUIRED', $e->payload['error']['details']['reason'] ?? null, 'carrying Manage\'s reason');
+    }
+    $denied = ManageCompanyAnswer::interpret(403, ['code' => 'COMPANY_ACCESS_REQUIRED'], 9996);
+    assertSame([ManageCompanyAnswer::DENIED, 'COMPANY_ACCESS_REQUIRED'], [$denied['outcome'], $denied['reason']], 'interpreted as denied, never unavailable');
     assertFalse(Context::forCompany(9997)->isOwner($owner), 'and nobody owns what Manage did not answer for');
 
     $service = Auth::forTesting('actor-1', 'service', 'appointments');

@@ -51,6 +51,10 @@ export interface Company {
   cmp_name?: string
   comp_name?: string
   name?: string
+  /** Manage's verdict for Messaging (company registry): false = in the workspace, not open here. Absent = legacy. */
+  can_open_in_current_app?: boolean
+  /** Shared registry status (OWNER, ACCESS_GRANTED, ACCESS_RESTRICTED, …) when Manage reported one. */
+  app_access_status?: string
 }
 
 export interface Suggestion {

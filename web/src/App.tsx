@@ -11,6 +11,7 @@ import { BusinessOutcomesPage } from './pages/BusinessOutcomes'
 import { ChannelsTrustPage } from './pages/ChannelsTrust'
 import { ContactsPage, ContactDetailPage } from './pages/Contacts'
 import { SettingsPage } from './pages/Settings'
+import { UsersAccessPage } from './pages/UsersAccess'
 import { JourneyRunPage } from './pages/JourneyRun'
 import SignIn from './pages/SignIn'
 import { initAnalytics, trackPageView } from './utils/analytics'
@@ -80,6 +81,7 @@ function AuthenticatedApp() {
           <Route path="contacts/:contactUuid" element={<ContactDetailPage />} />
 
           <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings/users-access" element={<UsersAccessPage />} />
 
           {/* The portal lands here after sign-in; AuthProvider has already
               consumed the token by the time this renders. */}
