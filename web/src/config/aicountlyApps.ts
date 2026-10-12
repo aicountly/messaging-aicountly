@@ -331,3 +331,47 @@ export const AICOUNTLY_APPS: AicountlyAppDef[] = [
 
 /** App id for the host running this build. */
 export const CURRENT_APP_ID = 'messaging'
+
+/**
+ * Soft-launch line-up: the products every launcher shows on its main "Apps" tab,
+ * in this order. Every other catalogued product is still a live tile, but sits on
+ * the launcher's "Beta" tab and carries a Beta badge.
+ *
+ * Copied from manage-aicountly's web/src/config/aicountlyApps.js, which mirrors
+ * AppCatalogService::CORE_APP_IDS — change the line-up there, then copy it here.
+ */
+export const CORE_APP_IDS: readonly string[] = [
+  'books',
+  'hrms',
+  'notes',
+  'billing',
+  'inventory',
+  'docs',
+  'remote',
+  'chat',
+  'buddy',
+  'calendar',
+  'contacts',
+  'manage',
+  'insights',
+  'sales',
+  'purchases',
+  'email',
+]
+
+/** True for a product that is catalogued but not yet part of the launch line-up. */
+export function isBetaApp(appId: string): boolean {
+  return !CORE_APP_IDS.includes(appId)
+}
+
+/**
+ * Split launcher tiles into the main tab (in CORE_APP_IDS order) and the Beta tab
+ * (in catalog order). Works on any list of `{ id }` rows, filtered or not.
+ */
+export function splitLauncherApps<T extends { id: string }>(apps: readonly T[]): { core: T[]; beta: T[] } {
+  const core = CORE_APP_IDS.map((id) => apps.find((app) => app.id === id)).filter(
+    (app): app is T => app !== undefined,
+  )
+  const beta = apps.filter((app) => isBetaApp(app.id))
+  return { core, beta }
+}
