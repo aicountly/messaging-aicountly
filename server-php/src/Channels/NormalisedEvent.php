@@ -51,6 +51,14 @@ final class NormalisedEvent
         public readonly ?int $costMinor = null,
         public readonly ?string $costCurrency = null,
         public readonly array $raw = [],
+        /**
+         * What the provider billed, where this event is how it says so (a
+         * WhatsApp status carrying `pricing`, a price that was not known at send
+         * time). For the usage meter only; see Metering/MessagingMeter.
+         *
+         * @var array<string, mixed>
+         */
+        public readonly array $usage = [],
     ) {
     }
 

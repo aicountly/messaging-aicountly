@@ -12,6 +12,7 @@ use Aicountly\Api\Channels\OutboundMessage;
 use Aicountly\Api\Channels\SendResult;
 use Aicountly\Api\Context;
 use Aicountly\Api\Db;
+use Aicountly\Api\Metering\MessagingMeter;
 use Aicountly\Api\Support\Clock;
 use Aicountly\Api\Support\Uuid;
 
@@ -324,6 +325,9 @@ final class DispatchService
                 (bool) $message['ai_generated'],
             );
             MetricsService::recordSent($ctx, $message);
+            // What the provider bills for it, to Manage's usage meter. Measures
+            // only, and attributed from the message row (see MessagingMeter).
+            MessagingMeter::recordForMessage($result->usage, $message);
 
             return ['outcome' => 'accepted', 'detail' => 'Accepted by the provider.'];
         }
@@ -436,6 +440,9 @@ final class DispatchService
                  WHERE message_uuid = :uuid',
                 ['accepted' => MessageState::PROVIDER_ACCEPTED, 'now' => Clock::nowSql(), 'uuid' => $messageUuid],
             );
+            // The send the provider did take is billed; nothing was metered when
+            // it was unknown. Same operation id as at send, so it counts once.
+            MessagingMeter::recordForMessage($result->usage, $message);
 
             return ['resolved' => true, 'status' => MessageState::PROVIDER_ACCEPTED, 'detail' => 'The provider did accept this message.'];
         }

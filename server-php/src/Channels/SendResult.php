@@ -32,12 +32,21 @@ final class SendResult
         public readonly bool $retryable,
         public readonly ?int $costMinor,
         public readonly ?string $costCurrency,
+        /**
+         * What the provider bills for this send, as the adapter read it from the
+         * provider's answer — for the usage meter (Metering/MessagingMeter), never
+         * for anything this product decides. Empty when nothing is billed here.
+         *
+         * @var array<string, mixed>
+         */
+        public readonly array $usage = [],
     ) {
     }
 
-    public static function accepted(string $providerMessageId, ?int $costMinor = null, ?string $currency = null): self
+    /** @param array<string, mixed> $usage see $usage */
+    public static function accepted(string $providerMessageId, ?int $costMinor = null, ?string $currency = null, array $usage = []): self
     {
-        return new self('accepted', $providerMessageId, null, null, false, $costMinor, $currency);
+        return new self('accepted', $providerMessageId, null, null, false, $costMinor, $currency, $usage);
     }
 
     /**

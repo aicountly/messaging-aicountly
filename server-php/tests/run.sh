@@ -93,6 +93,10 @@ done
 
 php "$ROOT/tests/integration.php"
 
+# Usage metering (what is reported to Manage's usage meter, and that it never
+# changes a send). No provider and no Manage is reached.
+php "$ROOT/tests/metering.php"
+
 # The cross-product service contract (Appointments' client notices), including
 # the exchange fixtures Appointments replays. See docs/APPOINTMENTS_MESSAGING_CONTRACT.md.
 php "$ROOT/tests/service.php"
