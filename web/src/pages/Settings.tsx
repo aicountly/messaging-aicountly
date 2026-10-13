@@ -40,6 +40,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Lock, Plus, Save, UserMinus, UserPlus } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { useApi, useMutation } from '../hooks/useApi'
 import { useUrlFilters } from '../hooks/useUrlState'
 import { api, ApiError } from '../services/api'
@@ -97,6 +98,10 @@ export function SettingsPage() {
           <p>What Messaging is allowed to do, who may do it, and what has been changed.</p>
         </div>
         <div className="msg-page-actions">
+          {/* Who may open the company at all lives in the company registry: its own page. */}
+          <Link to="/settings/users-access" className="msg-chip">
+            Users &amp; Access
+          </Link>
           <div className="msg-chips" role="tablist" aria-label="Settings sections">
             {tabs.map((entry) => (
               <button

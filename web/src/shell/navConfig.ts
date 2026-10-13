@@ -16,6 +16,7 @@ import {
   Route,
   Settings as SettingsIcon,
   ShieldCheck,
+  UserCog,
   Users,
   type LucideIcon,
 } from 'lucide-react'
@@ -38,7 +39,10 @@ export const NAV: NavItem[] = [
   { to: '/trust', label: 'Channels & Trust', icon: ShieldCheck, permission: 'messaging.channels.view' },
 
   { to: '/contacts', label: 'Contacts', icon: Users, separator: true, permission: 'messaging.conversations.view' },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
+  { to: '/settings', label: 'Settings', icon: SettingsIcon, exact: true },
+  // Who may open this company in Messaging — the company registry, natively here. Everyone sees
+  // their own access and may ask for it; only the company owner changes it.
+  { to: '/settings/users-access', label: 'Users & Access', icon: UserCog },
 ]
 
 /**
@@ -105,6 +109,7 @@ export const ROUTES: Record<string, string> = {
   contacts: '/contacts',
   settings: '/settings',
   access: '/settings?tab=access',
+  users_access: '/settings/users-access',
   audit: '/settings?tab=audit',
 }
 

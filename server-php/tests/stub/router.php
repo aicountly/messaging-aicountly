@@ -131,6 +131,16 @@ if ($path === '/api/companyinfo' || preg_match('#^/api/companies/(\d+)$#', $path
     if ($cmpId === 9997) {
         send(502, ['message' => 'Bad gateway']);
     }
+    // 9996: in the caller's workspace but not open to them in the product the caller NAMES
+    // (?app= or X-Saas-Origin / X-Source-App) — Manage's company registry answers 403
+    // COMPANY_ACCESS_REQUIRED. Asked without naming a product, it is an ordinary member's yes.
+    // The product named is echoed in X-Stub-Seen-App so a test can see what was sent.
+    $namedApp = strtolower(trim((string) ($query['app'] ?? $_SERVER['HTTP_X_SAAS_ORIGIN'] ?? $_SERVER['HTTP_X_SOURCE_APP'] ?? '')));
+    if ($cmpId === 9996 && $namedApp !== '') {
+        $msg = 'You can see this company, but you do not have access to it in ' . $namedApp . '. Ask the company owner for access.';
+        send(403, ['success' => false, 'status' => 0, 'code' => 'COMPANY_ACCESS_REQUIRED', 'message' => $msg,
+            'error' => ['code' => 'COMPANY_ACCESS_REQUIRED', 'message' => $msg, 'details' => ['cmp_id' => $cmpId, 'app' => $namedApp]]]);
+    }
 
     // The suites' owners own every stub company; everybody else is a member.
     $owner = in_array($bearer, ['test-ses-key-user-owner', 'test-ses-key-user-http'], true);

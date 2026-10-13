@@ -388,6 +388,9 @@ test('the frontend sends only its own two portal credentials as bearer tokens', 
   // short-lived ses_key, which goes to this product's API. Anything else in an
   // Authorization header is a credential a browser should not be holding.
   for (const file of sourceFiles()) {
+    // The vendored company-registry package (copied verbatim from manage-aicountly, never edited
+    // here) names its credential `key`; it is held to the same rule by the test below instead.
+    if (file.includes(`${join('src', 'company-access')}`)) continue
     const source = readFileSync(file, 'utf8')
     for (const match of source.matchAll(/Bearer \$\{([^}]+)\}/g)) {
       const subject = match[1]
@@ -401,6 +404,19 @@ test('the frontend sends only its own two portal credentials as bearer tokens', 
       )
     }
   }
+})
+
+test('the company registry client sends Manage only the ses_key', () => {
+  // Discovery and Users & Access call Manage's registry from the browser. The vendored client's
+  // only bearer is what getSesKey returns, and Messaging wires that to the portal ses_key — the
+  // same credential its own API takes. Nothing else is ever handed to it.
+  const client = read('company-access', 'companyRegistryClient.ts')
+  const bearers = [...client.matchAll(/Bearer \$\{([^}]+)\}/g)].map((m) => m[1])
+  assert.deepEqual(bearers, ['key'], 'one bearer, from one variable')
+  assert.ok(/const key = options\.getSesKey \? await options\.getSesKey\(\) : null/.test(client), 'and that variable is getSesKey()')
+  const wiring = read('services', 'companyRegistry.ts')
+  assert.ok(/getSesKey: \(\) => ensureSesKey\(\)/.test(wiring), 'which is the portal ses_key')
+  assert.ok(!/fetchImpl|service|secret/i.test(wiring.replace(/\/\*[\s\S]*?\*\//g, '')), 'and no other credential is configured')
 })
 
 // ---------------------------------------------------------------------------

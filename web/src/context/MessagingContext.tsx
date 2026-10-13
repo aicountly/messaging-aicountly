@@ -25,6 +25,8 @@ interface MessagingContextValue {
   loading: boolean
   error: ApiError | Error | null
   selectCompany: (cmpId: number, boId?: number) => void
+  /** Listed by Manage (in the person's workspace) but not open to them in Messaging. */
+  isRestricted: (cmpId: number) => boolean
   reload: () => void
   /** Whether this caller holds a Messaging permission. */
   can: (permission: string) => boolean
@@ -62,15 +64,22 @@ export function MessagingProvider({ children }: { children: ReactNode }) {
     const controller = new AbortController()
 
     api
-      .unscoped<{ data: Company[] }>('v1/manage/companies', undefined, controller.signal)
+      .unscoped<{ data: Company[] | { companies?: Company[] } }>('v1/manage/companies', undefined, controller.signal)
       .then((response) => {
         if (cancelled) return
 
-        const list = Array.isArray(response.data) ? response.data : []
+        // The API answers {data: {companies, source, fetched_at}}; a bare list is read too.
+        const list = Array.isArray(response.data)
+          ? response.data
+          : Array.isArray(response.data?.companies)
+            ? response.data.companies
+            : []
         setCompanies(list)
         setCompaniesError(null)
 
-        const ids = list.map(companyId).filter((id) => id > 0)
+        // Only a company open to this person in Messaging is ever chosen: one Manage
+        // marks can_open_in_current_app === false stays listed but is not entered.
+        const ids = list.filter(isOpenHere).map(companyId).filter((id) => id > 0)
         if (ids.length === 0) {
           setLoading(false)
           return
@@ -135,6 +144,11 @@ export function MessagingProvider({ children }: { children: ReactNode }) {
     setSession(null)
   }, [])
 
+  const isRestricted = useCallback(
+    (id: number): boolean => companies.some((company) => companyId(company) === id && !isOpenHere(company)),
+    [companies],
+  )
+
   const can = useCallback(
     (permission: string): boolean => {
       if (session === null) return false
@@ -159,13 +173,14 @@ export function MessagingProvider({ children }: { children: ReactNode }) {
       loading,
       error,
       selectCompany,
+      isRestricted,
       reload,
       can,
       feature,
       timezone: session?.settings.timezone ?? 'Asia/Kolkata',
       currency: session?.settings.currency ?? 'INR',
     }),
-    [session, companies, companiesError, cmpId, boId, loading, error, selectCompany, reload, can, feature],
+    [session, companies, companiesError, cmpId, boId, loading, error, selectCompany, isRestricted, reload, can, feature],
   )
 
   return <MessagingContext.Provider value={value}>{children}</MessagingContext.Provider>
@@ -179,6 +194,11 @@ export function useMessaging(): MessagingContextValue {
 
 export function companyId(company: Company): number {
   return Number(company.cmp_id ?? company.comp_id ?? company.id ?? 0)
+}
+
+/** Absent verdict (a Manage from before per-application access) keeps the old meaning: listed = openable. */
+export function isOpenHere(company: Company): boolean {
+  return company.can_open_in_current_app !== false
 }
 
 export function companyName(company: Company): string {
