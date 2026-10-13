@@ -174,7 +174,7 @@ final class TwilioSmsAdapter implements ChannelAdapter
             return SendResult::unknown('The SMS provider accepted the request but returned no message id.');
         }
 
-        return SendResult::accepted($sid, $this->priceMinor($body), $this->currency($body));
+        return SendResult::accepted($sid, $this->priceMinor($body), $this->currency($body), $this->usage($body, $sid));
     }
 
     public function lookupStatus(ChannelConnection $connection, string $providerMessageId): ?SendResult
@@ -208,8 +208,9 @@ final class TwilioSmsAdapter implements ChannelAdapter
                 $providerMessageId,
                 $this->priceMinor($body),
                 $this->currency($body),
+                $this->usage($body, $providerMessageId),
             ),
-            'delivered' => SendResult::accepted($providerMessageId, $this->priceMinor($body), $this->currency($body)),
+            'delivered' => SendResult::accepted($providerMessageId, $this->priceMinor($body), $this->currency($body), $this->usage($body, $providerMessageId)),
             'failed', 'undelivered' => SendResult::failed(
                 'sms_' . (string) ($body['error_code'] ?? 'failed'),
                 (string) ($body['error_message'] ?? 'The provider reported this message as undelivered.'),
@@ -318,6 +319,7 @@ final class TwilioSmsAdapter implements ChannelAdapter
             status: $mapped,
             errorCode: isset($payload['ErrorCode']) ? 'sms_' . $payload['ErrorCode'] : null,
             errorDetail: isset($payload['ErrorMessage']) ? (string) $payload['ErrorMessage'] : null,
+            usage: $this->priceCorrection($payload, $messageSid),
         )];
     }
 
@@ -337,6 +339,80 @@ final class TwilioSmsAdapter implements ChannelAdapter
         }
 
         return preg_match('/^\+?[0-9 ()-]+$/', $sender) !== 1;
+    }
+
+    /**
+     * What the provider bills for one accepted message, for the usage meter
+     * (Metering/MessagingMeter): the segments it counted, and its price.
+     *
+     * The price is normally not known yet when the send is accepted, so the
+     * cost goes as `pending` and Manage prices it from its rate card unless a
+     * later answer carries the price (priceCorrection()). The id is the
+     * provider's message SID, so a status lookup of the same message reports
+     * the same operation.
+     *
+     * @param array<string, mixed> $body
+     * @return array<string, mixed>
+     */
+    public function usage(array $body, string $sid): array
+    {
+        $segments = $body['num_segments'] ?? null;
+        $reported = is_numeric($segments) && (int) $segments >= 1;
+
+        return [
+            'idempotency_key'     => 'twilio:sms:' . $sid,
+            'category'            => 'sms',
+            'provider'            => 'twilio',
+            'meter'               => 'sms.segments',
+            'units'               => $reported ? (int) $segments : 1,
+            'operation'           => 'messages.create',
+            'provider_request_id' => $sid,
+            'vendor_cost'         => $this->vendorPrice($body['price'] ?? null, $body['price_unit'] ?? null)
+                ?? ['certainty' => 'pending'],
+            'metadata'            => $reported ? null : ['segments_reported' => false],
+        ];
+    }
+
+    /**
+     * A price the provider reports on a status callback, as a correction of the
+     * send it belongs to. Empty when the callback carries none, which is usual.
+     *
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    public function priceCorrection(array $payload, string $sid): array
+    {
+        $price = $this->vendorPrice($payload['Price'] ?? null, $payload['PriceUnit'] ?? null);
+        if ($price === null || $sid === '') {
+            return [];
+        }
+
+        return [
+            'idempotency_key' => 'twilio:sms:' . $sid . ':price',
+            'corrects'        => 'twilio:sms:' . $sid,
+            'category'        => 'sms',
+            'provider'        => 'twilio',
+            'meter'           => 'sms.segments',
+            'vendor_cost'     => $price,
+        ];
+    }
+
+    /**
+     * The provider's own price as a confirmed cost, or null. It reports a
+     * negative decimal string ("-0.00790"); the fee is its absolute value, kept
+     * as written rather than through a float.
+     *
+     * @return array{amount:string, currency:string, certainty:string}|null
+     */
+    private function vendorPrice(mixed $price, mixed $unit): ?array
+    {
+        $amount = is_scalar($price) ? ltrim(trim((string) $price), '-') : '';
+        if (preg_match('/^(0|[1-9][0-9]{0,17})(\.[0-9]{1,10})?$/', $amount) !== 1
+            || !is_string($unit) || preg_match('/^[A-Za-z]{3}$/', $unit) !== 1) {
+            return null;
+        }
+
+        return ['amount' => $amount, 'currency' => strtoupper($unit), 'certainty' => 'confirmed'];
     }
 
     /** @param array<string, mixed> $body */

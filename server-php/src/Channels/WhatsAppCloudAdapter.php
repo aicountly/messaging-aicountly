@@ -287,12 +287,56 @@ final class WhatsAppCloudAdapter implements ChannelAdapter
                         occurredAt: isset($status['timestamp']) ? gmdate('c', (int) $status['timestamp']) : null,
                         costMinor: $costMinor,
                         costCurrency: $currency,
+                        usage: $this->usage($status),
                     );
                 }
             }
         }
 
         return $events;
+    }
+
+    /**
+     * What the provider bills for one message, for the usage meter
+     * (Metering/MessagingMeter): one message in a pricing category, read from
+     * the first status webhook that carries `pricing`.
+     *
+     * Not recorded at send time — the send response says nothing about price
+     * or category — so each message is counted once; a later status repeating
+     * the same pricing reaches Manage as the same event and is a duplicate
+     * there. No amount: the webhook carries none, and Manage prices the
+     * category from its rate card.
+     *
+     * The message id is not sent as it is: a wamid encodes the recipient's
+     * number. Its digest is stable per message, which is all the key needs.
+     *
+     * @param array<string, mixed> $status one entry of value.statuses
+     * @return array<string, mixed>
+     */
+    public function usage(array $status): array
+    {
+        $pricing = $status['pricing'] ?? null;
+        $wamid = is_string($status['id'] ?? null) ? $status['id'] : '';
+        if (!is_array($pricing) || $wamid === '') {
+            return [];
+        }
+
+        $word = static fn (mixed $v): ?string => is_string($v) && preg_match('/^[A-Za-z0-9_]{1,48}$/', $v) === 1 ? $v : null;
+        $category = $word($pricing['category'] ?? null);
+
+        return [
+            'idempotency_key' => 'meta:wa:' . substr(hash('sha256', $wamid), 0, 40),
+            'category'        => 'whatsapp',
+            'provider'        => 'meta_whatsapp',
+            'meter'           => 'whatsapp.messages',
+            'units'           => 1,
+            'service'         => $category !== null ? strtolower($category) : null,
+            'metadata'        => array_filter([
+                'billable'      => is_bool($pricing['billable'] ?? null) ? $pricing['billable'] : null,
+                'pricing_model' => $word($pricing['pricing_model'] ?? null),
+                'pricing_type'  => $word($pricing['type'] ?? null),
+            ], static fn (mixed $v): bool => $v !== null),
+        ];
     }
 
     // -----------------------------------------------------------------------

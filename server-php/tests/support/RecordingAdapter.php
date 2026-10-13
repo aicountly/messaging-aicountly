@@ -40,7 +40,7 @@ final class RecordingAdapter implements ChannelAdapter
     /** @var list<array{to:string, body:string, key:string, content_type:string}> */
     public array $sent = [];
 
-    /** @var list<string> outcomes to return, consumed in order; 'accepted' when exhausted. */
+    /** @var list<string|SendResult> outcomes to return, consumed in order; 'accepted' when exhausted. A SendResult is returned as it is. */
     public array $script = [];
 
     /** Status this adapter reports when asked about an unknown submission. */
@@ -108,6 +108,9 @@ final class RecordingAdapter implements ChannelAdapter
         ];
 
         $outcome = array_shift($this->script) ?? 'accepted';
+        if ($outcome instanceof SendResult) {
+            return $outcome;
+        }
 
         return match ($outcome) {
             'unknown'  => SendResult::unknown('The provider did not answer in time.'),

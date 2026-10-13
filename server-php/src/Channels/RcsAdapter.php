@@ -151,7 +151,34 @@ final class RcsAdapter implements ChannelAdapter
 
         return $providerId === ''
             ? SendResult::unknown('The RCS provider accepted the request but returned no message id.')
-            : SendResult::accepted($providerId);
+            : SendResult::accepted($providerId, null, null, $this->usage($message->messageUuid, $body));
+    }
+
+    /**
+     * What the aggregator bills for one accepted message, for the usage meter
+     * (Metering/MessagingMeter): one message, priced by Manage's rate card.
+     *
+     * Keyed on OUR message id, which is also the messageId this adapter sends
+     * and is the same on every attempt. The provider's `name` is not used: in
+     * Google RBM it is a path that contains the recipient's number.
+     *
+     * @param array<string, mixed> $body
+     * @return array<string, mixed>
+     */
+    public function usage(string $messageUuid, array $body): array
+    {
+        $providerId = $body['messageId'] ?? null;
+
+        return [
+            'idempotency_key'     => 'rcs:msg:' . $messageUuid,
+            'category'            => 'sms',
+            'provider'            => 'rcs',
+            'meter'               => 'sms.segments',
+            'units'               => 1,
+            'service'             => 'rcs',
+            'operation'           => 'messages.send',
+            'provider_request_id' => is_string($providerId) && !str_contains($providerId, '/') ? $providerId : null,
+        ];
     }
 
     public function lookupStatus(ChannelConnection $connection, string $providerMessageId): ?SendResult

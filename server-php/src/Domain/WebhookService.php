@@ -11,6 +11,7 @@ use Aicountly\Api\Channels\ChannelRegistry;
 use Aicountly\Api\Channels\NormalisedEvent;
 use Aicountly\Api\Context;
 use Aicountly\Api\Db;
+use Aicountly\Api\Metering\MessagingMeter;
 use Aicountly\Api\Support\Clock;
 
 /**
@@ -227,7 +228,9 @@ final class WebhookService
         }
 
         $message = Db::first(
-            'SELECT message_uuid, status, conversation_uuid FROM messaging_messages
+            'SELECT message_uuid, status, conversation_uuid,
+                    cmp_id, bo_id, service_app, author_uuid, provider_accepted_at, provider_cost_minor
+             FROM messaging_messages
              WHERE connection_uuid = :conn AND provider_message_id = :pid',
             ['conn' => $connection->connectionUuid, 'pid' => $providerMessageId],
         );
@@ -259,6 +262,12 @@ final class WebhookService
         if ($message === null || $event->status === null) {
             return;
         }
+
+        // What the provider billed, where this event is how it says so (a
+        // WhatsApp `pricing` block, a price not known at send), to Manage's
+        // usage meter. Before the forward-only check: a late receipt still
+        // carries its message's billing.
+        MessagingMeter::recordForMessage($event->usage, $message);
 
         // FORWARD ONLY. See MessageState::advance().
         $next = MessageState::advance((string) $message['status'], $event->status);
