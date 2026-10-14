@@ -27,6 +27,7 @@ import { NotificationCentre } from '../components/NotificationCentre'
 import { APP_ENV } from '../config'
 import './app-shell.css'
 import '../ui/messaging-ui.css'
+import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
 
 function initials(name: string | null | undefined): string {
   if (!name) return '—'
@@ -71,7 +72,7 @@ function NoAccess() {
 
 export function AppShell() {
   const { signOut } = useAuth()
-  const { session, companies, companiesError, loading, error, can, reload } = useMessaging()
+  const { session, companies, companiesError, cmpId, loading, error, can, reload } = useMessaging()
   const location = useLocation()
 
   const [navOpen, setNavOpen] = useState(false)
@@ -208,6 +209,7 @@ export function AppShell() {
         </header>
 
         <main style={{ flex: 1, minWidth: 0 }}>
+          <CompanyRestrictedBanner cmpId={cmpId > 0 ? cmpId : null} />
           {companiesError !== null && companies.length === 0 ? (
             <div className="msg-ui">
               <Notice

@@ -81,6 +81,11 @@ php "$ROOT/bin/migrate.php" > /dev/null
 # database above; the cases that take a migration record away put it back.
 php "$ROOT/tests/console_database.php"
 
+# AICOUNTLY company lifecycle (lib/company-lifecycle): the reviewed purge manifest against the migrated
+# schema, the receiver, the 423 write gate and its allow-list, a purge with its stored objects, the ack.
+# Manage and Drive are fakes; no network.
+php "$ROOT/tests/lifecycle.php"
+
 php -S "127.0.0.1:$STUB_PORT" "$ROOT/tests/stub/router.php" > /dev/null 2>&1 &
 STUB_PID=$!
 trap 'kill $STUB_PID 2>/dev/null || true' EXIT

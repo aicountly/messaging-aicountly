@@ -179,6 +179,38 @@ final class DriveClient extends ApiClient
         return ['ok' => true, 'url' => $url, 'status' => $result['status'], 'code' => null, 'error' => null, 'retryable' => false];
     }
 
+    /**
+     * Delete a stored attachment for good (company lifecycle purge): Drive's custodian delete needs a
+     * passed retention date, so the retention is first set to now, then the document is deleted with
+     * the approval reference. Drive keeps a tombstone (hash, size, who, why). A document Drive no
+     * longer has (404) counts as deleted.
+     *
+     * @return array{ok:bool, gone:bool, status:int, error:?string, retryable:bool}
+     */
+    public function deleteDocument(string $ref, string $approvalRef, string $reason): array
+    {
+        $parsed = self::parseRef($ref);
+        if ($parsed === null) {
+            return ['ok' => false, 'gone' => false, 'status' => 0, 'error' => 'Not a Drive attachment reference.', 'retryable' => false];
+        }
+        if (!$this->configured()) {
+            return ['ok' => false, 'gone' => false, 'status' => 0, 'error' => $this->unavailableMessage(), 'retryable' => true];
+        }
+        $path = '/documents/' . $parsed['document_id'];
+        $retention = $this->signed('PUT', $path . '/retention', $parsed['cmp_id'], ['retention_until' => gmdate('Y-m-d\TH:i:s\Z', time() - 60), 'reason' => $reason], '');
+        if (!$retention['ok'] && $retention['status'] !== 404) {
+            return ['ok' => false, 'gone' => false, 'status' => $retention['status'], 'error' => (string) $retention['error'], 'retryable' => $retention['retryable']];
+        }
+        if ($retention['status'] !== 404) {
+            $delete = $this->signed('POST', $path . '/custodian-delete', $parsed['cmp_id'], ['approval_ref' => $approvalRef, 'reason' => $reason], '');
+            if (!$delete['ok'] && $delete['status'] !== 404) {
+                return ['ok' => false, 'gone' => false, 'status' => $delete['status'], 'error' => (string) $delete['error'], 'retryable' => $delete['retryable']];
+            }
+        }
+
+        return ['ok' => true, 'gone' => $retention['status'] === 404, 'status' => 200, 'error' => null, 'retryable' => false];
+    }
+
     public static function ref(int $cmpId, int $fyId, int $boId, int $documentId): string
     {
         return 'drive:' . $cmpId . ':' . $fyId . ':' . $boId . ':' . $documentId;

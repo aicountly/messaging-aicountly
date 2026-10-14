@@ -17,6 +17,7 @@ use Aicountly\Api\Controllers\ServiceController;
 use Aicountly\Api\Controllers\SettingsController;
 use Aicountly\Api\Controllers\TemplatesController;
 use Aicountly\Api\Controllers\WebhookController;
+use Aicountly\Api\Lifecycle\CompanyLifecycle;
 
 /**
  * Every route this API serves.
@@ -37,6 +38,9 @@ use Aicountly\Api\Controllers\WebhookController;
  *                          delivery receipt from Meta is not a user. Signature
  *                          verified, tenant resolved server-side from the
  *                          connection in the path — never from the payload.
+ *     `/api/internal/manage/company-lifecycle`  AICOUNTLY Manage's company
+ *                          lifecycle events (lib/company-lifecycle). NO session:
+ *                          the HMAC signature is its only credential.
  */
 final class Routes
 {
@@ -48,6 +52,7 @@ final class Routes
         // ------------------------------------------------------------------
         $router->get('webhooks/{provider}/{connection}', [WebhookController::class, 'verify']);
         $router->post('webhooks/{provider}/{connection}', [WebhookController::class, 'receive']);
+        $router->post('internal/manage/company-lifecycle', [CompanyLifecycle::class, 'receive']);
 
         // ------------------------------------------------------------------
         // 2. The cross-product service API.

@@ -67,6 +67,14 @@ final class Router
         return self::$current;
     }
 
+    /** The concrete path being served (e.g. 'v1/messages/abc'), for the company-lifecycle write gate. */
+    private static ?string $currentPath = null;
+
+    public static function currentPath(): ?string
+    {
+        return self::$currentPath;
+    }
+
     private function add(string $method, string $pattern, callable $handler): self
     {
         $this->routes[] = [
@@ -119,6 +127,7 @@ final class Router
             // ServicePolicy reads the matched PATTERN (not the raw path) to
             // decide what a product's service key may do here.
             self::$current = [$route['method'], $route['pattern']];
+            self::$currentPath = implode('/', $segments);
             ($route['handler'])(...$args);
 
             return true;

@@ -12,6 +12,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react'
 import { ApiError, api, setScope } from '../services/api'
 import type { Company, SessionResponse } from '../services/types'
+import { noteCompanyLifecycle } from '../services/companyRestriction'
 
 const COMPANY_STORAGE_KEY = 'messaging:cmp_id'
 const BRANCH_STORAGE_KEY = 'messaging:bo_id'
@@ -119,6 +120,8 @@ export function MessagingProvider({ children }: { children: ReactNode }) {
       .then((response) => {
         if (cancelled) return
         setSession(response.data)
+        // Read-only after a lapsed subscription (Manage's company lifecycle): the banner reads this.
+        noteCompanyLifecycle(cmpId, response.data.lifecycle ?? null)
       })
       .catch((err: Error) => {
         if (cancelled || controller.signal.aborted) return

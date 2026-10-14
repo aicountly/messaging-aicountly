@@ -20,6 +20,7 @@
 
 import { getApiBaseUrl } from '../config'
 import { ensureSesKey } from '../auth/portal'
+import { noteCompanyRestricted, restrictionFromResponse } from './companyRestriction'
 
 export interface CompanyScope {
   cmp_id: number
@@ -222,6 +223,12 @@ async function send<T>(path: string, options: RequestOptions, sesKey: string, ke
   }
 
   if (!response.ok) {
+    // AICOUNTLY company lifecycle: a write to a read-only company is 423 COMPANY_RESTRICTED. Tell the
+    // banner (and its toast) which company and until when; the caller still gets the ApiError.
+    const restriction = restrictionFromResponse(response.status, parsed)
+    if (restriction !== null) {
+      noteCompanyRestricted({ cmpId: scope?.cmp_id, ...restriction, source: 'api' })
+    }
     const envelope = parsed as
       | { error?: { code?: string; message?: string; details?: Record<string, unknown> }; message?: string }
       | null

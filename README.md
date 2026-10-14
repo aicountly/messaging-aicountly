@@ -92,6 +92,15 @@ Companies and who may open them belong to Aicountly Manage's company registry; M
   person's workspaces; a restricted one opens "Request access", never the company, and the API re-checks
   every scoped request with Manage whatever the browser shows.
 
+## Company lifecycle (Manage)
+
+A company whose Messaging subscription lapses is **read-only** here (writes answer 423
+`COMPANY_RESTRICTED`, the app shows a banner; reading and exporting keep working) and is purged when
+Manage asks — attachment files and Drive documents included, the audit trail kept for CERT-In's 180
+days. An AICOUNTLY account's closure deletes that person's own data. The shared receiver kit is vendored
+at `server-php/lib/company-lifecycle/`; setup, the reviewed manifest, cron and settings are in
+[docs/DEPLOYMENT.md § Company lifecycle](docs/DEPLOYMENT.md#company-lifecycle-aicountly-manage).
+
 ## Layout
 
 ```

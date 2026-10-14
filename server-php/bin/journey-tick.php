@@ -58,6 +58,7 @@ $due = Db::all(
      WHERE status IN ('running', 'paused')
        AND resume_after IS NOT NULL
        AND resume_after <= NOW()
+       AND " . Lifecycle\CompanyLifecycle::NOT_RESTRICTED_SQL . "
      ORDER BY resume_after
      LIMIT 100",
 );
@@ -97,7 +98,8 @@ if (!$runChecks) {
 $journeys = Db::all(
     "SELECT journey_uuid, cmp_id, bo_id, kind, name FROM messaging_journeys
      WHERE status = 'published' AND published_version IS NOT NULL
-       AND kind IN ('overdue_invoice_reminder', 'unanswered_enquiry_followup')",
+       AND kind IN ('overdue_invoice_reminder', 'unanswered_enquiry_followup')
+       AND " . Lifecycle\CompanyLifecycle::NOT_RESTRICTED_SQL,
 );
 
 $started = 0;
