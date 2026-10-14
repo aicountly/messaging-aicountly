@@ -1,6 +1,5 @@
 import { AICOUNTLY_APPS, CURRENT_APP_ID } from '../config/aicountlyApps'
 import type { AicountlyAppDef } from '../config/aicountlyApps'
-import { getAuthToken } from '../auth/tokens'
 import { isSandboxHost, PORTAL_LOGIN_PRODUCTION, PORTAL_LOGIN_SANDBOX } from '../auth/hostnames'
 
 const LOGIN_RETURN_PARAM = 'returnUrl'
@@ -179,13 +178,18 @@ export function buildAuthCallbackUrl(app: AicountlyAppDef, sandbox: boolean = is
 
 export interface LaunchOptions {
   sandbox?: boolean
-  authToken?: string | null
   newTab?: boolean
 }
 
 /**
- * SSO launch URL — prefers local auth_token when present; otherwise portal
- * authentication_jump on sandbox (*.gh.aicountly.com) or my.aicountly.com (production).
+ * SSO launch URL — always the portal hand-off: authentication_jump on sandbox
+ * (*.gh.aicountly.com) or my.aicountly.com (production), returning to the target
+ * product's /auth/callback.
+ *
+ * Never this app's own auth_token in the URL, even when one is stored: appended to
+ * another origin's callback, the long-lived credential lands in that tab's address
+ * bar, the browser history and the destination's access logs. The portal restores
+ * its own sign-in from its cookie and issues the target product a fresh token.
  */
 export function buildAppLaunchUrl(app: AicountlyAppDef, options: LaunchOptions = {}): string {
   const sandbox = options.sandbox ?? isSandboxHost()
@@ -195,13 +199,6 @@ export function buildAppLaunchUrl(app: AicountlyAppDef, options: LaunchOptions =
   }
 
   const callbackUrl = buildAuthCallbackUrl(app, sandbox)
-  const authToken = options.authToken ?? getAuthToken()
-
-  if (authToken) {
-    const sep = callbackUrl.includes('?') ? '&' : '?'
-    return `${callbackUrl}${sep}auth_token=${encodeURIComponent(authToken)}`
-  }
-
   const portal = sandbox ? PORTAL_LOGIN_SANDBOX : PORTAL_LOGIN_PRODUCTION
   const params = new URLSearchParams({ [LOGIN_RETURN_PARAM]: callbackUrl })
   return `${portal}/login/authentication_jump/${app.jumpKey}?${params.toString()}`
