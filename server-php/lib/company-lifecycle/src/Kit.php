@@ -34,7 +34,8 @@ final class Kit
 
     /**
      * @param array{hooks?: array<string, list<callable>>, log?: callable, clock?: callable, http?: callable, on_finish?: callable, legal_hold?: callable} $options
-     *   hooks: company / account (after the engine) and, 1.1, company_before / account_before;
+     *   hooks: company / account (after the engine) and, 1.1, company_before / account_before; 1.1.1, expiry_after
+     *          (after a committed retention expiry: fn (string $scope, string $target, array $result, PurgeEngine $engine): ?string);
      *   legal_hold (1.1): fn (string $scope 'company'|'account', int|string $id): ?string — a reason holds the purge
      */
     public function __construct(

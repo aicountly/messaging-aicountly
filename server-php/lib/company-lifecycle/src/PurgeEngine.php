@@ -40,6 +40,19 @@ use PDO;
  * likewise), then the retain_referenced rows (and their via children) no longer referenced, and
  * records it in aic_lifecycle_expiries (schema-1.1.sql). Nothing else of the target is touched.
  *
+ * 1.1.1 retention groups: each retained row with a period is the root of a group — itself and every
+ * row that references it by foreign key, recursively (CASCADE, NO ACTION, RESTRICT: deleting the root
+ * would delete them or be refused; SET NULL / SET DEFAULT only into tables an expires_with names —
+ * otherwise the database just nulls the link; tables without a company column included), down to
+ * the next root: a root inside a group is contained — it must be due for the group to go, but it
+ * expires on its own (a workspace waits for its last report; a report does not wait for its
+ * workspace). Groups that share a row wait for each other. A group expires only when its root's own
+ * period has passed (members without a period inherit it, so a child with a longer period delays
+ * its parent), every contained and sharing group can go, and no row of another company / person
+ * would be deleted with it. Then every member
+ * row is archived (scrubbed) and they are deleted children first, in one transaction, and checked
+ * gone. The manifest's expiry_session_settings are SET LOCAL first (append-only triggers).
+ *
  * restore() puts an archive back (parents first; rows a hook archived are put back over the changed
  * ones); archives() / dropArchive() manage the archive schemas, which hold personal data and must be
  * dropped after the product's archive window.
@@ -264,16 +277,33 @@ final class PurgeEngine
     }
 
     /**
-     * Retention expiry for a company / person that was already purged: archive-first, delete the
-     * retained rows whose retain_from + retain_years has passed ($now), then the retain_referenced
-     * rows nothing references any more; record each table in aic_lifecycle_expiries. One transaction.
-     * Manage is not told (the company / account is gone there).
+     * Retention expiry for a company / person that was already purged, in one transaction (Manage is
+     * not told: the company / account is gone there):
+     *   1. the manifest's expiry_session_settings are SET LOCAL (append-only triggers let the worker
+     *      delete);
+     *   2. retention groups (1.1.1): every retained row of the target with a period is a root; each
+     *      group is the root and every row referencing it through foreign keys, recursively (CASCADE,
+     *      NO ACTION, RESTRICT; SET NULL / SET DEFAULT only into tables an expires_with names; tables
+     *      without a company column included) down to the next root (contained:
+     *      it must be able to go, and goes on its own too); groups sharing a row wait for each other. A
+     *      group expires when its root is past its own period (members without one inherit it), its
+     *      contained and sharing groups can go, and none of its rows is held by another company's /
+     *      person's row (a CASCADE, NO ACTION
+     *      or RESTRICT reference from it; SET NULL / SET DEFAULT references of other targets are left
+     *      to the database);
+     *   3. every member row of the expiring groups is archived (scrubbed), then deleted children
+     *      first, and checked gone;
+     *   4. then the retain_referenced rows nothing references any more (and their via children);
+     *   5. one aic_lifecycle_expiries row per table (and root table) — group_id / group_root /
+     *      group_count with schema-1.1.1.sql.
+     * A group not yet due is reported in waiting, one held by another target's rows in blocked.
      *
-     * @return array{ok:bool, status:string, scope:string, target:string, expired:array<string,int>, orphans:array<string,int>, archive:?string, error:?string, problems:list<string>}
+     * @return array{ok:bool, status:string, scope:string, target:string, expired:array<string,int>, orphans:array<string,int>, groups:array<string,array{groups:int, members:array<string,int>}>, waiting:array<string,int>, blocked:array<string,int>, archive:?string, archive_tables:list<array{table:string, archive_table:string, rows:int}>, error:?string, problems:list<string>}
      */
     public function expire(string $scope, int|string $target, ?int $now = null, bool $dryRun = false): array
     {
-        $out = ['ok' => false, 'status' => 'failed', 'scope' => $scope, 'target' => (string) $target, 'expired' => [], 'orphans' => [], 'archive' => null, 'error' => null, 'problems' => []];
+        $out = ['ok' => false, 'status' => 'failed', 'scope' => $scope, 'target' => (string) $target, 'expired' => [], 'orphans' => [], 'groups' => [], 'waiting' => [], 'blocked' => [],
+            'archive' => null, 'archive_tables' => [], 'error' => null, 'problems' => []];
         $value = self::target($scope, $target);
         if ($value === null) {
             $out['error'] = 'Not a valid ' . ($scope === 'company' ? 'cmp_id' : 'uuid') . '.';
@@ -287,20 +317,10 @@ final class PurgeEngine
             return $out;
         }
         $now ??= ($this->clock)();
-        $entries = [];
-        foreach ($this->manifest->retained($scope) as $i => $e) {
-            if (self::hasPeriod($e)) {
-                $entries[] = [self::SEQ_EXPIRED + $i, $e, '(' . $this->where($e, $scope) . ') AND ' . $this->expiredPredicate($e, $now)];
-            }
-        }
-        foreach ($this->manifest->tables($scope) as $i => $e) {
-            if (isset($e['retain_where']) && self::hasPeriod($e)) {
-                $entries[] = [self::SEQ_EXPIRED + 10000 + $i, $e, '(' . $this->where($e, $scope) . ') AND (' . $e['retain_where'] . ') AND ' . $this->expiredPredicate($e, $now)];
-            }
-        }
+        $roots = $this->periodEntries($scope);
         $any = false;
-        foreach ($entries as [, $e, $where]) {
-            if ($this->countWhere($e, $where, $value) > 0) {
+        foreach ($roots as [$e, $where]) {
+            if ($this->countWhere($e, $where . ' AND ' . $this->expiredPredicate($e, $now), $value) > 0) {
                 $any = true;
                 break;
             }
@@ -313,14 +333,35 @@ final class PurgeEngine
         try {
             $this->db->beginTransaction();
             $this->db->exec("SET LOCAL lock_timeout = '30s'");
+            foreach ($this->manifest->expirySessionSettings() as $name => $setting) {
+                $this->db->prepare('SELECT set_config(?, ?, true)')->execute([$name, $setting]);
+            }
+            $this->db->exec('SET CONSTRAINTS ALL DEFERRED');
             $this->prepareTransaction($scope, $value, false);
+            $g = $this->buildGroups($scope, $value, $now, $roots);
+            $out['waiting'] = $g['waiting'];
+            $out['blocked'] = $g['blocked'];
+            if ($g['why'] !== []) {
+                $out['problems'] = $g['why'];
+            }
+            if ($g['tables'] === []) {
+                $this->db->rollBack();
+
+                return ['ok' => true, 'status' => 'nothing_expired'] + $out;
+            }
             $this->createArchive($archive, false);
-            foreach ($entries as [$seq, $e, $where]) {
-                $n = $this->moveRows($archive, $e, $where, $value, $seq, $scope, null, isset($e['retain_where']) ? '_aic_x_' : '');
-                if ($n > 0) {
-                    $out['expired'][$e['qualified']] = $n;
+            $moved = $this->expireGroups($archive, $scope, $value, $g['tables']);
+            // Report the period tables in manifest order (retained, then retain_where), then the rest.
+            foreach ($roots as [$e]) {
+                if (isset($moved[$e['qualified']])) {
+                    $out['expired'][$e['qualified']] = $moved[$e['qualified']][0];
                 }
             }
+            foreach ($moved as $q => [$n, $arch]) {
+                $out['expired'][$q] ??= $n;
+                $out['archive_tables'][] = ['table' => $q, 'archive_table' => $arch, 'rows' => $n];
+            }
+            $out['groups'] = $this->groupSummary();
             if ($this->needsKeep($scope)) {
                 $this->computeKeep($scope, $value);
             }
@@ -333,22 +374,11 @@ final class PurgeEngine
                 $n = $this->moveRows($archive, $e, $this->where($e, $scope, 0, null, true), $value, $seq, $scope, null);
                 if ($n > 0) {
                     $out['orphans'][$e['qualified']] = $n;
+                    $out['archive_tables'][] = ['table' => $e['qualified'], 'archive_table' => $this->archiveTable($e), 'rows' => $n];
                 }
             }
             if (!$dryRun) {
-                $ins = $this->db->prepare('INSERT INTO aic_lifecycle_expiries (kind, target_cmp_id, target_uuid, source_table, rows_deleted, reason, retain_years, retain_days, retain_from, archive_name, expired_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ))');
-                $byTable = [];
-                foreach ($entries as [, $e]) {
-                    $byTable[$e['qualified']] = $e;
-                }
-                foreach (['expired' => 'retention_ended', 'orphans' => 'no_longer_referenced'] as $k => $reason) {
-                    foreach ($out[$k] as $q => $n) {
-                        $e = $k === 'expired' ? $byTable[$q] : [];
-                        $ins->execute([$scope === 'company' ? 'company' : 'account', $scope === 'company' ? (int) $value : null, $scope === 'company' ? null : $value,
-                            $q, $n, $reason, $e['retain_years'] ?? null, $e['retain_days'] ?? null, $e['retain_from'] ?? null, $archive, gmdate('Y-m-d\TH:i:s\Z', $now)]);
-                    }
-                }
+                $this->recordExpiry($scope, $value, $archive, $now, $roots, $out['orphans']);
             }
             if ($dryRun) {
                 $this->db->rollBack();
@@ -370,6 +400,443 @@ final class PurgeEngine
         $out['archive'] = $dryRun ? null : $archive;
 
         return ['ok' => true, 'status' => $dryRun ? 'dry_run' : 'expired'] + $out;
+    }
+
+    /**
+     * What the reviewer should know beyond the manifest's own warnings (1.1.1): for each retained table
+     * with a period, once, the tables whose rows expire with its rows (its retention group), and which
+     * of them the manifest does not name.
+     *
+     * @return list<string>
+     */
+    public function warnings(?string $scope = null): array
+    {
+        $out = [];
+        foreach ($scope !== null ? [$scope] : PurgeManifest::SCOPES as $s) {
+            $listed = $this->manifest->listed();
+            foreach ($this->periodEntries($s) as [$e]) {
+                $children = array_keys($this->subtreeTables($e['qualified'], $s));
+                $children = array_values(array_filter($children, static fn (string $t): bool => $t !== $e['qualified']));
+                if ($children === []) {
+                    continue;
+                }
+                $unlisted = array_values(array_filter($children, static fn (string $t): bool => !isset($listed[$t])));
+                $out[] = "{$s}: {$e['qualified']} has a retention period and rows of " . count($children) . ' table(s) reference it ('
+                    . implode(', ', array_slice($children, 0, 12)) . (count($children) > 12 ? ', …' : '') . '): they expire with it as one group, once every member with its own period is due too (1.1.1).'
+                    . ($unlisted !== [] ? ' Not in the manifest: ' . implode(', ', $unlisted) . ' — list them (ignore, with the reason) so the review shows them.' : '');
+            }
+        }
+
+        return array_values(array_unique($out));
+    }
+
+    /**
+     * The retained entries with a period (company_retain / user_retain, then retain_where entries), with
+     * the filter of their roots.
+     *
+     * @return list<array{0:array<string,mixed>, 1:string, 2:string}> [entry, where (with ?), archive prefix]
+     */
+    private function periodEntries(string $scope): array
+    {
+        $out = [];
+        foreach ($this->manifest->retained($scope) as $e) {
+            if (self::hasPeriod($e)) {
+                $out[] = [$e, '(' . $this->where($e, $scope) . ')', ''];
+            }
+        }
+        foreach ($this->manifest->tables($scope) as $e) {
+            if (isset($e['retain_where']) && self::hasPeriod($e)) {
+                $out[] = [$e, '(' . $this->where($e, $scope) . ') AND (' . $e['retain_where'] . ')', '_aic_x_'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Every table whose rows can reference $qualified's rows through foreign keys, recursively (the
+     * tables a retention group of it can span), $qualified included.
+     *
+     * @return array<string, true>
+     */
+    private function subtreeTables(string $qualified, ?string $followedIn = null): array
+    {
+        $byParent = [];
+        foreach (array_merge($this->foreignKeys(), $this->declaredReferences()) as $fk) {
+            if (!$fk[6] && !self::isKitTable($fk[0]) && ($followedIn === null || $this->followsEdge($followedIn, $fk[0], $fk[2]))) {
+                $byParent[$fk[1]][$fk[0]] = true;
+            }
+        }
+        $seen = [$qualified => true];
+        $todo = [$qualified];
+        while ($todo !== []) {
+            $t = array_pop($todo);
+            foreach (array_keys($byParent[$t] ?? []) as $c) {
+                if (!isset($seen[$c])) {
+                    $seen[$c] = true;
+                    $todo[] = $c;
+                }
+            }
+        }
+
+        return $seen;
+    }
+
+    /**
+     * Whether a retention group follows a foreign key: CASCADE / NO ACTION / RESTRICT always (deleting the
+     * parent deletes the child or is refused while it exists); SET NULL / SET DEFAULT only into a table some
+     * retained entry of the scope names in expires_with — otherwise the child row is someone else's (an
+     * actor, a client representative, a later record that merely points back) and the database just
+     * nulls its link.
+     */
+    private function followsEdge(string $scope, string $child, string $action): bool
+    {
+        if (in_array($action, ['c', 'a', 'r'], true)) {
+            return true;
+        }
+        foreach ($this->periodEntries($scope) as [$e]) {
+            if (in_array($child, $e['expires_with'] ?? [], true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * expires_with {table, column, parent_column?}: references without a foreign key, as foreign-key
+     * rows [child, parent, 'a', false, [column], [parent column], false] (a member like NO ACTION).
+     *
+     * @return list<array{0:string,1:string,2:string,3:bool,4:list<string>,5:list<string>,6:bool}>
+     */
+    private function declaredReferences(?string $scope = null): array
+    {
+        $out = [];
+        foreach ($scope !== null ? [$scope] : PurgeManifest::SCOPES as $s) {
+            foreach ($this->periodEntries($s) as [$e]) {
+                foreach ($e['expires_with_refs'] ?? [] as $t => [$col, $pc]) {
+                    $pc ??= count($pk = $this->primaryKey($e['qualified'])) === 1 ? $pk[0] : null;
+                    if ($pc !== null) {
+                        $out[] = [$t, $e['qualified'], 'a', false, [$col], [$pc], false];
+                    }
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    private static function isKitTable(string $qualified): bool
+    {
+        [$s, $t] = explode('.', $qualified, 2);
+
+        return str_starts_with($t, 'aic_lifecycle_') || str_starts_with($s, 'aic_lifecycle_');
+    }
+
+    /**
+     * Build the retention groups of one target inside the expiry transaction (pg_temp tables, dropped
+     * at commit): members (table, ctid, group, depth, due for roots), links between groups that share
+     * a row, rows of other targets that hold a group. Returns the tables of the groups that expire
+     * (rows per table), and the due roots that wait (another member not yet due) or are blocked.
+     *
+     * @param list<array{0:array<string,mixed>, 1:string, 2:string}> $roots
+     * @return array{tables:array<string,int>, waiting:array<string,int>, blocked:array<string,int>, why:list<string>}
+     */
+    private function buildGroups(string $scope, string $value, int $now, array $roots): array
+    {
+        $m = 'pg_temp.aic_lifecycle_gm';
+        foreach ([
+            'aic_lifecycle_gm (tbl TEXT NOT NULL, tid TID NOT NULL, grp BIGINT NOT NULL, depth INTEGER NOT NULL, due BOOLEAN NULL, PRIMARY KEY (tbl, tid))',
+            'aic_lifecycle_gl (a BIGINT NOT NULL, b BIGINT NOT NULL)',
+            'aic_lifecycle_gb (grp BIGINT NOT NULL, why TEXT NOT NULL)',
+            'aic_lifecycle_gh (tid TID NOT NULL, grp BIGINT NOT NULL, own BOOLEAN NOT NULL)',
+            'aic_lifecycle_gk (a BIGINT NOT NULL, b BIGINT NOT NULL)',
+            'aic_lifecycle_gw (grp BIGINT NOT NULL)',
+            'aic_lifecycle_gg (grp BIGINT PRIMARY KEY)',
+        ] as $ddl) {
+            $this->db->exec('CREATE TEMP TABLE IF NOT EXISTS ' . $ddl . ' ON COMMIT DROP');
+            $this->db->exec('TRUNCATE pg_temp.' . strtok($ddl, ' '));
+        }
+        foreach ($roots as [$e, $where]) {
+            $sql = "INSERT INTO {$m} (tbl, tid, grp, depth, due) SELECT " . self::lit($e['qualified']) . ", ctid, (SELECT COALESCE(MAX(grp), 0) FROM {$m}) + row_number() OVER (), 0, COALESCE("
+                . $this->expiredPredicate($e, $now) . ', FALSE) FROM ' . self::qq($e['qualified']) . ' WHERE ' . $where . ' ON CONFLICT (tbl, tid) DO NOTHING';
+            $this->db->prepare($sql)->execute(self::params($sql, $value));
+        }
+
+        $byParent = [];
+        foreach (array_merge($this->foreignKeys(), $this->declaredReferences($scope)) as $fk) {
+            if (!$fk[6] && !self::isKitTable($fk[0]) && $this->followsEdge($scope, $fk[0], $fk[2])) {
+                $byParent[$fk[1]][] = $fk;
+            }
+        }
+        $notBefore = [];
+        foreach ($roots as [$e]) {
+            $notBefore += $e['expires_with_not_before_root'] ?? [];
+        }
+        $actions = ['c' => 'ON DELETE CASCADE', 'a' => 'NO ACTION', 'r' => 'RESTRICT', 'n' => 'ON DELETE SET NULL', 'd' => 'ON DELETE SET DEFAULT'];
+        $depthOf = $this->db->prepare("SELECT DISTINCT tbl FROM {$m} WHERE depth = ? ORDER BY tbl");
+        for ($d = 0; ; $d++) {
+            if ($d > 64) {
+                throw new \RuntimeException('retention group deeper than 64 levels of foreign keys');
+            }
+            $depthOf->execute([$d]);
+            $parents = $depthOf->fetchAll(PDO::FETCH_COLUMN);
+            if ($parents === []) {
+                break;
+            }
+            foreach ($parents as $parent) {
+                foreach ($byParent[$parent] ?? [] as [$child, , $action, , $childCols, $parentCols]) {
+                    $this->ensureColumns($child);
+                    $own = $this->ownRow($scope, $child, 'c');
+                    $join = implode(' AND ', array_map(static fn (string $c, string $p): string => 'c.' . self::q($c) . ' = p.' . self::q($p), $childCols, $parentCols));
+                    $this->db->exec('TRUNCATE pg_temp.aic_lifecycle_gh');
+                    $sql = "INSERT INTO pg_temp.aic_lifecycle_gh (tid, grp, own) SELECT DISTINCT c.ctid, g.grp, ({$own}) FROM " . self::qq($child) . ' c JOIN ' . self::qq($parent) . " p ON {$join}"
+                        . " JOIN {$m} g ON g.tbl = " . self::lit($parent) . " AND g.tid = p.ctid AND g.depth = {$d}";
+                    $this->db->prepare($sql)->execute(self::params($sql, $value));
+                    if (in_array($action, ['c', 'a', 'r'], true)) {
+                        $this->db->prepare('INSERT INTO pg_temp.aic_lifecycle_gb (grp, why) SELECT DISTINCT grp, ? FROM pg_temp.aic_lifecycle_gh WHERE NOT own')
+                            ->execute(["{$child} rows of another " . ($scope === 'company' ? 'company' : 'person') . " reference {$parent} ({$actions[$action]})"]);
+                    }
+                    $this->db->exec("INSERT INTO {$m} (tbl, tid, grp, depth) SELECT DISTINCT ON (tid) " . self::lit($child) . ', tid, grp, ' . ($d + 1)
+                        . ' FROM pg_temp.aic_lifecycle_gh WHERE own ORDER BY tid, grp ON CONFLICT (tbl, tid) DO NOTHING');
+                    // A row another group already holds: a root (depth 0) is CONTAINED by this group — it
+                    // must be able to go for this one to go, not the other way round, and its subtree is
+                    // its own; any other row is SHARED — both groups wait for each other.
+                    // (a root of a table an expires_with marks not_before_root waits for this group: shared)
+                    $whole = isset($notBefore[$child]);
+                    $this->db->exec("INSERT INTO pg_temp.aic_lifecycle_gk (a, b) SELECT DISTINCT h.grp, g.grp FROM pg_temp.aic_lifecycle_gh h JOIN {$m} g ON g.tbl = " . self::lit($child)
+                        . ' AND g.tid = h.tid WHERE h.own AND g.grp <> h.grp AND g.depth = 0' . ($whole ? ' AND FALSE' : ''));
+                    $this->db->exec("INSERT INTO pg_temp.aic_lifecycle_gl (a, b) SELECT DISTINCT h.grp, g.grp FROM pg_temp.aic_lifecycle_gh h JOIN {$m} g ON g.tbl = " . self::lit($child)
+                        . ' AND g.tid = h.tid WHERE h.own AND g.grp <> h.grp' . ($whole ? '' : ' AND g.depth > 0'));
+                }
+            }
+        }
+
+        // Which groups go: a root past its own period, not held by another target's row, whose contained
+        // roots go and whose sharing groups go — removed until nothing changes (monotone).
+        // expires_with {table, from}: a member row holds its group until its own date + the root's period.
+        foreach ($roots as [$e]) {
+            foreach ($e['expires_with_from'] ?? [] as $t => $col) {
+                $member = ['qualified' => $t, 'retain_from' => $col] + array_intersect_key($e, ['retain_years' => 1, 'retain_days' => 1]);
+                $this->db->exec("INSERT INTO pg_temp.aic_lifecycle_gw (grp) SELECT DISTINCT g.grp FROM {$m} g JOIN {$m} r ON r.grp = g.grp AND r.depth = 0 AND r.tbl = " . self::lit($e['qualified'])
+                    . ' WHERE g.tbl = ' . self::lit($t) . ' AND g.tid IN (SELECT ctid FROM ' . self::qq($t) . ' WHERE NOT COALESCE(' . $this->expiredPredicate($member, $now) . ', TRUE))');
+            }
+        }
+        $this->db->exec("INSERT INTO pg_temp.aic_lifecycle_gg (grp) SELECT r.grp FROM {$m} r WHERE r.depth = 0 AND r.due
+            AND NOT EXISTS (SELECT 1 FROM pg_temp.aic_lifecycle_gb b WHERE b.grp = r.grp)
+            AND NOT EXISTS (SELECT 1 FROM pg_temp.aic_lifecycle_gw w WHERE w.grp = r.grp)");
+        if ((int) $this->db->query('SELECT (SELECT COUNT(*) FROM pg_temp.aic_lifecycle_gk) + (SELECT COUNT(*) FROM pg_temp.aic_lifecycle_gl)')->fetchColumn() > 0) {
+            for ($i = 0; $i < 100000; $i++) {
+                $n = $this->db->exec('DELETE FROM pg_temp.aic_lifecycle_gg g WHERE EXISTS (SELECT 1 FROM pg_temp.aic_lifecycle_gk k WHERE k.a = g.grp AND k.b NOT IN (SELECT grp FROM pg_temp.aic_lifecycle_gg))
+                    OR EXISTS (SELECT 1 FROM pg_temp.aic_lifecycle_gl l WHERE (l.a = g.grp AND l.b NOT IN (SELECT grp FROM pg_temp.aic_lifecycle_gg))
+                                                                        OR (l.b = g.grp AND l.a NOT IN (SELECT grp FROM pg_temp.aic_lifecycle_gg)))');
+                if ((int) $n === 0) {
+                    break;
+                }
+            }
+        }
+
+        $out = ['tables' => [], 'waiting' => [], 'blocked' => [], 'why' => []];
+        foreach ($this->db->query("SELECT g.tbl, COUNT(*) AS n FROM {$m} g JOIN pg_temp.aic_lifecycle_gg USING (grp) GROUP BY g.tbl ORDER BY g.tbl")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out['tables'][(string) $r['tbl']] = (int) $r['n'];
+        }
+        $held = 'EXISTS (SELECT 1 FROM pg_temp.aic_lifecycle_gb b WHERE b.grp = r.grp)';
+        foreach ($this->db->query("SELECT r.tbl, ({$held}) AS blocked, COUNT(*) AS n FROM {$m} r
+                WHERE r.depth = 0 AND r.due AND r.grp NOT IN (SELECT grp FROM pg_temp.aic_lifecycle_gg) GROUP BY 1, 2 ORDER BY 1")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $blocked = $r['blocked'] === true || $r['blocked'] === 't' || $r['blocked'] === 1 || $r['blocked'] === '1';
+            $out[$blocked ? 'blocked' : 'waiting'][(string) $r['tbl']] = (int) $r['n'];
+        }
+        if ($out['blocked'] !== []) {
+            $out['why'] = array_map('strval', $this->db->query('SELECT DISTINCT why FROM pg_temp.aic_lifecycle_gb ORDER BY why LIMIT 10')->fetchAll(PDO::FETCH_COLUMN));
+        }
+
+        return $out;
+    }
+
+    /**
+     * Archive every member row of the expiring groups (each table once, scrubbed), delete them children
+     * first, check none is left. Returns "schema.table" → [rows, archive table], in deletion order.
+     *
+     * @param array<string,int> $tables rows per table
+     * @return array<string, array{0:int, 1:string}>
+     */
+    private function expireGroups(string $archive, string $scope, string $value, array $tables): array
+    {
+        $prefix = [];
+        foreach ($this->manifest->retained($scope) as $e) {
+            $prefix[$e['qualified']] = '';
+        }
+        foreach ($this->manifest->tables($scope) as $e) {
+            if (isset($e['retain_where'])) {
+                $prefix[$e['qualified']] = '_aic_x_';
+            }
+        }
+        $order = $this->childrenFirst(array_keys($tables));
+        $rows = static fn (string $q): string => 'ctid IN (SELECT g.tid FROM pg_temp.aic_lifecycle_gm g JOIN pg_temp.aic_lifecycle_gg USING (grp) WHERE g.tbl = ' . self::lit($q) . ')';
+        $moved = [];
+        foreach ($order as $k => $q) {
+            [$s, $t] = explode('.', $q, 2);
+            $name = $s === $this->manifest->schema() ? $t : $s . '__' . $t;
+            $arch = substr(($prefix[$q] ?? '_aic_g_') . $name, 0, 63);
+            $dst = self::q($archive) . '.' . self::q($arch);
+            $this->db->exec('CREATE TABLE ' . $dst . ' AS SELECT * FROM ' . self::qq($q) . ' WITH NO DATA');
+            $n = (int) $this->db->exec('INSERT INTO ' . $dst . ' SELECT * FROM ' . self::qq($q) . ' WHERE ' . $rows($q));
+            if ($n !== $tables[$q]) {
+                throw new \RuntimeException("{$q}: {$n} of {$tables[$q]} group row(s) archived (written to concurrently?)");
+            }
+            $this->scrubArchive($dst, $q);
+            $this->db->prepare('INSERT INTO ' . self::q($archive) . '._aic_archive (seq, source_schema, source_table, archive_table, scope, target, row_count) VALUES (?, ?, ?, ?, ?, ?, ?)')
+                ->execute([self::SEQ_EXPIRED + $k, $s, $t, $arch, $scope, $value, $n]);
+            $moved[$q] = [$n, $arch];
+        }
+        // Delete by primary key (read from the archive copy) where there is one: a trigger or a cascade
+        // that updates a member row before its own delete moves it (a new row position); by position
+        // otherwise. Then check: none left, by key and by position.
+        $byKey = function (string $q) use ($archive, $moved): ?string {
+            $pk = $this->primaryKey($q);
+            if ($pk === []) {
+                return null;
+            }
+            $keys = implode(', ', array_map([self::class, 'q'], $pk));
+
+            return "({$keys}) IN (SELECT {$keys} FROM " . self::q($archive) . '.' . self::q($moved[$q][1]) . ')';
+        };
+        foreach ($order as $q) {
+            $this->db->exec('DELETE FROM ' . self::qq($q) . ' WHERE ' . ($byKey($q) ?? $rows($q)));
+        }
+        foreach ($order as $q) {
+            $where = $byKey($q);
+            $left = (int) $this->db->query('SELECT COUNT(*) FROM ' . self::qq($q) . ' WHERE ' . ($where !== null ? $where . ' OR ' : '') . $rows($q))->fetchColumn();
+            if ($left !== 0) {
+                throw new \RuntimeException("{$q}: {$left} retention-group row(s) still live after the delete (a foreign-key cycle or a trigger kept them)");
+            }
+        }
+
+        return $moved;
+    }
+
+    /**
+     * Tables in delete order: a table after every table that references it (children first); a cycle is
+     * broken at the table with the fewest remaining children (deferrable constraints are deferred).
+     *
+     * @param list<string> $tables
+     * @return list<string>
+     */
+    private function childrenFirst(array $tables): array
+    {
+        sort($tables);
+        $in = array_flip($tables);
+        $children = array_fill_keys($tables, []);
+        foreach ($this->foreignKeys() as [$child, $parent, , , , , $inherited]) {
+            if (!$inherited && $child !== $parent && isset($in[$child], $in[$parent])) {
+                $children[$parent][$child] = true;
+            }
+        }
+        $order = [];
+        while ($children !== []) {
+            $pick = null;
+            foreach ($children as $t => $cs) {
+                if ($cs === []) {
+                    $pick = $t;
+                    break;
+                }
+            }
+            if ($pick === null) {
+                $min = PHP_INT_MAX;
+                foreach ($children as $t => $cs) {
+                    if (count($cs) < $min) {
+                        $min = count($cs);
+                        $pick = $t;
+                    }
+                }
+            }
+            $order[] = $pick;
+            unset($children[$pick]);
+            foreach ($children as $t => $cs) {
+                unset($children[$t][$pick]);
+            }
+        }
+
+        return $order;
+    }
+
+    /** @return array<string, array{groups:int, members:array<string,int>}> root table → expiring groups and their rows per table */
+    private function groupSummary(): array
+    {
+        $out = [];
+        foreach ($this->db->query('SELECT r.tbl AS root, g.tbl, COUNT(*) AS n, COUNT(DISTINCT g.grp) AS groups FROM pg_temp.aic_lifecycle_gm g JOIN pg_temp.aic_lifecycle_gg USING (grp)
+                JOIN pg_temp.aic_lifecycle_gm r ON r.grp = g.grp AND r.depth = 0 GROUP BY 1, 2 ORDER BY 1, 2')->fetchAll(PDO::FETCH_ASSOC) as $r) {
+            $out[(string) $r['root']] ??= ['groups' => 0, 'members' => []];
+            $out[(string) $r['root']]['members'][(string) $r['tbl']] = (int) $r['n'];
+            if ($r['root'] === $r['tbl']) {
+                $out[(string) $r['root']]['groups'] = (int) $r['groups'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * aic_lifecycle_expiries: per root table and member table one row (retention_ended for a table with
+     * its own period, expired_with_group for the rest — retention_ended without a period before
+     * schema-1.1.1.sql), then the no-longer-referenced rows.
+     *
+     * @param list<array{0:array<string,mixed>, 1:string, 2:string}> $roots
+     * @param array<string,int> $orphans
+     */
+    private function recordExpiry(string $scope, string $value, string $archive, int $now, array $roots, array $orphans): void
+    {
+        $periods = [];
+        foreach ($roots as [$e]) {
+            $periods[$e['qualified']] = $e;
+        }
+        $grouped = (int) $this->db->query("SELECT COUNT(*) FROM pg_attribute WHERE attrelid = to_regclass('aic_lifecycle_expiries') AND attname = 'group_root' AND NOT attisdropped")->fetchColumn() > 0;
+        $cols = 'kind, target_cmp_id, target_uuid, source_table, rows_deleted, reason, retain_years, retain_days, retain_from, archive_name, expired_at' . ($grouped ? ', group_id, group_root, group_count' : '');
+        $ins = $this->db->prepare("INSERT INTO aic_lifecycle_expiries ({$cols}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMPTZ)" . ($grouped ? ', ?, ?, ?' : '') . ')');
+        $kind = [$scope === 'company' ? 'company' : 'account', $scope === 'company' ? (int) $value : null, $scope === 'company' ? null : $value];
+        $at = gmdate('Y-m-d\TH:i:s\Z', $now);
+        foreach ($this->groupSummary() as $root => $g) {
+            foreach ($g['members'] as $q => $n) {
+                $e = $periods[$q] ?? null;
+                $row = array_merge($kind, [$q, $n, $e !== null || !$grouped ? 'retention_ended' : 'expired_with_group', $e['retain_years'] ?? null, $e['retain_days'] ?? null, $e['retain_from'] ?? null, $archive, $at]);
+                if ($grouped) {
+                    $row = array_merge($row, [substr($archive . ':' . $root, 0, 200), $root, $q === $root ? $g['groups'] : null]);
+                }
+                $ins->execute($row);
+            }
+        }
+        foreach ($orphans as $q => $n) {
+            $row = array_merge($kind, [$q, $n, 'no_longer_referenced', null, null, null, $archive, $at]);
+            $ins->execute($grouped ? array_merge($row, [null, null, null]) : $row);
+        }
+    }
+
+    /** SQL: the child row is the target's (or names no one) — the scope's key columns of that table. */
+    private function ownRow(string $scope, string $qualified, string $alias): string
+    {
+        $keys = null;
+        foreach (array_merge($this->manifest->tables($scope), $this->manifest->retained($scope)) as $e) {
+            if ($e['qualified'] === $qualified && isset($e['keys'])) {
+                $keys = $e['keys'];
+                break;
+            }
+        }
+        $keys ??= array_values(array_filter($this->manifest->keyColumns($scope), fn (string $k): bool => isset($this->cols[$qualified][$k])));
+        if ($keys === []) {
+            return 'TRUE';
+        }
+        $a = self::q($alias) . '.';
+
+        return '(' . implode(' OR ', array_map(static fn (string $k): string => $a . self::q($k) . ' = ?', $keys)) . ') OR ('
+            . implode(' AND ', array_map(static fn (string $k): string => $a . self::q($k) . ' IS NULL', $keys)) . ')';
+    }
+
+    /** Load the columns of a table outside the manifest's schemas (a group member found by foreign key). */
+    private function ensureColumns(string $qualified): void
+    {
+        if (!isset($this->cols[$qualified])) {
+            $this->cols += $this->columns([explode('.', $qualified, 2)[0]]);
+        }
     }
 
     /**
@@ -470,6 +937,11 @@ final class PurgeEngine
         try {
             $this->db->beginTransaction();
             $this->db->exec('SET CONSTRAINTS ALL DEFERRED');
+            // 1.1.1: the manifest's expiry_session_settings, so append-only / immutable triggers that let
+            // the expiry worker delete also let the restore put the rows back.
+            foreach ($this->manifest->expirySessionSettings() as $name => $setting) {
+                $this->db->prepare('SELECT set_config(?, ?, true)')->execute([$name, $setting]);
+            }
             $relinks = [];
             foreach ($rows as $r) {
                 $cols = $this->db->prepare("SELECT column_name FROM information_schema.columns WHERE table_schema = ? AND table_name = ? AND is_generated = 'NEVER'
@@ -688,12 +1160,6 @@ final class PurgeEngine
         foreach ($purge as $e) {
             $byQ[$e['qualified']] = $e;
         }
-        $expirable = [];
-        foreach ($retain as $i => $e) {
-            if (self::hasPeriod($e)) {
-                $expirable[$e['qualified']] = $i;
-            }
-        }
         $defer = false;
         foreach ($this->foreignKeys() as $fk) {
             [$child, $parent, $action, $deferrable, $childCols] = $fk;
@@ -717,18 +1183,42 @@ final class PurgeEngine
                         . ": purging would change its rows without archiving them. List it in {$scope}_tables before {$parent}.";
                 }
             }
-            if (isset($expirable[$parent])) {
-                if (isset($expirable[$child])) {
-                    if ($expirable[$child] > $expirable[$parent] && !$deferrable) {
-                        $problems[] = "{$child} references {$parent}: among the {$scope}_retain tables with a retention period, list the child first (expiry deletes in that order).";
-                    }
-                } elseif (!isset($pos[$child]) && in_array($action, ['c', 'n', 'd'], true)) {
-                    $problems[] = "{$child} has a foreign key into {$parent} with ON DELETE " . ['c' => 'CASCADE', 'n' => 'SET NULL', 'd' => 'SET DEFAULT'][$action]
-                        . ": expiring {$parent} (retention period) would change its rows without archiving them.";
+        }
+        $this->defer[$scope] = $defer;
+
+        // 1.1.1: a retained table with a period expires with the rows that reference it (a retention
+        // group, expire()) — no longer refused. expires_with names the tables the reviewer expects in
+        // the group; one the foreign keys do not reach would be left behind.
+        foreach ($this->periodEntries($scope) as [$e]) {
+            if (($e['expires_with'] ?? []) === []) {
+                continue;
+            }
+            $reach = $this->subtreeTables($e['qualified']);
+            foreach ($e['expires_with'] as $t) {
+                if (!isset($reach[$t])) {
+                    $problems[] = "{$e['qualified']}: expires_with {$t} is not reachable from it through foreign keys, so its rows would not expire with {$e['qualified']}'s (kept for ever) — add the foreign key or give {$t} its own period.";
+                }
+            }
+            foreach ($e['expires_with_refs'] ?? [] as $t => [$col, $pc]) {
+                $this->ensureColumns($t);
+                if (!isset($this->cols[$t][$col])) {
+                    $problems[] = "{$e['qualified']}: expires_with {$t} has no column {$col} (column).";
+                }
+                $pc ??= count($pk = $this->primaryKey($e['qualified'])) === 1 ? $pk[0] : null;
+                if ($pc === null || !isset($this->cols[$e['qualified']][$pc])) {
+                    $problems[] = "{$e['qualified']}: expires_with {$t}.{$col} needs parent_column (no single-column primary key).";
+                }
+            }
+            foreach ($e['expires_with_from'] ?? [] as $t => $col) {
+                $this->ensureColumns($t);
+                $udt = $this->cols[$t][$col]['udt'] ?? null;
+                if ($udt === null) {
+                    $problems[] = "{$e['qualified']}: expires_with {$t} has no column {$col} (from).";
+                } elseif (!in_array($udt, self::DATE_TYPES, true)) {
+                    $problems[] = "{$e['qualified']}: expires_with {$t}.{$col} (from) must be a date or timestamp column.";
                 }
             }
         }
-        $this->defer[$scope] = $defer;
 
         return array_values(array_unique($problems));
     }
@@ -1275,7 +1765,7 @@ final class PurgeEngine
         return $out;
     }
 
-    /** @return list<array{0:string,1:string,2:string,3:bool,4:list<string>,5:list<string>}> [child, parent, on-delete action code, deferrable, child columns, parent columns] */
+    /** @return list<array{0:string,1:string,2:string,3:bool,4:list<string>,5:list<string>,6:bool}> [child, parent, on-delete action code, deferrable, child columns, parent columns, inherited (a partition's copy)] */
     private function foreignKeys(): array
     {
         if ($this->fks !== null) {
@@ -1286,7 +1776,8 @@ final class PurgeEngine
                    (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(con.conkey) WITH ORDINALITY k(attnum, ord)
                       JOIN pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum) AS child_cols,
                    (SELECT string_agg(a.attname, ',' ORDER BY k.ord) FROM unnest(con.confkey) WITH ORDINALITY k(attnum, ord)
-                      JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum) AS parent_cols
+                      JOIN pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum) AS parent_cols,
+                   (con.conparentid <> 0 OR c.relispartition OR p.relispartition) AS inherited
               FROM pg_constraint con
               JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace cn ON cn.oid = c.relnamespace
               JOIN pg_class p ON p.oid = con.confrelid JOIN pg_namespace pn ON pn.oid = p.relnamespace
@@ -1297,6 +1788,7 @@ final class PurgeEngine
         return $this->fks = array_map(static fn (array $r): array => [
             (string) $r['child'], (string) $r['parent'], (string) $r['action'], $r['deferrable'] === true || $r['deferrable'] === 't' || $r['deferrable'] === 1 || $r['deferrable'] === '1',
             explode(',', (string) $r['child_cols']), explode(',', (string) $r['parent_cols']),
+            $r['inherited'] === true || $r['inherited'] === 't' || $r['inherited'] === 1 || $r['inherited'] === '1',
         ], $rows);
     }
 

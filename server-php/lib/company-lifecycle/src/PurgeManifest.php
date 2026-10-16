@@ -67,6 +67,32 @@ namespace Aicountly\Lifecycle;
  *                    puts the link back). Deferrable cycles need nothing: the purge runs
  *                    SET CONSTRAINTS ALL DEFERRED when an out-of-order foreign key is deferrable.
  *
+ * Since 1.1.1 (optional; a 1.0 / 1.1 manifest validates and behaves as before):
+ *
+ *   retention groups a retained entry with a period may have children — rows of any table that
+ *                    reference its rows by foreign key (CASCADE, NO ACTION or RESTRICT; SET NULL / SET
+ *                    DEFAULT only into tables an expires_with names), tables without a company column
+ *                    included. They expire with it, as one
+ *                    group (PurgeEngine::expire()); no longer a refusal. PurgeEngine::warnings() names them
+ *                    once per root table.
+ *   expires_with     on a retained entry with a period (or a retain_where entry with one):
+ *                    ['working_papers', 'schema.table', {table, from}, …] — tables the reviewer expects to
+ *                    expire with its rows; {table: 'sign_offs', from: 'signed_at'}: a member row of that
+ *                    table also holds the group until its own `from` + the root's period has passed (the
+ *                    group runs from the latest record in it, without making the member a root that could
+ *                    expire on its own); {table, column: 'engagement_id', parent_column?}: the table points
+ *                    at this one by that column WITHOUT a foreign key — its rows join the group as if it
+ *                    had one (parent_column defaults to the single-column primary key);
+ *                    not_before_root: true — rows of a retained table with its own period that belong to
+ *                    the group do not expire before it (they wait for the root; the table's other rows
+ *                    keep their own period: an audit trail with engagement and firm-level rows). Refused (PurgeEngine::problems()) when one is not reachable from it through
+ *                    foreign keys: its rows would be left behind, kept for ever. A retained entry named
+ *                    there needs no period of its own (no "missing period" warning): it expires with
+ *                    the root's groups.
+ *   expiry_session_settings  {"aicountly.lifecycle_purge": "on", …}: custom settings (a dotted name)
+ *                    SET LOCAL inside the expiry transaction (and a restore's) only, so a product's
+ *                    append-only / immutable triggers can let the expiry worker delete what has expired.
+ *
  * Identifiers are plain lowercase SQL names; anything else is refused, so a manifest can never inject
  * SQL. aic_lifecycle_* (the kit's own tables) can never be listed.
  */
@@ -203,9 +229,13 @@ final class PurgeManifest
                     if ($period === null) {
                         continue;
                     }
-                    $entry += ['retain_where' => $rw, 'reason' => $reason] + $period;
-                } elseif (isset($e['retain_years']) || isset($e['retain_days']) || isset($e['retain_from'])) {
-                    $problems[] = "{$where}: retain_years / retain_days / retain_from belong on a *_retain entry or with retain_where.";
+                    $with = self::expiresWith($e, $period, $schema, $where, $problems);
+                    if ($with === null) {
+                        continue;
+                    }
+                    $entry += ['retain_where' => $rw, 'reason' => $reason] + $period + $with;
+                } elseif (isset($e['retain_years']) || isset($e['retain_days']) || isset($e['retain_from']) || isset($e['expires_with'])) {
+                    $problems[] = "{$where}: retain_years / retain_days / retain_from / expires_with belong on a *_retain entry or with retain_where.";
                     continue;
                 }
                 $data[$section][] = $entry;
@@ -237,7 +267,11 @@ final class PurgeManifest
                 if ($period === null) {
                     continue;
                 }
-                $data[$section][] = $entry + $period;
+                $with = self::expiresWith($e, $period, $schema, $where, $problems);
+                if ($with === null) {
+                    continue;
+                }
+                $data[$section][] = $entry + $period + $with;
             }
         }
         $data['ignore'] = [];
@@ -293,6 +327,21 @@ final class PurgeManifest
             $data['break_cycle'][$col[0]][] = $col[1];
         }
 
+        $data['expiry_session_settings'] = [];
+        $settings = $raw['expiry_session_settings'] ?? [];
+        if (!is_array($settings) || ($settings !== [] && array_is_list($settings))) {
+            $problems[] = 'expiry_session_settings must map a custom setting ("product.name") to a value.';
+            $settings = [];
+        }
+        foreach ($settings as $name => $value) {
+            if (!is_string($name) || preg_match('/^[a-z_][a-z0-9_]{0,62}\.[a-z_][a-z0-9_]{0,62}$/', $name) !== 1
+                || !(is_string($value) || is_int($value) || is_bool($value)) || preg_match('/^[A-Za-z0-9_.:-]{0,64}$/', is_bool($value) ? ($value ? 'on' : 'off') : (string) $value) !== 1) {
+                $problems[] = "expiry_session_settings[{$name}] must be a custom setting (\"product.name\", lowercase) with a short plain value (letters, digits, _ . : -).";
+                continue;
+            }
+            $data['expiry_session_settings'][$name] = is_bool($value) ? ($value ? 'on' : 'off') : (string) $value;
+        }
+
         // Each table once per scope; via parents listed after their children.
         foreach (self::SCOPES as $scope) {
             $seen = [];
@@ -323,6 +372,20 @@ final class PurgeManifest
             throw new \InvalidArgumentException("Purge manifest refused:\n - " . implode("\n - ", $problems));
         }
 
+        // 1.1.1: a retained table another retained entry names in expires_with expires with that root's
+        // groups — it needs no period of its own (giving it one would let it expire alone, earlier).
+        $with = [];
+        foreach (self::SCOPES as $scope) {
+            foreach (array_merge($data[$scope . '_retain'], $data[$scope . '_tables']) as $e) {
+                foreach ($e['expires_with'] ?? [] as $t) {
+                    $with[$scope][$t] = true;
+                }
+            }
+        }
+        $warnings = array_values(array_filter($warnings, static function (string $w) use ($with): bool {
+            return preg_match('/^(company|user)_(?:retain|tables)\[\d+\] \(([^)]+)\):/', $w, $m) !== 1 || !isset($with[$m[1]][$m[2]]);
+        }));
+
         return new self($data, $warnings);
     }
 
@@ -335,6 +398,12 @@ final class PurgeManifest
     public function warnings(): array
     {
         return $this->warnings;
+    }
+
+    /** @return array<string,string> 1.1.1: custom settings SET LOCAL inside the expiry transaction */
+    public function expirySessionSettings(): array
+    {
+        return $this->data['expiry_session_settings'] ?? [];
     }
 
     /** @return array<string, array{kind:string, paths:list<string>}> column → rule, for one "schema.table" */
@@ -484,6 +553,69 @@ final class PurgeManifest
         }
 
         return ($years !== null ? ['retain_years' => $years] : ['retain_days' => $days]) + ['retain_from' => $from];
+    }
+
+    /**
+     * expires_with (1.1.1): tables expected to expire with this entry's rows (checked against the
+     * foreign keys by PurgeEngine::problems()). Only with a period.
+     *
+     * @param array<string,mixed> $e
+     * @param array<string,mixed> $period
+     * @param list<string> $problems
+     * @return array{expires_with?:list<string>}|null
+     */
+    private static function expiresWith(array $e, array $period, string $schema, string $where, array &$problems): ?array
+    {
+        if (!isset($e['expires_with'])) {
+            return [];
+        }
+        $list = $e['expires_with'];
+        if ($period === [] || !is_array($list) || $list === [] || !array_is_list($list)) {
+            $problems[] = "{$where}.expires_with must be a list of tables, on an entry with retain_years / retain_days and retain_from.";
+
+            return null;
+        }
+        $out = [];
+        $from = [];
+        $refs = [];
+        $whole = [];
+        foreach ($list as $t) {
+            $col = null;
+            $ref = null;
+            $nb = false;
+            if (is_array($t)) {
+                $col = $t['from'] ?? null;
+                $nb = !empty($t['not_before_root']);
+                if (isset($t['column'])) {
+                    $ref = [$t['column'], $t['parent_column'] ?? null];
+                }
+                $bad = ($col !== null && !self::ident($col)) || ($ref !== null && (!self::ident($ref[0]) || ($ref[1] !== null && !self::ident($ref[1]))))
+                    || ($col === null && $ref === null && !$nb);
+                $t = isset($t['schema']) && is_string($t['schema']) && is_string($t['table'] ?? null) ? $t['schema'] . '.' . $t['table'] : ($t['table'] ?? null);
+                if ($bad) {
+                    $t = null;
+                }
+            }
+            $q = is_string($t) ? (self::ident($t) ? self::qualify($t, $schema) : self::tableName($t)) : null;
+            if ($q === null || str_contains($q, '.aic_lifecycle_')) {
+                $problems[] = "{$where}.expires_with: " . json_encode($t) . ' must be a table name ([schema.]table) or {table, from?: date column, column?: reference column, parent_column?}.';
+
+                return null;
+            }
+            $out[$q] = true;
+            if ($col !== null) {
+                $from[$q] = $col;
+            }
+            if ($ref !== null) {
+                $refs[$q] = $ref;
+            }
+            if ($nb) {
+                $whole[$q] = true;
+            }
+        }
+
+        return ['expires_with' => array_keys($out)] + ($from !== [] ? ['expires_with_from' => $from] : []) + ($refs !== [] ? ['expires_with_refs' => $refs] : [])
+            + ($whole !== [] ? ['expires_with_not_before_root' => $whole] : []);
     }
 
     /** retain_where: one condition, no statement separators, placeholders or comments. */

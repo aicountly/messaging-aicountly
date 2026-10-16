@@ -40,6 +40,16 @@ return [
     //   ['table' => 'delegations', 'key_columns' => ['firm_cmp_id', 'client_cmp_id']]   either side matches.
     // 'scrub' => ['payment_webhook_events.raw_payload' => 'json_paths:[payload.email, payload.contact, card.*]', 'cards.pan' => 'null'],
     // 'break_cycle' => ['sessions.current_device_id'],
+    //
+    // ── kit 1.1.1 (optional) ───────────────────────────────────────────────────────────────────────
+    // A retained table with a period expires together with every row that references it by foreign key
+    // (its retention group — children without a company column included), once every member with its
+    // own period is due too. --check-manifest names those tables. In company_retain:
+    //   ['table' => 'engagements', 'key' => 'cmp_id', 'reason' => 'SA 230: 8 years from the report date',
+    //    'retain_years' => 8, 'retain_from' => 'report_date', 'expires_with' => ['working_papers', 'evidence_items']]
+    //       expires_with: refused if the foreign keys do not reach one of them.
+    // 'expiry_session_settings' => ['aicountly.lifecycle_purge' => 'on'],
+    //       SET LOCAL in the expiry (and restore) transaction only, for append-only triggers that allow the worker's delete.
 
     // Deleted on account_purge_requested: the person's own data that is not company data.
     'user_tables' => [

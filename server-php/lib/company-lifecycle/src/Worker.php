@@ -33,6 +33,13 @@ namespace Aicountly\Lifecycle;
  *     retain() for statutory data outside the manifest); before-hooks run ahead of the engine;
  *   - expireRetained() (bin/worker.php --expire-retained, daily): retention expiry of purged
  *     companies / people (PurgeEngine::expire()), skipping any under a legal hold.
+ *
+ * 1.1.1:
+ *   - expiry runs whole retention groups (PurgeEngine::expire());
+ *   - hooks['expiry_after']: fn (string $scope 'company'|'user', string $target, array $result, PurgeEngine $engine): ?string,
+ *     called after an expiry committed (not on a dry run) — e.g. delete the stored files of the expired
+ *     rows: $result['archive'] and $result['archive_tables'] ([{table, archive_table, rows}]) name the
+ *     archive copies to read the object keys from. A hook's error is logged, never undoes the expiry.
  */
 final class Worker
 {
@@ -148,11 +155,11 @@ final class Worker
      * product purged, delete the retained rows whose period has passed (PurgeEngine::expire()). A
      * target under a legal hold is skipped. Manage is not told. Needs schema-1.1.sql.
      *
-     * @return array{targets:int, expired_rows:int, orphan_rows:int, held:int, failed:int, expired:list<array<string,mixed>>, errors:list<string>}
+     * @return array{targets:int, expired_rows:int, orphan_rows:int, held:int, failed:int, waiting:int, blocked:int, expired:list<array<string,mixed>>, errors:list<string>}
      */
     public function expireRetained(bool $dryRun = false, int $limit = 500): array
     {
-        $out = ['targets' => 0, 'expired_rows' => 0, 'orphan_rows' => 0, 'held' => 0, 'failed' => 0, 'expired' => [], 'errors' => []];
+        $out = ['targets' => 0, 'expired_rows' => 0, 'orphan_rows' => 0, 'held' => 0, 'failed' => 0, 'waiting' => 0, 'blocked' => 0, 'expired' => [], 'errors' => []];
         if ($this->engine === null) {
             throw new \RuntimeException('no reviewed purge manifest is configured (LIFECYCLE_MANIFEST)');
         }
@@ -171,13 +178,36 @@ final class Worker
                 ($this->log)('error', "retention expiry of {$scope} {$id} failed: {$r['error']}");
                 continue;
             }
+            $out['waiting'] += array_sum($r['waiting'] ?? []);
+            $out['blocked'] += array_sum($r['blocked'] ?? []);
+            if (($r['blocked'] ?? []) !== []) {
+                ($this->log)('warning', "retention expiry of {$scope} {$id}: " . array_sum($r['blocked']) . ' due group(s) held by rows of another target: ' . implode('; ', $r['problems'] ?? []));
+            }
             if (in_array($r['status'], ['expired', 'dry_run'], true)) {
                 $out['targets']++;
                 $out['expired_rows'] += array_sum($r['expired']);
                 $out['orphan_rows'] += array_sum($r['orphans']);
-                $out['expired'][] = ['scope' => $scope, 'target' => $id, 'expired' => $r['expired'], 'orphans' => $r['orphans'], 'archive' => $r['archive']];
+                $item = ['scope' => $scope, 'target' => $id, 'expired' => $r['expired'], 'orphans' => $r['orphans'], 'archive' => $r['archive']];
+                if (($r['groups'] ?? []) !== []) {
+                    $item['groups'] = $r['groups'];
+                }
                 ($this->log)('notice', sprintf('retention expiry %s %s: %d retained row(s) past their period%s%s', $scope, $id, array_sum($r['expired']),
                     $r['orphans'] !== [] ? ', ' . array_sum($r['orphans']) . ' no longer referenced' : '', $dryRun ? ' (dry run)' : ' archived into ' . $r['archive'] . ' and removed'));
+                if (!$dryRun && $r['status'] === 'expired') {
+                    foreach ($this->hooks['expiry_after'] ?? [] as $hook) {
+                        try {
+                            $line = $hook($scope === 'company' ? 'company' : 'user', (string) $id, $r, $this->engine);
+                            if (is_string($line) && trim($line) !== '') {
+                                $item['hooks'][] = trim($line);
+                                ($this->log)('notice', "retention expiry {$scope} {$id}: " . trim($line));
+                            }
+                        } catch (\Throwable $e) {
+                            $item['hooks'][] = 'hook failed: ' . $e->getMessage();
+                            ($this->log)('error', "retention expiry {$scope} {$id}: expiry_after hook failed: " . $e->getMessage());
+                        }
+                    }
+                }
+                $out['expired'][] = $item;
             }
         }
 

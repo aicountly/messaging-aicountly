@@ -14,10 +14,11 @@ declare(strict_types=1);
  *   … --list-archives
  *   … --drop-archives-older-than=90 [--confirm]  archive schemas hold personal data: drop them after the product's archive window
  *   … --restore=<archive schema> [--confirm]     put an archive back (dry run without --confirm)
- *   … --install-schema                           apply schema.sql + schema-1.1.sql (when the product has no migration runner)
+ *   … --install-schema                           apply schema.sql + schema-1.1.sql + schema-1.1.1.sql (when the product has no migration runner)
  *   … --expire-retained[=dry-run] [--limit=500]  1.1, daily: delete retained rows of purged companies / people whose
  *                                                retain_years / retain_days passed (archived first); Manage is not told
  *   … --check-manifest                           1.1: the manifest's refusals for both scopes on this database, and its warnings
+ *                                                (1.1.1: expiry_groups — the tables each retained table with a period expires with)
  *
  * --bootstrap names a PHP file that returns an Aicountly\Lifecycle\Kit (see examples/). Otherwise the Kit
  * is built from --env (the product's .env; real environment variables win), --app (or LIFECYCLE_APP_KEY)
@@ -60,7 +61,7 @@ try {
     } elseif (isset($o['status'])) {
         $out += $kit->store()->summary();
         $out['configured'] = ['secret' => $kit->config->secretUsable(), 'manage_api_url' => $kit->config->manageUrl, 'service_key' => $kit->config->serviceKey !== null,
-            'schema_1_1' => $kit->store()->hasSchema11()];
+            'schema_1_1' => $kit->store()->hasSchema11(), 'schema_1_1_1' => $kit->store()->hasSchema11() && $kit->store()->hasSchema111()];
         $manifest = $kit->manifest();
         if ($manifest !== null && $manifest->warnings() !== []) {
             $out['manifest_warnings'] = $manifest->warnings();
@@ -76,6 +77,11 @@ try {
         $engine = $kit->engine() ?? throw new RuntimeException('no manifest (--manifest or LIFECYCLE_MANIFEST)');
         $out['problems'] = ['company' => $engine->problems('company'), 'user' => $engine->problems('user')];
         $out['warnings'] = $engine->manifest()->warnings();
+        if ($out['problems']['company'] === [] && $out['problems']['user'] === []) {
+            // 1.1.1: once per retained table with a period, the tables that expire with it (retention groups) —
+            // a note for the reviewer, apart from the warnings (which say what is still to be decided).
+            $out['expiry_groups'] = $engine->warnings();
+        }
         $out['ok'] = $out['problems']['company'] === [] && $out['problems']['user'] === [];
     } elseif (array_key_exists('expire-retained', $o)) {
         $out['expire_retained'] = $kit->worker()->expireRetained($o['expire-retained'] === 'dry-run', max(1, (int) ($o['limit'] ?? 500)));

@@ -1,4 +1,4 @@
-# AICOUNTLY company-lifecycle receiver kit (v1.1.0)
+# AICOUNTLY company-lifecycle receiver kit (v1.1.1)
 
 The one way an AICOUNTLY product receives Manage's **company lifecycle** decisions — view/export-only
 after a lapsed subscription, then delete — and Manage's **account purge** (a closed AICOUNTLY account's
@@ -11,7 +11,7 @@ before the kit: Books (`books-react-app/server-php`, migration 227) and Inventor
 
 > **Copy, don't edit.** Copy this whole folder into the product (§1). Fix bugs here, bump `VERSION`,
 > and copy again. Manage's `server-php/tests/company_lifecycle_kit_drift_test.php` pins the kit's
-> signature, event list and ack statuses to Manage's own. Coming from 1.0? See **§7 Upgrading from 1.0**
+> signature, event list and ack statuses to Manage's own. Coming from 1.0 or 1.1.0? See **§7 Upgrading**
 > and `CHANGELOG.md`.
 
 PHP ≥ 8.1, ext-pdo_pgsql, ext-json (ext-curl preferred; falls back to streams). No Composer, no
@@ -25,6 +25,7 @@ variant; add one to `schema.sql` and `PurgeEngine` before a MySQL product integr
 | `autoload.php` | `require_once` it; maps `Aicountly\Lifecycle\` → `src/` |
 | `schema.sql` | the four tables (`aic_lifecycle_events`, `_state`, `_jobs`, `_acks`) — the product's migration, verbatim |
 | `schema-1.1.sql` | 1.1, additive: `aic_lifecycle_expiries`, jobs may be `held` — the next migration, verbatim |
+| `schema-1.1.1.sql` | 1.1.1, additive and optional: retention-group columns on `aic_lifecycle_expiries` (`group_id`, `group_root`, `group_count`, reason `expired_with_group`) |
 | `CHANGELOG.md` | what changed in each version |
 | `src/Signature.php` | HMAC-SHA256 over `"{ts}.{body}"`, constant time, ±300 s |
 | `src/Config.php` | `LIFECYCLE_WEBHOOK_SECRET`, `MANAGE_API_URL`, `MANAGE_PRODUCT_SERVICE_KEY` |
@@ -32,7 +33,7 @@ variant; add one to `schema.sql` and `PurgeEngine` before a MySQL product integr
 | `src/EventStore.php` | PDO on the kit's tables: idempotency by `event_id`, `occurred_at` ordering, jobs, acks |
 | `src/ReadOnlyGuard.php` | allow / 423 `COMPANY_RESTRICTED` from state + method + path allow-list; companyinfo sync |
 | `src/PurgeManifest.php` | loads + validates the product's reviewed manifest |
-| `src/PurgeEngine.php` | archive-first purge in one transaction, refusals, dry run, read-back, restore, archives; 1.1: row-level retention (`retain_referenced`, `retain_where`), scrub, FK cycles, `key_columns`, retention expiry |
+| `src/PurgeEngine.php` | archive-first purge in one transaction, refusals, dry run, read-back, restore, archives; 1.1: row-level retention (`retain_referenced`, `retain_where`), scrub, FK cycles, `key_columns`, retention expiry; 1.1.1: retention groups, `warnings()` |
 | `src/HookContext.php` | 1.1: a hook's third argument — `archiveRows()` before changing rows outside the engine, `retain()` for statutory data outside the manifest |
 | `src/DeferredSend.php` | 1.1: for SENDERS — what an outbox does with another product's 423 `COMPANY_RESTRICTED` (`deferred_restricted`, hourly re-check, `dropped_company_deleted`) |
 | `src/AccountPurge.php` | `account_purge_requested`: the manifest's `user_tables` (+ hooks) |
@@ -66,7 +67,8 @@ Never let the web server serve `lib/` (CI4 serves only `public/`; for plain-PHP 
 Copy `schema.sql` **unchanged** into the product's migration chain as the next number, e.g.
 `server-php/database/migrations/NNN_aic_company_lifecycle.sql`, then `schema-1.1.sql` unchanged as the
 number after it (`NNN+1_aic_company_lifecycle_1_1.sql`), and register both the way that product
-registers migrations (manifest file, catalog class, runner list). Both are idempotent and additive. If the
+registers migrations (manifest file, catalog class, runner list) — and, optionally (1.1.1), `schema-1.1.1.sql`
+after them (retention-group columns in the expiry record). All are idempotent and additive. If the
 product grants table rights to a separate app user, add the five tables (and the `aic_lifecycle_jobs_id_seq`,
 `aic_lifecycle_acks_id_seq`, `aic_lifecycle_expiries_id_seq` sequences) to its grant script. The archive schemas the purge creates are
 made by the same user that runs the worker, which therefore needs `CREATE` on the database
@@ -156,6 +158,18 @@ Inventory, Pay, Sales, Purchases, POS, Billing and FR already follow. In the SPA
      - `retain_years` **or** `retain_days`, with `retain_from` (a date / timestamp column), on every
        retained entry — `--expire-retained` deletes the row when the period has run out. Missing → a
        warning, never a refusal (the row is then kept for ever).
+     - 1.1.1: a retained table with a period may have children (rows that reference it by foreign key,
+       with or without a company column; CASCADE / NO ACTION / RESTRICT, and SET NULL into tables `expires_with` names): they expire **with** it as one group
+       (§4), once every member with its own period is due too. `--check-manifest` names them (`expiry_groups`, apart from the warnings) once per
+       table. Optional `expires_with: ['working_papers', …]` lists the tables you expect in the group
+       (refused when the foreign keys do not reach one; a retained table named there needs no period of
+       its own — it expires with the root — and does not warn; `['table' => 't', 'from' => 'signed_at']`
+       also makes each of its rows hold the group until its own date + the root's period;
+       `['table' => 't', 'column' => 'engagement_id']` takes a table that points at the root without a
+       foreign key into the group; `'not_before_root' => true` keeps a retained table's rows that belong
+       to the group from expiring before it, its other rows keeping their own period); `expiry_session_settings:
+       ['aicountly.lifecycle_purge' => 'on']` (top level) is `SET LOCAL` in the expiry transaction so
+       append-only triggers let the worker delete.
      - `mode: 'retain_referenced'` + `referenced_by` on a `*_tables` entry — for a chain the law pins:
        only the rows a remaining row references (directly, or through other `retain_referenced`
        tables: order → quotation → lead) are kept; the rest of the company's rows are purged.
@@ -185,7 +199,9 @@ Inventory, Pay, Sales, Purchases, POS, Billing and FR already follow. In the SPA
 The engine also refuses, before writing anything: listed tables/columns that do not exist; a table
 outside the purge list with an `ON DELETE CASCADE / SET NULL / SET DEFAULT` foreign key into a purged
 table (it would change rows without archiving them — retained tables included); a child listed after
-its parent. It never touches a table that is not in the manifest, nor `aic_lifecycle_*`.
+its parent. It never touches a table that is not in the manifest, nor `aic_lifecycle_*` — except that
+retention expiry (1.1.1) deletes, archived first, the rows that reference an expiring retained row
+through foreign keys (its retention group, §4), which `--check-manifest` lists per retained table.
 
 ### Step 5 — cron (ops kit job line)
 Products with the ops kit (`server-php/bin/ops/jobs.txt`) add:
@@ -308,8 +324,20 @@ with a finished account purge, the retained rows whose `retain_from` + `retain_y
 at or before now are archived (scrubbed) and deleted — then the `retain_referenced` rows nothing
 references any more — and each table is recorded in `aic_lifecycle_expiries`. Manage is told nothing
 (the company / account is already gone there). A company that renewed (state `active`) is never expired.
-A retained row with live children outside the manifest makes that target's expiry roll back and report
-an error: list the children (`via`) or give them their own period.
+1.1.1 **retention groups**: each retained row with a period is the root of a group — itself and every
+row that references it through foreign keys, recursively (CASCADE, NO ACTION, RESTRICT; SET NULL / SET
+DEFAULT only into tables an `expires_with` names — otherwise the database nulls the link and the row
+stays; tables without a company column included) — down to the next root: a retained row with its own period inside a group is
+*contained*: it must be due for the group to go, but expires on its own (a workspace waits for its last
+statement; a statement does not wait for its workspace). Groups that share a row wait for each other. A
+group expires only when all of it is due: its root is past its own period (members without a period
+inherit it — a child with a longer period delays its parent) and no row of another company / person would go with it (such a group is
+reported `blocked`; one waiting for a member is `waiting`). Then the expiry archives every member row
+(scrubbed), deletes them children first in the same transaction and checks them gone; the manifest's
+`expiry_session_settings` are `SET LOCAL` first. With `schema-1.1.1.sql` the record names the group
+(`group_id`, `group_root`, `group_count`, members as `expired_with_group`). After it commits, the
+Kit's `hooks['expiry_after']` run — e.g. delete the stored files of the expired rows, read from the
+archive copies (`$result['archive_tables']`).
 
 The archive reverses a purge until it is dropped. It holds personal data: drop it after the product's
 archive window (`--drop-archives-older-than=90 --confirm`, e.g. in a weekly ops job).
@@ -326,7 +354,7 @@ php lib/company-lifecycle/bin/worker.php --env=.env --app=<app> --manifest=confi
   --list-archives
   --drop-archives-older-than=90 [--confirm]
   --restore=<archive schema> [--confirm]   put an archive back (parents first) — then tell Manage/ops by hand
-  --install-schema                apply schema.sql + schema-1.1.sql (only for products without a migration runner)
+  --install-schema                apply schema.sql + schema-1.1.sql + schema-1.1.1.sql (only for products without a migration runner)
   --expire-retained[=dry-run]     1.1, daily: retention expiry (above); --limit=500 targets per run
   --check-manifest                1.1: refusals for both scopes on this database + warnings (exit 1 on a refusal)
 ```
@@ -338,7 +366,8 @@ php lib/company-lifecycle/bin/worker.php --env=.env --app=<app> --manifest=confi
 | Acks retrying | `MANAGE_API_URL` / secret / clock; they continue on their own once fixed |
 | A purge must be undone | `--restore=<schema> --confirm` within the archive window; tell Manage ops (the Manage record says purged) |
 | Manage alerts *purge blocked — legal_hold* | expected while the hold stands; the product's `legal_hold` callable decides, the worker re-checks daily |
-| `--expire-retained` reports an error for a target | read it (usually a child row outside the manifest still references an expiring row); fix the manifest; the next daily run retries |
+| `--expire-retained` reports an error for a target | read it (an append-only trigger: add `expiry_session_settings` and let the trigger honour it; a foreign-key cycle); fix; the next daily run retries |
+| `--expire-retained` reports `blocked` groups | a row of another company / person references the group (CASCADE / RESTRICT); the log says which table — decide by hand, the group waits |
 
 ## 6. Tests
 
@@ -360,14 +389,34 @@ days, boundaries, the chain afterwards, records), legal hold end to end, hooks' 
 ack, machine gating, DeferredSend, `--expire-retained`, `--check-manifest`, and that a 1.0 manifest
 behaves as before (the 1.0 test files run unchanged).
 
-## 7. Upgrading from 1.0
+1.1.1 (`v111_groups_test.php`): a 3-level CASCADE graph without company columns with an append-only
+child, a SET NULL and a RESTRICT child; a retained child with a longer period delays the group; groups
+sharing a row wait for each other; a container root waits for the roots inside it, which go on their own; another company's row blocks a group; the immutable trigger refuses
+without `expiry_session_settings` and allows with it (SET LOCAL only); restore from the expiry archive;
+`expires_with` and `warnings()`; the record with and without `schema-1.1.1.sql`; the `expiry_after` hook
+through the Worker. The 1.0 and 1.1 test files run unchanged.
+
+## 7. Upgrading
+
+**1.1.0 → 1.1.1**: re-copy the folder (§1; record `kit 1.1.1` in the commit message) and run
+`--check-manifest` — a 1.1.0 manifest needs no change and nothing it purges changes. Then add periods to
+the retained roots 1.1.0 blocked (a retained table whose children have no company column — audit files,
+engagements, registers, tickets): give the root `retain_years` + `retain_from`; its children expire with
+it (`--check-manifest` names them; list any it says the manifest does not). If a child table refuses
+DELETE through an append-only trigger, let the trigger allow it when
+`current_setting('<product>.<name>', true) = 'on'` and set `expiry_session_settings`. Optional: add
+`schema-1.1.1.sql` as the next migration (group columns in the expiry record) and an `expiry_after` hook
+for stored files of expired rows. `retention_anchor_at`-style columns products added for 1.1.0 keep
+working.
+
+### From 1.0
 
 A 1.0 manifest behaves exactly as before under 1.1 (one exception: a purge 1.0 refused only because a
 child was listed after its parent through a DEFERRABLE foreign key now runs, deferring the check). Per
 product:
 
 1. **Copy the folder again** (§1): `rm -rf server-php/lib/company-lifecycle && cp -R …/company-lifecycle server-php/lib/company-lifecycle`
-   (drop `tests/` if the product does). Record `kit 1.1.0` in the commit message.
+   (drop `tests/` if the product does). Record the kit version in the commit message.
 2. **Migration**: add `schema-1.1.sql` unchanged as the next migration (`NNN_aic_company_lifecycle_1_1.sql`),
    register it like the 1.0 one, add `aic_lifecycle_expiries` + its sequence to the grant script. Without it
    1.0 behaviour continues, but legal hold and `--expire-retained` cannot run.
@@ -398,8 +447,8 @@ product:
 10. **Legal hold** (optional): pass `legal_hold` in the Kit options (bootstrap) when the product records
     holds.
 11. Run the product's lifecycle tests and `--check-manifest` against a migrated database; update Manage's
-    `docs/company-lifecycle/README.md` §10 row (kit 1.1.0).
+    `docs/company-lifecycle/README.md` §10 row (kit version).
 
 ## Changelog
 
-See `CHANGELOG.md` (1.1.0, 1.0.0).
+See `CHANGELOG.md` (1.1.1, 1.1.0, 1.0.0).

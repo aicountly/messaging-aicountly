@@ -51,11 +51,18 @@ final class EventStore
         return gmdate('Y-m-d\TH:i:s\Z', $ts);
     }
 
-    /** Apply schema.sql and schema-1.1.sql (idempotent). Products normally ship them as migrations instead. */
+    /** Apply schema.sql, schema-1.1.sql and schema-1.1.1.sql (idempotent). Products normally ship them as migrations instead. */
     public function installSchema(): void
     {
         $this->db->exec((string) file_get_contents(dirname(__DIR__) . '/schema.sql'));
         $this->db->exec((string) file_get_contents(dirname(__DIR__) . '/schema-1.1.sql'));
+        $this->db->exec((string) file_get_contents(dirname(__DIR__) . '/schema-1.1.1.sql'));
+    }
+
+    /** schema-1.1.1.sql applied (aic_lifecycle_expiries records retention groups)? */
+    public function hasSchema111(): bool
+    {
+        return (int) $this->db->query("SELECT COUNT(*) FROM pg_attribute WHERE attrelid = to_regclass('aic_lifecycle_expiries') AND attname = 'group_root' AND NOT attisdropped")->fetchColumn() > 0;
     }
 
     /** schema-1.1.sql applied (aic_lifecycle_expiries exists, jobs may be held)? */
