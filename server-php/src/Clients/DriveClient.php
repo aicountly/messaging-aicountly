@@ -7,6 +7,8 @@ namespace Aicountly\Api\Clients;
 use Aicountly\Api\Env;
 use Aicountly\Api\Features;
 
+require_once __DIR__ . '/../../lib/company-lifecycle/autoload.php';
+
 /**
  * Attachments in Aicountly Drive, held by Messaging as Drive's custodian.
  *
@@ -179,6 +181,38 @@ final class DriveClient extends ApiClient
         return ['ok' => true, 'url' => $url, 'status' => $result['status'], 'code' => null, 'error' => null, 'retryable' => false];
     }
 
+    /**
+     * Delete a stored attachment for good (company lifecycle purge): Drive's custodian delete needs a
+     * passed retention date, so the retention is first set to now, then the document is deleted with
+     * the approval reference. Drive keeps a tombstone (hash, size, who, why). A document Drive no
+     * longer has (404) counts as deleted.
+     *
+     * @return array{ok:bool, gone:bool, status:int, error:?string, retryable:bool}
+     */
+    public function deleteDocument(string $ref, string $approvalRef, string $reason): array
+    {
+        $parsed = self::parseRef($ref);
+        if ($parsed === null) {
+            return ['ok' => false, 'gone' => false, 'status' => 0, 'error' => 'Not a Drive attachment reference.', 'retryable' => false];
+        }
+        if (!$this->configured()) {
+            return ['ok' => false, 'gone' => false, 'status' => 0, 'error' => $this->unavailableMessage(), 'retryable' => true];
+        }
+        $path = '/documents/' . $parsed['document_id'];
+        $retention = $this->signed('PUT', $path . '/retention', $parsed['cmp_id'], ['retention_until' => gmdate('Y-m-d\TH:i:s\Z', time() - 60), 'reason' => $reason], '');
+        if (!$retention['ok'] && $retention['status'] !== 404) {
+            return ['ok' => false, 'gone' => false, 'status' => $retention['status'], 'error' => (string) $retention['error'], 'retryable' => $retention['retryable']];
+        }
+        if ($retention['status'] !== 404) {
+            $delete = $this->signed('POST', $path . '/custodian-delete', $parsed['cmp_id'], ['approval_ref' => $approvalRef, 'reason' => $reason], '');
+            if (!$delete['ok'] && $delete['status'] !== 404) {
+                return ['ok' => false, 'gone' => false, 'status' => $delete['status'], 'error' => (string) $delete['error'], 'retryable' => $delete['retryable']];
+            }
+        }
+
+        return ['ok' => true, 'gone' => $retention['status'] === 404, 'status' => 200, 'error' => null, 'retryable' => false];
+    }
+
     public static function ref(int $cmpId, int $fyId, int $boId, int $documentId): string
     {
         return 'drive:' . $cmpId . ':' . $fyId . ':' . $boId . ':' . $documentId;
@@ -239,6 +273,15 @@ final class DriveClient extends ApiClient
         if (!$ok) {
             $error = is_array($decoded) ? (string) ($decoded['error']['message'] ?? $decoded['message'] ?? '') : '';
             error_log(sprintf('[cross-service] service=docs outcome=error operation=custodian%s status=%d', explode('?', $path)[0], $res['status']));
+            // Drive is read-only for this company (its Drive subscription lapsed): 423 COMPANY_RESTRICTED,
+            // read with the kit's DeferredSend::refusal(). Every Drive write here is made while a person
+            // waits (an attachment), so there is no outbox to defer into: the person is shown Drive's own
+            // sentence, nothing is retried, nothing is kept here instead.
+            $restricted = \Aicountly\Lifecycle\DeferredSend::refusal($res['status'], $decoded);
+            if ($restricted !== null) {
+                return ['ok' => false, 'status' => $res['status'], 'data' => [], 'code' => \Aicountly\Lifecycle\DeferredSend::CODE,
+                    'error' => 'Aicountly Drive is read-only for this company. ' . $restricted['message'], 'retryable' => false];
+            }
 
             return [
                 'ok'        => false,

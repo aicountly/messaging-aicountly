@@ -162,6 +162,9 @@ final class DispatchService
             $jobs = Db::all(
                 'SELECT * FROM messaging_dispatch_jobs
                  WHERE status = :queued AND available_at <= :now
+                   -- a company whose Messaging subscription lapsed (company lifecycle) sends nothing;
+                   -- its queue waits for a renewal, or goes with the purge
+                   AND ' . \Aicountly\Api\Lifecycle\CompanyLifecycle::NOT_RESTRICTED_SQL . '
                  ORDER BY available_at
                  LIMIT :limit
                  FOR UPDATE SKIP LOCKED',

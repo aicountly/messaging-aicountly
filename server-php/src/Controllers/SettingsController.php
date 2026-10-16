@@ -58,6 +58,8 @@ final class SettingsController extends Controller
                 'is_owner'     => $ctx->isOwner($auth),
             ],
             'context'     => $ctx->asQuery(),
+            // AICOUNTLY company lifecycle: non-null while the company is read-only here (banner).
+            'lifecycle'   => \Aicountly\Api\Lifecycle\CompanyLifecycle::stateFor($ctx->cmpId),
             'permissions' => $granted,
             'catalog'     => Permissions::CATALOG,
             'settings'    => [
@@ -263,6 +265,8 @@ final class SettingsController extends Controller
         if (!$result['ok']) {
             Http::error(503, 'manage_unavailable', (string) $result['message'], ['retryable' => true]);
         }
+        // Manage's lifecycle (active | restricted | purge_pending) is the source of truth.
+        \Aicountly\Api\Lifecycle\CompanyLifecycle::syncFromCompanyInfo($ctx->cmpId, $result['body'] ?? null);
 
         Http::data([
             'company'    => $result['body']['data'] ?? $result['body'] ?? [],

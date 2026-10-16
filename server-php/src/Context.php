@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Aicountly\Api;
 
 use Aicountly\Api\Clients\ManageClient;
+use Aicountly\Api\Lifecycle\CompanyLifecycle;
 
 /**
  * The company / branch scope every scoped request carries.
@@ -90,6 +91,10 @@ final class Context
                     'This product is not allowed to act for this company without a signed-in person. '
                     . 'An administrator can allow it in Messaging settings.');
             }
+            // A product's writes for a company whose Messaging subscription lapsed are refused too —
+            // as a machine caller (kit 1.1 checkMachine): 423 COMPANY_RESTRICTED, which the sending
+            // product's outbox defers (kit DeferredSend) instead of failing.
+            CompanyLifecycle::guard($this->cmpId, machine: true);
 
             return;
         }
@@ -99,6 +104,8 @@ final class Context
 
         $key = $this->cmpId . ':' . $auth->fingerprint();
         if (isset(self::$verified[$key])) {
+            CompanyLifecycle::guard($this->cmpId);
+
             return;
         }
 
@@ -126,6 +133,12 @@ final class Context
         }
 
         self::$verified[$key] = ['owner' => $answer['isOwner'], 'fy_list' => $answer['fyList'], 'ho_bo' => $answer['headOfficeBranch']];
+
+        // Company lifecycle (lib/company-lifecycle): companyinfo's `lifecycle` is the source of truth,
+        // then a write to a company whose Messaging subscription lapsed is 423 COMPANY_RESTRICTED —
+        // never 403: the person keeps their seat and can still read and export.
+        CompanyLifecycle::syncFromCompanyInfo($this->cmpId, $result['body'] ?? null);
+        CompanyLifecycle::guard($this->cmpId);
     }
 
     /** Does Manage say this caller owns this company? False until asked, and for every service caller. */

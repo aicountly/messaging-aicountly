@@ -18,6 +18,8 @@ import type { SourcePanel } from '../ui'
 export interface SessionResponse {
   user: { uuid: string; name: string; kind: string; is_owner: boolean }
   context: { cmp_id: number; bo_id: number }
+  /** AICOUNTLY company lifecycle: set while the company is read-only here, null when active. */
+  lifecycle?: { lifecycle: string; restricted_until: string | null; message: string } | null
   permissions: string[]
   catalog: Record<string, Record<string, string>>
   settings: {
