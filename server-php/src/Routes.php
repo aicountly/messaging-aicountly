@@ -77,6 +77,8 @@ final class Routes
         $router->delete('v1/access/assignments', [SettingsController::class, 'revokeProfile']);
 
         $router->get('v1/audit', [SettingsController::class, 'audit']);
+        $router->get('v1/audit/export', [SettingsController::class, 'auditExport']);
+        $router->get('v1/audit/entity/{type}/{id}', [SettingsController::class, 'auditEntity']);
 
         // ------------------------------------------------------------------
         // 1. Command Centre.

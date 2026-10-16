@@ -147,6 +147,9 @@ function cleanUp(): void
         'messaging_suppressions', 'messaging_daily_metrics', 'messaging_channel_capabilities',
         'messaging_channel_connections', 'messaging_audit_events', 'messaging_settings',
     ] as $table) {
+        if ($table === 'messaging_audit_events') {
+            Db::run("SET messaging.audit_purge = 'on'"); // the test reset is a documented purge (migration 009)
+        }
         Db::run('DELETE FROM ' . $table . ' WHERE cmp_id = :cmp', ['cmp' => CMP]);
     }
 }

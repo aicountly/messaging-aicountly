@@ -43,14 +43,16 @@ final class TemplatesController extends Controller
     {
         [$auth, $ctx] = self::enter('messaging.templates.manage');
 
-        $result = TemplateService::save($ctx, $auth, Http::body());
+        $body = Http::body();
+        $result = TemplateService::save($ctx, $auth, $body);
         if (!$result['ok']) {
             self::fail($result['code'], $result['detail']);
         }
 
         Audit::record($ctx, $auth, 'template.saved', 'template', $result['template_uuid'], null, [
             'version' => $result['version'],
-        ]);
+            'name'    => (string) ($body['name'] ?? ''),
+        ], summary: 'Created template "' . (string) ($body['name'] ?? '') . '" (version ' . $result['version'] . ')');
 
         Http::data([
             'template' => TemplateService::find($ctx, (string) $result['template_uuid']),

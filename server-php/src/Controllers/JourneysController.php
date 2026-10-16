@@ -84,7 +84,8 @@ final class JourneysController extends Controller
 
         Audit::record($ctx, $auth, 'journey.saved', 'journey', $result['journey_uuid'], null, [
             'version' => $result['version'],
-        ]);
+            'name'    => (string) ($body['name'] ?? ''),
+        ], summary: 'Created journey "' . (string) ($body['name'] ?? '') . '" (version ' . $result['version'] . ')');
 
         Http::data([
             'journey'    => JourneyService::find($ctx, (string) $result['journey_uuid'], $result['version']),
@@ -137,7 +138,16 @@ final class JourneysController extends Controller
             Http::validationFailed('Which version should be published?');
         }
 
-        $result = JourneyService::publish($ctx, $auth, $journeyUuid, $version);
+        // The publication and its audit row commit together: this is the act that lets a journey send.
+        $result = Db::transaction(static function () use ($ctx, $auth, $journeyUuid, $version): array {
+            $result = JourneyService::publish($ctx, $auth, $journeyUuid, $version);
+            if ($result['ok']) {
+                Audit::material($ctx, $auth, 'journey.published', 'journey', $journeyUuid, null, ['version' => $version],
+                    entityLabel: (string) (JourneyService::find($ctx, $journeyUuid)['name'] ?? '') ?: null);
+            }
+
+            return $result;
+        });
 
         if (!$result['ok']) {
             // The validation detail travels with the refusal, so the editor can
@@ -152,8 +162,6 @@ final class JourneysController extends Controller
             ]);
         }
 
-        Audit::record($ctx, $auth, 'journey.published', 'journey', $journeyUuid, null, ['version' => $version]);
-
         Http::data([
             'journey'    => JourneyService::find($ctx, $journeyUuid, $version),
             'validation' => $result['validation'],
@@ -166,14 +174,21 @@ final class JourneysController extends Controller
         [$auth, $ctx] = self::enter('messaging.journeys.publish');
 
         $status = (string) (Http::param('status') ?? '');
-        if (!JourneyService::setStatus($ctx, $auth, $journeyUuid, $status)) {
+        $changed = Db::transaction(static function () use ($ctx, $auth, $journeyUuid, $status): bool {
+            $before = (string) (JourneyService::find($ctx, $journeyUuid)['status'] ?? '');
+            if (!JourneyService::setStatus($ctx, $auth, $journeyUuid, $status)) {
+                return false;
+            }
+            Audit::material($ctx, $auth, 'journey.status_changed', 'journey', $journeyUuid, ['status' => $before], ['status' => $status]);
+
+            return true;
+        });
+        if (!$changed) {
             self::fail(
                 'validation_failed',
                 'That status could not be set. A journey can only be published if it has a published version.',
             );
         }
-
-        Audit::record($ctx, $auth, 'journey.status_changed', 'journey', $journeyUuid, null, ['status' => $status]);
 
         Http::data(['journey' => JourneyService::find($ctx, $journeyUuid)]);
     }

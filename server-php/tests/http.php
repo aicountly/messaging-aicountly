@@ -178,6 +178,9 @@ Context::trustForTesting(CMP, $auth, true);
 Clock::freeze('2026-06-01T04:00:00Z');
 
 foreach ($tables as $table) {
+    if ($table === 'messaging_audit_events') {
+        Db::run("SET messaging.audit_purge = 'on'"); // the test reset is a documented purge (migration 009)
+    }
     Db::run('DELETE FROM ' . $table . ' WHERE cmp_id = :cmp', ['cmp' => CMP]);
 }
 
@@ -808,6 +811,9 @@ check('a draft is written through AI Pulse, or refused honestly when Pulse canno
 Clock::freeze(null);
 
 foreach ($tables as $table) {
+    if ($table === 'messaging_audit_events') {
+        Db::run("SET messaging.audit_purge = 'on'"); // the test reset is a documented purge (migration 009)
+    }
     Db::run('DELETE FROM ' . $table . ' WHERE cmp_id = :cmp', ['cmp' => CMP]);
 }
 

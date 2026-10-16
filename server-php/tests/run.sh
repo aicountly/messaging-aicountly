@@ -93,6 +93,10 @@ done
 
 php "$ROOT/tests/integration.php"
 
+# The audit trail: writer context, the diff, immutability, coverage of the core mutations and the
+# read API (filters, company scoping, permission gating, CSV export).
+php "$ROOT/tests/audit.php"
+
 # Usage metering (what is reported to Manage's usage meter, and that it never
 # changes a send). No provider and no Manage is reached.
 php "$ROOT/tests/metering.php"

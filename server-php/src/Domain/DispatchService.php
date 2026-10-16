@@ -141,7 +141,7 @@ final class DispatchService
                 ['queued' => MessageState::QUEUED, 'now' => Clock::nowSql(), 'uuid' => $messageUuid],
             );
 
-            Audit::record($ctx, $auth, 'message.queued', 'message', $messageUuid, null, ['job_uuid' => $jobUuid]);
+            Audit::material($ctx, $auth, 'message.queued', 'message', $messageUuid, null, ['job_uuid' => $jobUuid]);
 
             return ['ok' => true, 'code' => 'ok', 'detail' => 'Queued to send.', 'job_uuid' => $jobUuid];
         });

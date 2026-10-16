@@ -100,24 +100,30 @@ final class ConsentController extends Controller
             );
         }
 
-        $consentUuid = ConsentService::record(
-            $ctx,
-            $auth,
-            $channel,
-            $address,
-            $purpose,
-            $state,
-            $evidenceSource,
-            $evidenceDetail,
-            isset($body['contact_uuid']) ? (string) $body['contact_uuid'] : null,
-            isset($body['occurred_at']) ? (string) $body['occurred_at'] : null,
-        );
+        // The consent decision and its audit row commit together: consent is what a send is justified by.
+        $consentUuid = Db::transaction(static function () use ($ctx, $auth, $channel, $address, $purpose, $state, $evidenceSource, $evidenceDetail, $body): string {
+            $consentUuid = ConsentService::record(
+                $ctx,
+                $auth,
+                $channel,
+                $address,
+                $purpose,
+                $state,
+                $evidenceSource,
+                $evidenceDetail,
+                isset($body['contact_uuid']) ? (string) $body['contact_uuid'] : null,
+                isset($body['occurred_at']) ? (string) $body['occurred_at'] : null,
+            );
 
-        Audit::record($ctx, $auth, 'consent.' . $state, 'consent', $consentUuid, null, [
-            'channel'         => $channel,
-            'purpose'         => $purpose,
-            'evidence_source' => $evidenceSource,
-        ]);
+            Audit::material($ctx, $auth, 'consent.' . $state, 'consent', $consentUuid, null, [
+                'channel'         => $channel,
+                'purpose'         => $purpose,
+                'evidence_source' => $evidenceSource,
+                'address'         => $address,
+            ], entityLabel: $channel . ' / ' . $purpose . ' (' . Audit::mask($address) . ')');
+
+            return $consentUuid;
+        });
 
         Http::data([
             'consent_uuid' => $consentUuid,
@@ -138,34 +144,40 @@ final class ConsentController extends Controller
             Http::notFound('That consent record could not be found.');
         }
 
-        ConsentService::record(
-            $ctx,
-            $auth,
-            (string) $record['channel'],
-            (string) $record['address'],
-            (string) $record['purpose'],
-            'withdrawn',
-            (string) (Http::param('evidence_source') ?? 'agent_recorded'),
-            (string) (Http::param('evidence_detail') ?? 'Withdrawn by an agent.'),
-            $record['contact_uuid'] !== null ? (string) $record['contact_uuid'] : null,
-        );
+        $evidenceSource = (string) (Http::param('evidence_source') ?? 'agent_recorded');
+        $evidenceDetail = (string) (Http::param('evidence_detail') ?? 'Withdrawn by an agent.');
 
-        // A withdrawal also suppresses, so a queued message stops. Withdrawing
-        // consent without suppressing would leave an already-queued message to
-        // send anyway, which is the exact thing the brief asks not to happen.
-        ConsentService::suppress(
-            $ctx,
-            $auth,
-            (string) $record['channel'],
-            (string) $record['address'],
-            'customer_optout',
-            'Consent withdrawn.',
-        );
+        Db::transaction(static function () use ($ctx, $auth, $record, $consentUuid, $evidenceSource, $evidenceDetail): void {
+            ConsentService::record(
+                $ctx,
+                $auth,
+                (string) $record['channel'],
+                (string) $record['address'],
+                (string) $record['purpose'],
+                'withdrawn',
+                $evidenceSource,
+                $evidenceDetail,
+                $record['contact_uuid'] !== null ? (string) $record['contact_uuid'] : null,
+            );
 
-        Audit::record($ctx, $auth, 'consent.withdrawn', 'consent', $consentUuid, null, [
-            'channel' => (string) $record['channel'],
-            'purpose' => (string) $record['purpose'],
-        ]);
+            // A withdrawal also suppresses, so a queued message stops. Withdrawing
+            // consent without suppressing would leave an already-queued message to
+            // send anyway, which is the exact thing the brief asks not to happen.
+            ConsentService::suppress(
+                $ctx,
+                $auth,
+                (string) $record['channel'],
+                (string) $record['address'],
+                'customer_optout',
+                'Consent withdrawn.',
+            );
+
+            Audit::material($ctx, $auth, 'consent.withdrawn', 'consent', $consentUuid, null, [
+                'channel' => (string) $record['channel'],
+                'purpose' => (string) $record['purpose'],
+            ], entityLabel: (string) $record['channel'] . ' / ' . (string) $record['purpose']
+                . ' (' . Audit::mask((string) $record['address']) . ')');
+        });
 
         Http::data([
             'detail' => 'Withdrawn and suppressed. Anything already queued for this address will be refused at '
@@ -279,21 +291,25 @@ final class ConsentController extends Controller
             Http::validationFailed('channel and address are required.');
         }
 
-        $uuid = ConsentService::suppress(
-            $ctx,
-            $auth,
-            $channel,
-            $address,
-            in_array($reason, ['customer_optout', 'hard_bounce', 'provider_block', 'spam_complaint',
-                'invalid_address', 'manual', 'regulatory'], true) ? $reason : 'manual',
-            trim((string) ($body['detail'] ?? '')),
-            isset($body['expires_at']) ? (string) $body['expires_at'] : null,
-        );
+        $uuid = Db::transaction(static function () use ($ctx, $auth, $channel, $address, $reason, $body): string {
+            $uuid = ConsentService::suppress(
+                $ctx,
+                $auth,
+                $channel,
+                $address,
+                in_array($reason, ['customer_optout', 'hard_bounce', 'provider_block', 'spam_complaint',
+                    'invalid_address', 'manual', 'regulatory'], true) ? $reason : 'manual',
+                trim((string) ($body['detail'] ?? '')),
+                isset($body['expires_at']) ? (string) $body['expires_at'] : null,
+            );
 
-        Audit::record($ctx, $auth, 'address.suppressed', 'suppression', $uuid, null, [
-            'channel' => $channel,
-            'reason'  => $reason,
-        ]);
+            Audit::material($ctx, $auth, 'address.suppressed', 'suppression', $uuid, null, [
+                'channel' => $channel,
+                'reason'  => $reason,
+            ], entityLabel: $channel . ' ' . Audit::mask($address));
+
+            return $uuid;
+        });
 
         Http::data(['suppression_uuid' => $uuid, 'detail' => 'Suppressed.'], 201);
     }
@@ -339,13 +355,22 @@ final class ConsentController extends Controller
             );
         }
 
-        if (!ConsentService::release($ctx, $auth, $suppressionUuid, $reason)) {
+        $released = Db::transaction(static function () use ($ctx, $auth, $suppressionUuid, $reason, $record): bool {
+            if (!ConsentService::release($ctx, $auth, $suppressionUuid, $reason)) {
+                return false;
+            }
+            // Reaching past an opt-out or a provider block: the row is written in the same transaction.
+            Audit::material($ctx, $auth, 'suppression.released', 'suppression', $suppressionUuid, [
+                'released' => false,
+                'reason'   => (string) $record['reason'],
+            ], ['released' => true, 'reason' => (string) $record['reason']], $reason,
+                entityLabel: (string) $record['channel'] . ' ' . Audit::mask((string) $record['address']));
+
+            return true;
+        });
+        if (!$released) {
             self::fail('not_found', 'That suppression could not be lifted.');
         }
-
-        Audit::record($ctx, $auth, 'suppression.released', 'suppression', $suppressionUuid, [
-            'reason' => (string) $record['reason'],
-        ], ['released' => true], $reason);
 
         Http::data([
             'detail' => 'Lifted. The row remains, with your name and the reason against it.',

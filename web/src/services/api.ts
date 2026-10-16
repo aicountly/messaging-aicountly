@@ -256,7 +256,54 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 }
 
+/**
+ * A file the API streams back (the audit CSV), rather than a JSON envelope.
+ *
+ * Same session key, scope and 401 retry as every other call; `truncated` is the server's
+ * X-Export-Truncated, so the screen can say a file is partial.
+ */
+async function download(
+  path: string,
+  params?: QueryParams,
+): Promise<{ blob: Blob; filename: string; truncated: boolean }> {
+  const attempt = async (sesKey: string) => {
+    const response = await fetch(buildUrl(path, params, true), {
+      headers: { Accept: 'text/csv', Authorization: `Bearer ${sesKey}`, 'X-Correlation-Id': CORRELATION_ID },
+      cache: 'no-store',
+    })
+    if (!response.ok) {
+      let envelope: { error?: { code?: string; message?: string }; message?: string } | null = null
+      try {
+        envelope = JSON.parse(await response.text())
+      } catch {
+        envelope = null
+      }
+      throw new ApiError(
+        response.status,
+        envelope?.error?.code ?? 'error',
+        envelope?.error?.message ?? envelope?.message ?? `Request failed (${response.status})`,
+        {},
+      )
+    }
+    const disposition = response.headers.get('Content-Disposition') ?? ''
+    return {
+      blob: await response.blob(),
+      filename: /filename="([^"]+)"/.exec(disposition)?.[1] ?? 'export.csv',
+      truncated: response.headers.get('X-Export-Truncated') === 'true',
+    }
+  }
+
+  try {
+    return await attempt(await ensureSesKey())
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return await attempt(await ensureSesKey(true))
+    throw error
+  }
+}
+
 export const api = {
+  download,
+
   get: <T>(path: string, params?: QueryParams, signal?: AbortSignal) =>
     request<T>(path, { method: 'GET', params, signal }),
 
