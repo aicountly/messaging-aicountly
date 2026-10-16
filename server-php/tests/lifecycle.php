@@ -325,7 +325,7 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
     $ins->execute([uuid4(), CMP, $msg, 'local', $localKey]);
     $ins->execute([uuid4(), CMP, $msg, 'drive', 'drive:' . CMP . ':1:0:555']);
     $ins->execute([uuid4(), CMP, $msg, 'provider', 'meta-media-1']);
-    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type) VALUES (?, 'user-lifecycle', 'user', 'settings.updated', 'settings')")->execute([CMP]);
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, before_state, after_state) VALUES (?, 'user-lifecycle', 'user', 'settings.updated', 'settings', '{\"address\": \"+919800000009\"}', '{\"address\": \"+919800000010\"}')")->execute([CMP]);
     // another company's rows are untouched
     $pdo->prepare("INSERT INTO messaging_dismissed_suggestions (cmp_id, user_uuid, suggestion_key) VALUES (?, 'someone', 'k1')")->execute([OTHER]);
 
@@ -357,6 +357,8 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
     same(0, (int) $pdo->query("SELECT COUNT(*) FROM lifecycle_object_deletions WHERE target_ref = '" . CMP . "' AND status <> 'deleted'")->fetchColumn(), 'every object recorded deleted');
     same(2, (int) $pdo->query("SELECT COUNT(*) FROM lifecycle_object_deletions WHERE target_ref = '" . CMP . "'")->fetchColumn(), 'provider media is not ours to delete');
     truthy((int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . CMP)->fetchColumn() >= 1, 'audit trail retained');
+    $kept = $pdo->query("SELECT action, before_state::text AS b, after_state::text AS a FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND action = 'settings.updated'")->fetch(\PDO::FETCH_ASSOC);
+    same(['settings.updated', '"[redacted]"', '"[redacted]"'], [$kept['action'] ?? null, $kept['b'] ?? null, $kept['a'] ?? null], 'kit 1.1 scrub: who / what kept, the row copies redacted');
     same(1, (int) $pdo->query('SELECT COUNT(*) FROM messaging_dismissed_suggestions WHERE cmp_id = ' . OTHER)->fetchColumn(), 'other company untouched');
 
     same(1, count($acks), 'one ack');

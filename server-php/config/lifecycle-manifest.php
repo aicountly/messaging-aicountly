@@ -72,6 +72,16 @@ return [
             'retain_days' => 180, 'retain_from' => 'created_at'],
     ],
 
+    // Kit 1.1 scrub: the retained audit rows keep who did what, to which record, when and from where —
+    // what CERT-In asks a log to answer — but not the purged rows' contents. before_state / after_state
+    // are copies of Messaging rows (a conversation's customer address, a template's text, a suppression's
+    // number); keeping them for 180 days would keep the customer data the purge deleted. Redacted in
+    // place when the company is purged (and in the archive copy when --expire-retained deletes the rows).
+    'scrub' => [
+        'messaging_audit_events.before_state' => 'redact',
+        'messaging_audit_events.after_state'  => 'redact',
+    ],
+
     // Deleted on account_purge_requested: the person's own data that is not company data. Messaging has
     // no personal inbox, chat, file or device token outside companies; conversations, notes and
     // approvals a person authored inside a company stay with the company.
