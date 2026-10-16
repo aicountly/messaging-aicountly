@@ -36,8 +36,9 @@ require_once __DIR__ . '/../../lib/company-lifecycle/autoload.php';
  * in Aicountly Drive are deleted (ObjectSweep, retried and recorded in lifecycle_object_deletions);
  * channel credentials are never stored here (credential_ref names a server variable or a Console
  * secret), so the ack names the references ops must remove. Inside the database, the retained audit
- * trail's scrub is a before-hook (auditScrubHook): messaging_audit_events is append-only, and migration
- * 012_audit_trail_lifecycle_purge.sql lets only the lifecycle worker through.
+ * trail's scrub is a before-hook (auditScrubHook): messaging_audit_events is append-only, and migrations
+ * 012_audit_trail_lifecycle_purge.sql and 013_audit_trail_lifecycle_scrub_labels.sql let only the
+ * lifecycle worker through.
  */
 final class CompanyLifecycle
 {
@@ -242,10 +243,39 @@ final class CompanyLifecycle
         return '/api/' . trim($path, '/');
     }
 
-    /** The retained audit table and the columns the manifest scrubs on it (tests/lifecycle.php keeps them in step). */
+    /** The retained audit table and the manifest's scrub rules on it (tests/lifecycle.php keeps them in step). */
     public const AUDIT_TABLE = 'messaging_audit_events';
 
-    public const AUDIT_SCRUBBED = ['before_state', 'after_state'];
+    /**
+     * Column => the manifest's scrub rule, exactly as config/lifecycle-manifest.php has it: the row copies
+     * and the readable label / summary redacted whole, meta_json only in its `changes` key (migration 013
+     * allows nothing else).
+     */
+    public const AUDIT_SCRUBBED = [
+        'before_state' => 'redact',
+        'after_state'  => 'redact',
+        'entity_label' => 'redact',
+        'summary'      => 'redact',
+        'meta_json'    => 'json_paths:[changes]',
+    ];
+
+    /**
+     * What a scrubbed column becomes — the value the engine's scrub writes for its rule and the column's
+     * type (001 / 009): redact on JSONB is the JSON string "[redacted]", on TEXT '[redacted]';
+     * json_paths:[changes] on JSONB sets an object's `changes` key (when present) to "[redacted]" and leaves
+     * every other key, a row without the key and a NULL alone.
+     */
+    public static function auditScrubValue(string $column): string
+    {
+        $r = PurgeEngine::REDACTED;
+
+        return match ($column) {
+            'before_state', 'after_state' => "CAST('\"{$r}\"' AS JSONB)",
+            'entity_label', 'summary'     => "CAST('{$r}' AS TEXT)",
+            'meta_json'                   => "CASE WHEN jsonb_typeof(meta_json) = 'object' AND (meta_json -> 'changes') IS NOT NULL"
+                . " THEN jsonb_set(meta_json, ARRAY['changes'], CAST('\"{$r}\"' AS JSONB)) ELSE meta_json END",
+        };
+    }
 
     /**
      * Data outside the database, removed after the rows (kit hooks). Kit 1.1 passes every hook a
@@ -297,14 +327,16 @@ final class CompanyLifecycle
     }
 
     /**
-     * company_before: the retained audit trail's scrub (manifest `scrub`: before_state / after_state
-     * redacted). messaging_audit_events is append-only (009_messaging_audit_trail), and the engine's own
-     * scrub runs inside its purge transaction, where nothing may say "this is the lifecycle purge". So
-     * this hook does it first, the one way migration 012_audit_trail_lifecycle_purge.sql allows: the
-     * company's rows not yet redacted are archived ($ctx->archiveRows, scrubbed there too by the
-     * manifest's rule) and redacted in one transaction under SET LOCAL aicountly.lifecycle_purge = on.
-     * Same value and same rows as the engine's scrub (PurgeEngine::REDACTED, jsonb), which then finds
-     * nothing left to change. A failure is thrown: the kit fails the attempt and retries the job.
+     * company_before: the retained audit trail's scrub (manifest `scrub`: before_state / after_state /
+     * entity_label / summary redacted, meta_json.changes redacted with the other meta_json keys kept).
+     * messaging_audit_events is append-only (009_messaging_audit_trail), and the engine's own scrub runs
+     * inside its purge transaction, where nothing may say "this is the lifecycle purge". So this hook does
+     * it first, the one way migrations 012_audit_trail_lifecycle_purge.sql / 013_audit_trail_lifecycle_scrub_labels.sql
+     * allow: the company's rows with any of those fields not yet redacted are archived ($ctx->archiveRows,
+     * scrubbed there too by the manifest's rules) and redacted in one transaction under SET LOCAL
+     * aicountly.lifecycle_purge = on. Same values and same rows as the engine's scrub (auditScrubValue),
+     * which then finds nothing left to change. A failure is thrown: the kit fails the attempt and retries
+     * the job.
      *
      * @param array<string,int> $scrubbed
      * @return callable(int|string, array<string,mixed>, HookContext): ?string
@@ -313,12 +345,12 @@ final class CompanyLifecycle
     {
         return static function (int|string $cmpId, array $result, HookContext $ctx) use (&$scrubbed): ?string {
             $db = $ctx->pdo();
-            $redacted = "CAST('\"" . PurgeEngine::REDACTED . "\"' AS JSONB)";
             $set = [];
             $differs = [];
-            foreach (self::AUDIT_SCRUBBED as $col) {
-                $set[] = "{$col} = {$redacted}";
-                $differs[] = "{$col} IS DISTINCT FROM {$redacted}";
+            foreach (array_keys(self::AUDIT_SCRUBBED) as $col) {
+                $value = self::auditScrubValue($col);
+                $set[] = "{$col} = {$value}";
+                $differs[] = "{$col} IS DISTINCT FROM {$value}";
             }
             $where = 'cmp_id = ? AND (' . implode(' OR ', $differs) . ')';
             $db->beginTransaction();
