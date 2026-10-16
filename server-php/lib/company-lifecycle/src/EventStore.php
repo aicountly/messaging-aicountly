@@ -51,10 +51,17 @@ final class EventStore
         return gmdate('Y-m-d\TH:i:s\Z', $ts);
     }
 
-    /** Apply schema.sql (idempotent). Products normally ship it as a migration instead. */
+    /** Apply schema.sql and schema-1.1.sql (idempotent). Products normally ship them as migrations instead. */
     public function installSchema(): void
     {
         $this->db->exec((string) file_get_contents(dirname(__DIR__) . '/schema.sql'));
+        $this->db->exec((string) file_get_contents(dirname(__DIR__) . '/schema-1.1.sql'));
+    }
+
+    /** schema-1.1.sql applied (aic_lifecycle_expiries exists, jobs may be held)? */
+    public function hasSchema11(): bool
+    {
+        return (int) $this->db->query("SELECT CASE WHEN to_regclass('aic_lifecycle_expiries') IS NULL THEN 0 ELSE 1 END")->fetchColumn() === 1;
     }
 
     /**
@@ -230,7 +237,7 @@ final class EventStore
                    started_at = COALESCE(j.started_at, CAST(:now2 AS TIMESTAMPTZ)), updated_at = CAST(:now3 AS TIMESTAMPTZ)
              WHERE j.id = (
                 SELECT id FROM aic_lifecycle_jobs
-                 WHERE (status = 'pending' AND next_attempt_at <= CAST(:now4 AS TIMESTAMPTZ))
+                 WHERE (status IN ('pending', 'held') AND next_attempt_at <= CAST(:now4 AS TIMESTAMPTZ))
                     OR (status = 'running' AND locked_at < CAST(:stale AS TIMESTAMPTZ))
                  ORDER BY next_attempt_at, id
                  LIMIT 1
@@ -304,6 +311,72 @@ final class EventStore
     }
 
     /**
+     * A legal hold (1.1): the job waits as held and is looked at again at $nextAt (daily). $ackBody:
+     * the held ack owed to Manage (null when Manage was already told and the hold still stands).
+     */
+    public function holdJob(int $jobId, string $detail, int $nextAt, string $eventId, ?string $ackBody): void
+    {
+        $now = self::iso($this->now());
+        $own = !$this->db->inTransaction();
+        if ($own) {
+            $this->db->beginTransaction();
+        }
+        try {
+            $this->db->prepare("
+                UPDATE aic_lifecycle_jobs SET status = 'held', attempts = 0, detail = :d, locked_at = NULL, finished_at = CAST(:now AS TIMESTAMPTZ),
+                       next_attempt_at = CAST(:next AS TIMESTAMPTZ), updated_at = CAST(:now2 AS TIMESTAMPTZ)
+                 WHERE id = :id
+            ")->execute([':d' => $detail, ':now' => $now, ':next' => self::iso($nextAt), ':now2' => $now, ':id' => $jobId]);
+            if ($ackBody !== null) {
+                $this->db->prepare("UPDATE aic_lifecycle_acks SET status = 'failed', last_error = 'superseded by a newer ack' WHERE job_id = :j AND status = 'pending'")
+                    ->execute([':j' => $jobId]);
+                $this->db->prepare('
+                    INSERT INTO aic_lifecycle_acks (job_id, event_id, body, next_attempt_at, created_at)
+                    VALUES (:j, CAST(:e AS UUID), :b, CAST(:now AS TIMESTAMPTZ), CAST(:now2 AS TIMESTAMPTZ))
+                ')->execute([':j' => $jobId, ':e' => $eventId, ':b' => $ackBody, ':now' => $now, ':now2' => $now]);
+            }
+            if ($own) {
+                $this->db->commit();
+            }
+        } catch (\Throwable $e) {
+            if ($own && $this->db->inTransaction()) {
+                $this->db->rollBack();
+            }
+            throw $e;
+        }
+    }
+
+    /** The status of the newest ack owed or sent for a job, or null. */
+    public function lastAckStatus(int $jobId): ?string
+    {
+        $stmt = $this->db->prepare("SELECT body FROM aic_lifecycle_acks WHERE job_id = :j AND COALESCE(last_error, '') <> 'superseded by a newer ack' ORDER BY id DESC LIMIT 1");
+        $stmt->execute([':j' => $jobId]);
+        $body = $stmt->fetchColumn();
+        $decoded = is_string($body) ? json_decode($body, true) : null;
+
+        return is_array($decoded) && is_string($decoded['status'] ?? null) ? $decoded['status'] : null;
+    }
+
+    /**
+     * Companies and people this product has purged (retention expiry runs on them only): companies
+     * whose state is purged (a renewal makes it active again), people with a finished account purge.
+     *
+     * @return list<array{0:string, 1:string}> [scope company|user, cmp_id|uuid]
+     */
+    public function purgedTargets(): array
+    {
+        $out = [];
+        foreach ($this->db->query("SELECT target_cmp_id FROM aic_lifecycle_state WHERE state = 'purged' ORDER BY target_cmp_id")->fetchAll(PDO::FETCH_COLUMN) as $c) {
+            $out[] = ['company', (string) $c];
+        }
+        foreach ($this->db->query("SELECT DISTINCT target_uuid FROM aic_lifecycle_jobs WHERE kind = 'account' AND status IN ('purged', 'nothing_to_purge') ORDER BY target_uuid")->fetchAll(PDO::FETCH_COLUMN) as $u) {
+            $out[] = ['user', (string) $u];
+        }
+
+        return $out;
+    }
+
+    /**
      * Acks owed and due.
      *
      * @return list<array{id:int, job_id:int, event_id:string, body:string, attempts:int}>
@@ -349,7 +422,7 @@ final class EventStore
         $stmt = $this->db->prepare("
             UPDATE aic_lifecycle_jobs SET status = 'pending', attempts = 0, locked_at = NULL, next_attempt_at = CAST(:now AS TIMESTAMPTZ),
                    finished_at = NULL, updated_at = CAST(:now2 AS TIMESTAMPTZ)
-             WHERE event_id = CAST(:e AS UUID) AND status IN ('failed', 'purged', 'nothing_to_purge')
+             WHERE event_id = CAST(:e AS UUID) AND status IN ('failed', 'purged', 'nothing_to_purge', 'held')
             RETURNING id
         ");
         $now = self::iso($this->now());

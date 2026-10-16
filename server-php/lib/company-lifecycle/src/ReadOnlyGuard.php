@@ -22,6 +22,12 @@ namespace Aicountly\Lifecycle;
  *
  * Never turn this into 403/404: the person keeps their seat and must be able to export.
  *
+ * Machine callers (1.1) — another product's outbox, a service key, a signature instead of a session —
+ * go through checkMachine(): refused with the same 423 by default (their senders defer the item:
+ * DeferredSend), except GET/HEAD/OPTIONS, the read-only allow-list, Manage's own lifecycle event and
+ * the `machineAllow` patterns: list ONLY writes that record money that already moved, telephony /
+ * provider webhooks that cannot be replayed later, and Manage-signed callbacks (seat changes).
+ *
  * Manage's companyinfo is the source of truth: pass its data to syncFromCompanyInfo() wherever the
  * product reads companyinfo (data.lifecycle, data.restricted_until), so a missed event is corrected.
  * If the lifecycle table cannot be read the guard lets the request through and logs it: a database
@@ -33,8 +39,14 @@ final class ReadOnlyGuard
 
     public const SAFE_METHODS = ['GET', 'HEAD', 'OPTIONS'];
 
+    /** Always open to a machine: Manage's signed lifecycle event is how a company is restricted AND renewed. */
+    public const MACHINE_ALWAYS = ['POST /internal/manage/company-lifecycle', 'POST /**/internal/manage/company-lifecycle'];
+
     /** @var list<array{0:string, 1:string}> [method or *, regex] */
     private array $allow = [];
+
+    /** @var list<array{0:string, 1:string}> */
+    private array $machineAllow = [];
 
     /** @var callable(string, string): void */
     private $log;
@@ -42,11 +54,15 @@ final class ReadOnlyGuard
     /**
      * @param list<string> $allow "METHOD /path/pattern" entries
      * @param (callable(string, string): void)|null $log
+     * @param list<string> $machineAllow "METHOD /path/pattern" writes a machine caller may still make
      */
-    public function __construct(private ?EventStore $store, array $allow = [], ?callable $log = null)
+    public function __construct(private ?EventStore $store, array $allow = [], ?callable $log = null, array $machineAllow = [])
     {
         foreach ($allow as $entry) {
             $this->allow[] = self::compile($entry);
+        }
+        foreach (array_merge(self::MACHINE_ALWAYS, $machineAllow) as $entry) {
+            $this->machineAllow[] = self::compile($entry);
         }
         $this->log = $log ?? [Kit::class, 'defaultLog'];
     }
@@ -70,6 +86,35 @@ final class ReadOnlyGuard
         }
 
         return self::decide($state['state'] ?? null, $state['restricted_until'] ?? null, $method, $path, $this->allow);
+    }
+
+    /**
+     * The machine-caller twin of check(): null (go ahead) or the same [423, payload] a person gets.
+     *
+     * @return array{0:int, 1:array<string,mixed>}|null
+     */
+    public function checkMachine(int $cmpId, string $method, string $path): ?array
+    {
+        $method = strtoupper($method);
+        if ($this->machineAllowed($method, $path)) {
+            return null;
+        }
+
+        return $this->check($cmpId, $method, $path);
+    }
+
+    /** True when a machine write to this route is allowed whatever the company's state. */
+    public function machineAllowed(string $method, string $path): bool
+    {
+        $method = strtoupper($method);
+        $path = self::normalisePath($path);
+        foreach ($this->machineAllow as [$m, $re]) {
+            if (($m === '*' || $m === $method) && preg_match($re, $path) === 1) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

@@ -91,8 +91,10 @@ final class Context
                     'This product is not allowed to act for this company without a signed-in person. '
                     . 'An administrator can allow it in Messaging settings.');
             }
-            // A product's writes for a company whose Messaging subscription lapsed are refused too.
-            CompanyLifecycle::guard($this->cmpId);
+            // A product's writes for a company whose Messaging subscription lapsed are refused too —
+            // as a machine caller (kit 1.1 checkMachine): 423 COMPANY_RESTRICTED, which the sending
+            // product's outbox defers (kit DeferredSend) instead of failing.
+            CompanyLifecycle::guard($this->cmpId, machine: true);
 
             return;
         }

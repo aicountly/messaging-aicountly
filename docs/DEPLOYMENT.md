@@ -251,6 +251,10 @@ Under **Cron Jobs** in cPanel, with `<root>` the document root:
 # (rows, then attachment files and Drive documents) and send Manage the signed acks.
 */5 * * * * cd /home/<user>/<root>/api && /usr/local/bin/php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php >> /home/<user>/logs/messaging-company-lifecycle.log 2>&1
 
+# Retention expiry (kit 1.1), daily: the audit trail a purge retained (CERT-In, 180 days) is deleted —
+# archived first, recorded in aic_lifecycle_expiries — once 180 days old. Purged companies only.
+37 3 * * * cd /home/<user>/<root>/api && /usr/local/bin/php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --expire-retained >> /home/<user>/logs/messaging-company-lifecycle.log 2>&1
+
 # Drop purge archives (they hold the purged rows, personal data) after 90 days. Weekly.
 30 3 * * 0 cd /home/<user>/<root>/api && /usr/local/bin/php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --drop-archives-older-than=90 --confirm >> /home/<user>/logs/messaging-company-lifecycle.log 2>&1
 ```
@@ -281,17 +285,23 @@ journey, and anything that needs a retry.
 When a company's Messaging subscription lapses, AICOUNTLY Manage makes it read-only here and, 45 days
 later, asks for its data to be deleted; when an AICOUNTLY account is closed it asks for that person's own
 data to be deleted. Contract: manage-aicountly `docs/company-lifecycle/README.md`. Messaging carries
-it out with the shared receiver kit, vendored unchanged at `server-php/lib/company-lifecycle/` (v1.0.0;
-copy it again from manage-aicountly `Saas Common Handler/company-lifecycle` to upgrade).
+it out with the shared receiver kit, vendored unchanged at `server-php/lib/company-lifecycle/` (v1.1.0;
+copy it again from manage-aicountly `Saas Common Handler/company-lifecycle` to upgrade — its README
+§ "Upgrading from 1.0" is the checklist).
 
 | Piece | Where |
 | --- | --- |
-| Tables | `009_aic_company_lifecycle.sql` (the kit's `schema.sql`, verbatim), `010_lifecycle_object_deletions.sql` |
+| Tables | `009_aic_company_lifecycle.sql` (the kit's `schema.sql`, verbatim), `010_lifecycle_object_deletions.sql`, `011_aic_company_lifecycle_1_1.sql` (the kit's `schema-1.1.sql`, verbatim: `aic_lifecycle_expiries`, job status `held`). `bin/migrate.php` picks them up by file name; Messaging connects as the one database user that owns its tables, so there is no grant script — a deployment that splits the owner from the app user grants it `SELECT, INSERT, UPDATE, DELETE` on the five `aic_lifecycle_*` tables and `USAGE` on `aic_lifecycle_jobs_id_seq`, `aic_lifecycle_acks_id_seq`, `aic_lifecycle_expiries_id_seq`, and `CREATE` on the database (the archive schemas) |
 | Receiver | `POST /api/internal/manage/company-lifecycle` — no session, the HMAC signature is its only credential (`src/Routes.php`, `src/Lifecycle/CompanyLifecycle.php`) |
 | Write gate | `Context::assertAllowed()`, after Manage's company check: a write to a read-only company answers **423** `COMPANY_RESTRICTED` (never 403 — reads and exports keep working). Allow-list: `CompanyLifecycle::ALLOW`. Queued sends and journey runs of a read-only company wait. Manage's `companyinfo` `lifecycle` is written through on every company check |
-| What is deleted | `server-php/config/lifecycle-manifest.php` (reviewed): every company table; the audit trail `messaging_audit_events` is **retained** under the CERT-In Directions (180 days); account purge: the person's own dismissed suggestions |
+| Machine writes (kit 1.1) | a product's service key with no signed-in person (`POST /api/v1/messages`, `…/cancel` from Appointments, Billing, Secretarial …) goes through the kit's `checkMachine()`: **423** `COMPANY_RESTRICTED` like a person, and the sending product defers the notice (kit `DeferredSend`) until renewal. `CompanyLifecycle::MACHINE_ALLOW` keeps exactly one thing open: **provider webhooks** (`POST /api/webhooks/{provider}/{connection}` — the company's customers writing in, delivery receipts, opt-outs). They are the customers, not the company, and a provider cannot replay them after a renewal; a dropped opt-out would be a consent breach. `WebhookService::receive()` passes them through the gate after resolving the tenant from the connection, so removing the entry is one tested line |
+| Messaging as a sender | Messaging writes into one other product, Aicountly Drive (attachments, custodian API), always while a person waits. A Drive that is read-only for the company answers 423; `DriveClient` reads it with the kit's `DeferredSend::refusal()` and the person sees Drive's sentence — there is no outbox to defer into, nothing is retried, nothing is stored here instead |
+| What is deleted | `server-php/config/lifecycle-manifest.php` (reviewed): every company table; the audit trail `messaging_audit_events` is **retained** under the CERT-In Directions (180 days: `retain_days: 180`, `retain_from: created_at`); account purge: the person's own dismissed suggestions |
+| Retention expiry (kit 1.1) | the daily `--expire-retained` cron line above deletes a **purged** company's `messaging_audit_events` rows once `created_at` is 180 days old (archived first, one row per run in `aic_lifecycle_expiries`; Manage is not told). It is the only expiry on that table — Messaging has no sweep of its own, so nothing races it. A live (or renewed) company's audit trail is not expired by it |
 | Outside the database | after the rows: attachment files in `MESSAGING_ATTACHMENT_DIR` and attachments held in Aicountly Drive (custodian delete), retried and recorded in `lifecycle_object_deletions`. Channel credentials are never stored here — the ack names the `credential_ref` / `webhook_secret_ref` secrets ops must remove from the server `.env` / Console |
 | Worker | the cron lines above (`--bootstrap=config/lifecycle-kit.php` uses this API's own connection, whose name comes from Console) |
+| Console monitors | `messaging.company_lifecycle` (every 5 min, tolerance 2.0) and `messaging.company_lifecycle_expiry` (daily, 86400 s, tolerance 1.25) — register both in Console's `cron_monitors` (console-react-app migration 059 pattern). Messaging has no ops kit yet (`bin/ops/run-job.php`), so the plain cron lines above do not report to them; until it does, `--status` and the log are the check |
+| Legal hold | not used: Messaging records no holds (the kit's optional `legal_hold` option is not passed) |
 
 Settings (`api/.env`, never the React build):
 
@@ -309,8 +319,9 @@ host is right). Check with `php lib/company-lifecycle/bin/worker.php --bootstrap
 A migration that adds a table with `cmp_id` or `user_uuid` must add it to the manifest in the same commit
 (`tests/lifecycle.php` fails until it does).
 
-Follow-up: `messaging_audit_events` has no 180-day expiry sweep yet; until one exists, rows of purged
-companies older than 180 days are deleted by hand.
+`php lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --check-manifest` prints the
+manifest's refusals for both scopes on this database and its warnings (exit 1 on a refusal): run it after
+every migration. `tests/lifecycle.php` asserts there are none.
 
 ## Provider webhooks
 

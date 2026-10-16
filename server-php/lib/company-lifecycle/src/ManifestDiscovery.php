@@ -94,7 +94,12 @@ final class ManifestDiscovery
         $retain = [];
         foreach ($company as $t => $e) {
             if (isset($e['key']) && preg_match(self::RETAIN_HINT, $t) === 1) {
-                $retain[] = $e + ['reason' => 'TODO: the statute that requires keeping it, or move back to company_tables'];
+                $anchor = self::first($cols[$t], ['created_at', 'filed_on', 'filed_at', 'invoice_date', 'report_date', 'occurred_at', 'at']);
+                $retain[] = $e + ['reason' => 'TODO: the statute that requires keeping it, or move back to company_tables']
+                    + ($anchor !== null ? ['retain_years' => 8, 'retain_from' => $anchor] : []);
+                $notes[$t][] = $anchor !== null
+                    ? "retain_years 8 from {$anchor} is a guess: set the statute's period (retain_days for CERT-In's 180 days) and the column it runs from"
+                    : 'add retain_years (or retain_days) and retain_from, the date column the statutory period runs from (kit 1.1)';
                 unset($company[$t]);
             }
         }

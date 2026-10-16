@@ -10,6 +10,7 @@ use Aicountly\Api\Domain\AttachmentService;
 use Aicountly\Api\Env;
 use Aicountly\Api\Http;
 use Aicountly\Api\Router;
+use Aicountly\Lifecycle\HookContext;
 use Aicountly\Lifecycle\Kit;
 use PDO;
 
@@ -21,7 +22,11 @@ require_once __DIR__ . '/../../lib/company-lifecycle/autoload.php';
  *
  *   POST /api/internal/manage/company-lifecycle   receive()  — HMAC only, no session (Routes.php)
  *   Context::assertAllowed()                       guard()    — 423 COMPANY_RESTRICTED after the
- *                                                               Manage company check passed
+ *                                                               Manage company check passed; a
+ *                                                               product's service key (no person)
+ *                                                               goes through checkMachine() (kit 1.1)
+ *   WebhookService::receive()                      machineRefusal() — provider webhooks, in
+ *                                                               MACHINE_ALLOW (never refused)
  *                                                  syncFromCompanyInfo() — companyinfo's lifecycle
  *   bin/worker.php --bootstrap=config/lifecycle-kit.php       — cron: purges + acks (docs/DEPLOYMENT.md)
  *
@@ -45,6 +50,20 @@ final class CompanyLifecycle
         'POST /api/v1/journeys/validate',
         // hides a Command Centre suggestion for this person (their own UI state)
         'DELETE /api/v1/suggestions/*',
+    ];
+
+    /**
+     * Machine writes (kit 1.1, ReadOnlyGuard::checkMachine) that stay open while a company is read-only.
+     * Every other write a product makes with its service key and no signed-in person — POST /api/v1/messages
+     * from Appointments, Billing, Secretarial … — answers the same 423 COMPANY_RESTRICTED, and the sending
+     * product defers it (kit DeferredSend). Manage's own lifecycle event is always open (the kit adds it).
+     */
+    public const MACHINE_ALLOW = [
+        // Provider webhooks (WhatsApp / SMS / RCS): inbound customer messages, delivery receipts and
+        // opt-outs. They are the company's CUSTOMERS writing in, or the carrier reporting what already
+        // happened — a provider cannot replay them after renewal, and an opt-out that was dropped would
+        // be a consent breach. Tenant resolved from the connection in the path, never from the payload.
+        'POST /api/webhooks/*/*',
     ];
 
     /**
@@ -120,23 +139,54 @@ final class CompanyLifecycle
     /**
      * The write gate, called once the company check passed (so a caller who may not open the
      * company still gets 403). A write to a restricted company answers 423 COMPANY_RESTRICTED.
+     * $machine: the caller is a product's service key with no signed-in person (kit 1.1
+     * checkMachine(): ALLOW plus MACHINE_ALLOW, everything else 423 — the sender defers).
      */
-    public static function guard(int $cmpId): void
+    public static function guard(int $cmpId, bool $machine = false): void
     {
         $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
         if (in_array($method, ['GET', 'HEAD', 'OPTIONS'], true)) {
             return;
         }
+        $refusal = $machine
+            ? self::machineRefusal($cmpId, $method, self::requestPath())
+            : self::refusal($cmpId, $method, self::requestPath());
+        if ($refusal !== null) {
+            Http::json($refusal[0], $refusal[1]);
+        }
+    }
+
+    /**
+     * A person's write: null (go ahead) or [423, payload].
+     *
+     * @return array{0:int, 1:array<string,mixed>}|null
+     */
+    public static function refusal(int $cmpId, string $method, string $path): ?array
+    {
         try {
-            $refusal = self::kit()->guard(self::ALLOW)->check($cmpId, $method, self::requestPath());
+            return self::kit()->guard(self::ALLOW)->check($cmpId, $method, $path);
         } catch (\Throwable $e) {
             // A database fault must not become a false "your subscription ended".
             error_log('company-lifecycle [warning]: guard skipped for cmp=' . $cmpId . ': ' . $e->getMessage());
 
-            return;
+            return null;
         }
-        if ($refusal !== null) {
-            Http::json($refusal[0], $refusal[1]);
+    }
+
+    /**
+     * A machine write (service key, provider webhook): null (go ahead) or [423, payload].
+     *
+     * @return array{0:int, 1:array<string,mixed>}|null
+     */
+    public static function machineRefusal(int $cmpId, string $method, string $path): ?array
+    {
+        try {
+            return self::kit()->guard(self::ALLOW, self::MACHINE_ALLOW)->checkMachine($cmpId, $method, $path);
+        } catch (\Throwable $e) {
+            // A database fault must not become a false "your subscription ended".
+            error_log('company-lifecycle [warning]: machine guard skipped for cmp=' . $cmpId . ': ' . $e->getMessage());
+
+            return null;
         }
     }
 
@@ -190,7 +240,10 @@ final class CompanyLifecycle
     }
 
     /**
-     * Data outside the database, removed after the rows (kit hooks).
+     * Data outside the database, removed after the rows (kit hooks). Kit 1.1 passes every hook a
+     * HookContext third argument; neither hook changes a product row outside the engine (the sweep
+     * writes only its own lifecycle_object_deletions bookkeeping, the credentials hook only reads the
+     * archive), so neither needs $ctx->archiveRows().
      *
      * @param array<string, callable> $deleters override a store's deleter (tests)
      * @return array{company: list<callable>, account: list<callable>}
@@ -239,7 +292,7 @@ final class CompanyLifecycle
      */
     private static function channelCredentialsHook(PDO $pdo): callable
     {
-        return static function (int|string $cmpId, array $result) use ($pdo): ?string {
+        return static function (int|string $cmpId, array $result, ?HookContext $ctx = null) use ($pdo): ?string {
             $archive = is_string($result['archive'] ?? null) ? $result['archive'] : '';
             if ($archive === '' || !isset($result['counts']['public.messaging_channel_connections'])) {
                 return null;

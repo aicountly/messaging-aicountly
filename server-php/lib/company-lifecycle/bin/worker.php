@@ -14,7 +14,10 @@ declare(strict_types=1);
  *   … --list-archives
  *   … --drop-archives-older-than=90 [--confirm]  archive schemas hold personal data: drop them after the product's archive window
  *   … --restore=<archive schema> [--confirm]     put an archive back (dry run without --confirm)
- *   … --install-schema                           apply schema.sql (when the product has no migration runner)
+ *   … --install-schema                           apply schema.sql + schema-1.1.sql (when the product has no migration runner)
+ *   … --expire-retained[=dry-run] [--limit=500]  1.1, daily: delete retained rows of purged companies / people whose
+ *                                                retain_years / retain_days passed (archived first); Manage is not told
+ *   … --check-manifest                           1.1: the manifest's refusals for both scopes on this database, and its warnings
  *
  * --bootstrap names a PHP file that returns an Aicountly\Lifecycle\Kit (see examples/). Otherwise the Kit
  * is built from --env (the product's .env; real environment variables win), --app (or LIFECYCLE_APP_KEY)
@@ -29,7 +32,7 @@ require dirname(__DIR__) . '/autoload.php';
 use Aicountly\Lifecycle\Kit;
 
 $o = getopt('', ['env::', 'app::', 'manifest::', 'bootstrap::', 'jobs::', 'acks::', 'status', 'dry-run::', 'requeue::',
-    'list-archives', 'drop-archives-older-than::', 'restore::', 'confirm', 'install-schema', 'help']);
+    'list-archives', 'drop-archives-older-than::', 'restore::', 'confirm', 'install-schema', 'expire-retained::', 'limit::', 'check-manifest', 'help']);
 if (isset($o['help'])) {
     fwrite(STDERR, "see the header of bin/worker.php\n");
     exit(2);
@@ -56,11 +59,26 @@ try {
         $out['schema'] = 'installed';
     } elseif (isset($o['status'])) {
         $out += $kit->store()->summary();
-        $out['configured'] = ['secret' => $kit->config->secretUsable(), 'manage_api_url' => $kit->config->manageUrl, 'service_key' => $kit->config->serviceKey !== null];
+        $out['configured'] = ['secret' => $kit->config->secretUsable(), 'manage_api_url' => $kit->config->manageUrl, 'service_key' => $kit->config->serviceKey !== null,
+            'schema_1_1' => $kit->store()->hasSchema11()];
+        $manifest = $kit->manifest();
+        if ($manifest !== null && $manifest->warnings() !== []) {
+            $out['manifest_warnings'] = $manifest->warnings();
+        }
     } elseif (!empty($o['dry-run'])) {
         [$kind, $target] = array_pad(explode(':', (string) $o['dry-run'], 2), 2, '');
         $engine = $kit->engine() ?? throw new RuntimeException('no manifest (--manifest or LIFECYCLE_MANIFEST)');
         $out['dry_run'] = $engine->purge($kind === 'account' ? 'user' : 'company', $target, true);
+        if ($engine->manifest()->warnings() !== []) {
+            $out['warnings'] = $engine->manifest()->warnings();
+        }
+    } elseif (isset($o['check-manifest'])) {
+        $engine = $kit->engine() ?? throw new RuntimeException('no manifest (--manifest or LIFECYCLE_MANIFEST)');
+        $out['problems'] = ['company' => $engine->problems('company'), 'user' => $engine->problems('user')];
+        $out['warnings'] = $engine->manifest()->warnings();
+        $out['ok'] = $out['problems']['company'] === [] && $out['problems']['user'] === [];
+    } elseif (array_key_exists('expire-retained', $o)) {
+        $out['expire_retained'] = $kit->worker()->expireRetained($o['expire-retained'] === 'dry-run', max(1, (int) ($o['limit'] ?? 500)));
     } elseif (!empty($o['requeue'])) {
         $out['requeued'] = $kit->store()->requeueJob((string) $o['requeue']);
     } elseif (isset($o['list-archives'])) {
@@ -87,7 +105,7 @@ try {
         $out['run'] = $kit->worker()->run(max(0, (int) ($o['jobs'] ?? 5)), max(0, (int) ($o['acks'] ?? 50)));
     }
     echo json_encode($out, JSON_UNESCAPED_SLASHES) . "\n";
-    exit(0);
+    exit(isset($out['ok']) && $out['ok'] === false ? 1 : 0);
 } catch (Throwable $e) {
     fwrite(STDERR, 'company-lifecycle worker: ' . $e->getMessage() . "\n");
     exit(1);

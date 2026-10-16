@@ -17,10 +17,29 @@ return [
         ['table' => 'customers', 'key' => 'cmp_id'],
         ['table' => 'company_settings', 'key' => 'cmp_id'],
     ],
-    // Kept on a company purge — the law requires it. The reason goes to Manage and ops.
+    // Kept on a company purge — the law requires it. The reason goes to Manage and ops. retain_years /
+    // retain_days + retain_from (kit 1.1): `bin/worker.php --expire-retained` deletes the row once the
+    // period has run out (archived first) — without them it is kept for ever (the validator warns).
     'company_retain' => [
-        ['table' => 'audit_log', 'key' => 'cmp_id', 'reason' => 'Companies Act 2013 s.128(5) and Rule 3(1) of the Companies (Accounts) Rules: audit trail kept 8 years'],
+        ['table' => 'audit_log', 'key' => 'cmp_id', 'reason' => 'Companies Act 2013 s.128(5) and Rule 3(1) of the Companies (Accounts) Rules: audit trail kept 8 years',
+            'retain_years' => 8, 'retain_from' => 'created_at'],
+        ['table' => 'security_events', 'key' => 'cmp_id', 'reason' => 'CERT-In Directions 70B (28.04.2022): logs kept 180 days',
+            'retain_days' => 180, 'retain_from' => 'occurred_at'],
     ],
+
+    // ── kit 1.1 options (all optional) ─────────────────────────────────────────────────────────────
+    // In company_tables:
+    //   ['table' => 'orders', 'key' => 'cmp_id', 'mode' => 'retain_referenced', 'referenced_by' => ['invoices']]
+    //       keep only the orders a retained invoice references (and, listed the same way, the quotations
+    //       those orders reference …); purge the rest.
+    //   ['table' => 'hr_documents', 'key' => 'cmp_id', 'retain_where' => "doc_type IN ('form16', 'form12ba')",
+    //    'reason' => 'Income-tax Rules r.31', 'retain_years' => 8, 'retain_from' => 'issued_on']
+    //       keep matching rows, purge the others.
+    //   ['table' => 'engagement_ai_config', 'via' => ['column' => 'engagement_id', 'parent' => 'engagements', 'parent_column' => 'id']]
+    //       with engagements in company_retain: purge the children, keep the parent.
+    //   ['table' => 'delegations', 'key_columns' => ['firm_cmp_id', 'client_cmp_id']]   either side matches.
+    // 'scrub' => ['payment_webhook_events.raw_payload' => 'json_paths:[payload.email, payload.contact, card.*]', 'cards.pan' => 'null'],
+    // 'break_cycle' => ['sessions.current_device_id'],
 
     // Deleted on account_purge_requested: the person's own data that is not company data.
     'user_tables' => [

@@ -6,7 +6,7 @@ declare(strict_types=1);
  * Messaging's reviewed purge manifest (lib/company-lifecycle, README § Manifest review).
  *
  * Drafted with bin/discover-manifest.php from a freshly migrated database (migrations 001–010) and
- * reviewed line by line on 2026-10-14. Messaging holds a company's customer conversations, messages,
+ * reviewed line by line on 2026-10-14; kit 1.1 retention period added 2026-10-16 (migration 011). Messaging holds a company's customer conversations, messages,
  * attachments, templates, journeys and consent records — communications, kept by no statute on
  * AICOUNTLY's side — so a company purge deletes all of it. The one exception is the audit trail (see
  * company_retain). Attachment files and Drive documents the purged rows point at are removed by the
@@ -62,11 +62,14 @@ return [
     // Kept on a company purge, with the legal reason (reported to Manage in the ack).
     'company_retain' => [
         // Who did what in Messaging (sign-ins acted on, sends, approvals, exports, access changes). It
-        // holds actors, actions and references, not message content (src/Audit.php). EXPIRY: it must be
-        // deleted once 180 days old — there is no sweep in Messaging yet (follow-up, see
-        // docs/DEPLOYMENT.md § Company lifecycle).
+        // holds actors, actions and references, not message content (src/Audit.php). EXPIRY (kit 1.1):
+        // the daily `bin/worker.php --expire-retained` deletes a purged company's rows 180 days after
+        // created_at (archived first, recorded in aic_lifecycle_expiries). Messaging has no sweep of its
+        // own on this table, so there is nothing to race; a live company's audit trail is not expired
+        // by anything (docs/DEPLOYMENT.md § Company lifecycle).
         ['table' => 'messaging_audit_events', 'key' => 'cmp_id',
-            'reason' => 'CERT-In Directions under s.70B(6) IT Act 2000 (28.04.2022), direction (iv): ICT system and security logs kept 180 days; deleted after 180 days'],
+            'reason' => 'CERT-In Directions under s.70B(6) IT Act 2000 (28.04.2022), direction (iv): ICT system and security logs kept 180 days; deleted after 180 days',
+            'retain_days' => 180, 'retain_from' => 'created_at'],
     ],
 
     // Deleted on account_purge_requested: the person's own data that is not company data. Messaging has

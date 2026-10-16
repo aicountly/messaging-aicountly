@@ -19,7 +19,11 @@ declare(strict_types=1);
  *     the allow-list pass, background sends wait; companyinfo's lifecycle is written through;
  *   - a purge: rows archived and deleted, the audit trail retained (CERT-In), attachment files and
  *     Drive documents removed after the commit, a store failure retried and recorded, the signed ack;
- *   - an account purge removes only the person's own UI state.
+ *   - an account purge removes only the person's own UI state;
+ *   - kit 1.1: the manifest has no warnings (every retained table has a period), schema-1.1 is
+ *     migrated, a product's service-key write into a read-only company is 423 (checkMachine) while
+ *     provider webhooks (MACHINE_ALLOW) pass, every MACHINE_ALLOW entry matches a real route, and
+ *     --expire-retained deletes a purged company's audit rows once 180 days old (and only those).
  */
 
 namespace Aicountly\Api;
@@ -186,6 +190,7 @@ $clean = static function () use ($pdo): void {
         $pdo->exec('DROP SCHEMA "' . $schema . '" CASCADE');
     }
     $pdo->exec("DELETE FROM lifecycle_object_deletions WHERE target_ref IN ('" . CMP . "', '" . OTHER . "', '" . PERSON . "')");
+    $pdo->exec('DELETE FROM aic_lifecycle_expiries WHERE target_cmp_id IN (' . CMP . ',' . OTHER . ") OR target_uuid = '" . PERSON . "'");
 };
 $clean();
 
@@ -205,8 +210,15 @@ check('the reviewed manifest has no problems for the company and the user scope 
     same('messaging', $engine->manifest()->appKey(), 'app key');
 });
 
-check('every allow-list entry matches a real route', static function () use ($router): void {
-    foreach (CompanyLifecycle::ALLOW as $entry) {
+check('kit 1.1: schema-1.1 is migrated and the manifest has no warnings (every retained table has a period)', static function () use ($pdo): void {
+    same(true, (bool) $pdo->query("SELECT to_regclass('public.aic_lifecycle_expiries') IS NOT NULL")->fetchColumn(), 'aic_lifecycle_expiries');
+    same([], PurgeManifest::load(CompanyLifecycle::manifestPath())->warnings(), 'manifest warnings');
+    $audit = array_values(array_filter(PurgeManifest::load(CompanyLifecycle::manifestPath())->retained('company'), static fn (array $e): bool => $e['table'] === 'messaging_audit_events'));
+    same(180, $audit[0]['retain_days'] ?? null, 'CERT-In 180 days');
+});
+
+check('every allow-list and machine allow-list entry matches a real route', static function () use ($router): void {
+    foreach (array_merge(CompanyLifecycle::ALLOW, CompanyLifecycle::MACHINE_ALLOW) as $entry) {
         [$method] = explode(' ', $entry, 2);
         $hit = false;
         foreach ($router->routes() as $route) {
@@ -261,6 +273,39 @@ check('companyinfo lifecycle "active" lifts it (Manage is the source of truth)',
     truthy(call($router, 'PUT', 'v1/settings', [], ['quiet_hours' => []])['status'] !== 423, 'write passes again');
     CompanyLifecycle::syncFromCompanyInfo(CMP, ['data' => ['lifecycle' => 'restricted', 'restricted_until' => '2026-12-01T00:00:00Z']]);
     same(423, call($router, 'PUT', 'v1/settings', [], ['quiet_hours' => []])['status'], 'restricted again from companyinfo');
+});
+
+check('kit 1.1: a product\'s service-key write into a read-only company is 423; provider webhooks pass', static function () use ($router, $pdo): void {
+    // CMP is restricted here (previous check). Appointments, bound to CMP, sends a notice with its key.
+    putenv('SERVICE_KEY_COMPANIES=appointments:' . CMP . '|' . OTHER);
+    Auth::adopt(Auth::forTesting('appointments', 'service', 'appointments'));
+    try {
+        $r = call($router, 'POST', 'v1/messages', [], ['cmp_id' => CMP, 'kind' => 'reminder', 'to' => '+919800000001']);
+        same(423, $r['status'], 'service send into a read-only company ' . json_encode($r['body']));
+        same('COMPANY_RESTRICTED', $r['body']['code'] ?? null, 'code');
+        same('restricted', $r['body']['lifecycle'] ?? null, 'lifecycle (DeferredSend reads it)');
+        $other = call($router, 'POST', 'v1/messages', ['cmp_id' => OTHER], ['cmp_id' => OTHER, 'kind' => 'reminder', 'to' => '+919800000001']);
+        truthy($other['status'] !== 423, 'another company is not refused (' . $other['status'] . ')');
+    } finally {
+        putenv('SERVICE_KEY_COMPANIES');
+        Auth::adopt(Auth::forTesting('user-lifecycle', 'user', 'messaging'));
+    }
+    // A provider webhook is a machine write the allow-list keeps open; a service write is not.
+    same(null, CompanyLifecycle::machineRefusal(CMP, 'POST', '/api/webhooks/whatsapp/' . uuid4()), 'provider webhook');
+    same(423, CompanyLifecycle::machineRefusal(CMP, 'POST', '/api/v1/messages')[0] ?? null, 'service send');
+    same(423, CompanyLifecycle::machineRefusal(CMP, 'POST', '/api/v1/messages/' . uuid4() . '/cancel')[0] ?? null, 'service cancel');
+    same(null, CompanyLifecycle::machineRefusal(CMP, 'POST', '/api/internal/manage/company-lifecycle'), 'Manage\'s own event');
+    same(null, CompanyLifecycle::machineRefusal(OTHER, 'POST', '/api/v1/messages'), 'an active company');
+
+    // Through the real webhook path: a connection of the read-only company still receives.
+    $conn = uuid4();
+    $pdo->prepare("INSERT INTO messaging_channel_connections (connection_uuid, cmp_id, channel, provider, credential_ref) VALUES (?, ?, 'whatsapp', 'test_provider', 'MESSAGING_LC_TEST_TOKEN')")->execute([$conn, CMP]);
+    try {
+        $r = \Aicountly\Api\Domain\WebhookService::receive('no_such_provider', $conn, '{}', []);
+        same(404, $r['status'], 'unknown provider still 404 (the gate is after tenant resolution)');
+    } finally {
+        $pdo->prepare('DELETE FROM messaging_channel_connections WHERE connection_uuid = ?')->execute([$conn]);
+    }
 });
 
 check('company_purge_requested: rows purged, audit retained, files and Drive documents removed, retried, acked', static function () use ($router, $pdo, $kit, &$acks, &$driveDeleted, &$driveFailures): void {
@@ -330,6 +375,31 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
 
     $write = call($router, 'PUT', 'v1/settings', [], ['quiet_hours' => []]);
     same(423, $write['status'], 'purged company stays read-only');
+});
+
+check('kit 1.1: --expire-retained deletes the purged company\'s audit rows after 180 days, keeps the rest', static function () use ($pdo, $kit): void {
+    $pdo->prepare("UPDATE messaging_audit_events SET created_at = now() - INTERVAL '181 days' WHERE cmp_id = ?")->execute([CMP]);
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, created_at) VALUES (?, 'u', 'user', 'recent', 'settings', now() - INTERVAL '10 days')")->execute([CMP]);
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, created_at) VALUES (?, 'u', 'user', 'live-company', 'settings', now() - INTERVAL '400 days')")->execute([OTHER]);
+    $old = (int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . CMP . " AND action <> 'recent'")->fetchColumn();
+    truthy($old >= 1, 'an old retained row exists');
+
+    $dry = $kit->worker()->expireRetained(true);
+    same($old, $dry['expired_rows'], 'dry run counts ' . json_encode($dry));
+    same($old + 1, (int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . CMP)->fetchColumn(), 'dry run changes nothing');
+
+    $r = $kit->worker()->expireRetained();
+    same(0, $r['failed'], 'no failure ' . json_encode($r['errors']));
+    same($old, $r['expired_rows'], 'expired rows');
+    same(['recent'], $pdo->query('SELECT action FROM messaging_audit_events WHERE cmp_id = ' . CMP)->fetchAll(\PDO::FETCH_COLUMN), 'only the recent row is left');
+    same(1, (int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . OTHER . " AND action = 'live-company'")->fetchColumn(), 'a live company is never expired by the kit');
+    same($old, (int) $pdo->query("SELECT COALESCE(SUM(rows_deleted), 0) FROM aic_lifecycle_expiries WHERE target_cmp_id = " . CMP . " AND source_table = 'public.messaging_audit_events' AND reason = 'retention_ended'")->fetchColumn(), 'recorded');
+    foreach ($kit->engine()->archives() as $a) {
+        if ($a['target'] === (string) CMP) {
+            $kit->engine()->dropArchive($a['schema']);
+        }
+    }
+    $pdo->prepare('DELETE FROM messaging_audit_events WHERE cmp_id = ?')->execute([OTHER]);
 });
 
 check('account_purge_requested: only the person\'s own UI state goes', static function () use ($router, $pdo, $kit, &$acks): void {

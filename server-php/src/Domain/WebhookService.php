@@ -82,6 +82,16 @@ final class WebhookService
             return ['accepted' => false, 'status' => 403, 'disposition' => 'bad_signature', 'receipts' => []];
         }
 
+        // Company lifecycle (kit 1.1 machine gating): a provider webhook is a machine write into the
+        // connection's company. It is in CompanyLifecycle::MACHINE_ALLOW — the company's customers
+        // writing in, delivery receipts and opt-outs cannot be replayed by the provider after a renewal —
+        // so a read-only company still receives them. Routed through the gate so taking it out of the
+        // allow-list is a one-line, tested change rather than a silent bypass.
+        $refusal = \Aicountly\Api\Lifecycle\CompanyLifecycle::machineRefusal($connection->cmpId, 'POST', '/api/webhooks/' . $provider . '/' . $connectionUuid);
+        if ($refusal !== null) {
+            return ['accepted' => false, 'status' => $refusal[0], 'disposition' => 'company_restricted', 'receipts' => []];
+        }
+
         $payload = json_decode($rawBody, true);
         if (!is_array($payload)) {
             // Some providers post form-encoded rather than JSON.

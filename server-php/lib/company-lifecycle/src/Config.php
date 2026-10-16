@@ -90,8 +90,14 @@ final class Config
 
     public function companyStatusUrl(int $cmpId): ?string
     {
+        return $this->companyStatusUrlFor($cmpId, $this->appKey);
+    }
+
+    /** company-status for another application (a sender asking about its receiver: DeferredSend). */
+    public function companyStatusUrlFor(int $cmpId, string $app): ?string
+    {
         return $this->manageUrl !== null
-            ? $this->manageUrl . '/api/internal/company-status?ids=' . $cmpId . '&app=' . rawurlencode($this->appKey)
+            ? $this->manageUrl . '/api/internal/company-status?ids=' . $cmpId . '&app=' . rawurlencode(strtolower(trim($app)))
             : null;
     }
 }

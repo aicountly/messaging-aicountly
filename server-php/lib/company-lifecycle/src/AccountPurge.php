@@ -12,13 +12,17 @@ namespace Aicountly\Lifecycle;
  * security logs a statute requires) are kept and reported.
  *
  * Data outside the database (uploaded files, push registrations at a provider, a search index) is
- * the product's to remove: pass hooks, callable(string $uuid, array $purgeResult): ?string — return a
- * line for the ack detail, or throw to fail the attempt (it is retried, then acked failed).
+ * the product's to remove: pass hooks, callable(string $uuid, array $purgeResult, HookContext $ctx): ?string —
+ * return a line for the ack detail, or throw to fail the attempt (it is retried, then acked failed).
+ * Before-hooks (1.1) run ahead of the engine with an empty result; both may $ctx->archiveRows() first.
  */
 final class AccountPurge
 {
-    /** @param list<callable(string, array<string,mixed>): ?string> $hooks */
-    public function __construct(private PurgeEngine $engine, private array $hooks = [])
+    /**
+     * @param list<callable(string, array<string,mixed>, HookContext=): ?string> $hooks
+     * @param list<callable(string, array<string,mixed>, HookContext): mixed> $beforeHooks
+     */
+    public function __construct(private PurgeEngine $engine, private array $hooks = [], private array $beforeHooks = [], private ?HookContext $ctx = null)
     {
     }
 
@@ -39,14 +43,20 @@ final class AccountPurge
         if ($uuid === null) {
             return ['ok' => false, 'status' => 'failed', 'detail' => 'Not purged: the uuid is not a subscriber id.', 'archive' => null, 'rows' => 0, 'retained' => []];
         }
-        if ($this->engine->manifest()->tables('user') === [] && $this->hooks === []) {
+        if ($this->engine->manifest()->tables('user') === [] && $this->hooks === [] && $this->beforeHooks === []) {
             // A product that keeps nothing personal answers that honestly.
             return ['ok' => true, 'status' => 'nothing_to_purge', 'detail' => 'This application keeps no personal data outside companies (manifest user_tables is empty).',
                 'archive' => null, 'rows' => 0, 'retained' => self::retainedNames($this->engine->plan('user', $uuid))];
         }
-        $result = $this->engine->purge('user', $uuid);
+        if ($this->ctx === null) {
+            return Worker::outcome($this->engine->purge('user', $uuid), 'person', $this->hooks, $uuid);
+        }
+        $this->ctx->phase('before');
+        foreach ($this->beforeHooks as $hook) {
+            $hook($uuid, [], $this->ctx);
+        }
 
-        return Worker::outcome($result, 'person', $this->hooks, $uuid);
+        return Worker::outcome($this->engine->purge('user', $uuid, false, $this->ctx->archiveName), 'person', $this->hooks, $uuid, $this->ctx);
     }
 
     /**

@@ -7,6 +7,8 @@ namespace Aicountly\Api\Clients;
 use Aicountly\Api\Env;
 use Aicountly\Api\Features;
 
+require_once __DIR__ . '/../../lib/company-lifecycle/autoload.php';
+
 /**
  * Attachments in Aicountly Drive, held by Messaging as Drive's custodian.
  *
@@ -271,6 +273,15 @@ final class DriveClient extends ApiClient
         if (!$ok) {
             $error = is_array($decoded) ? (string) ($decoded['error']['message'] ?? $decoded['message'] ?? '') : '';
             error_log(sprintf('[cross-service] service=docs outcome=error operation=custodian%s status=%d', explode('?', $path)[0], $res['status']));
+            // Drive is read-only for this company (its Drive subscription lapsed): 423 COMPANY_RESTRICTED,
+            // read with the kit's DeferredSend::refusal(). Every Drive write here is made while a person
+            // waits (an attachment), so there is no outbox to defer into: the person is shown Drive's own
+            // sentence, nothing is retried, nothing is kept here instead.
+            $restricted = \Aicountly\Lifecycle\DeferredSend::refusal($res['status'], $decoded);
+            if ($restricted !== null) {
+                return ['ok' => false, 'status' => $res['status'], 'data' => [], 'code' => \Aicountly\Lifecycle\DeferredSend::CODE,
+                    'error' => 'Aicountly Drive is read-only for this company. ' . $restricted['message'], 'retryable' => false];
+            }
 
             return [
                 'ok'        => false,

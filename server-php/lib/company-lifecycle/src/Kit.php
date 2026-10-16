@@ -33,7 +33,9 @@ final class Kit
     private $http;
 
     /**
-     * @param array{hooks?: array<string, list<callable>>, log?: callable, clock?: callable, http?: callable, on_finish?: callable} $options
+     * @param array{hooks?: array<string, list<callable>>, log?: callable, clock?: callable, http?: callable, on_finish?: callable, legal_hold?: callable} $options
+     *   hooks: company / account (after the engine) and, 1.1, company_before / account_before;
+     *   legal_hold (1.1): fn (string $scope 'company'|'account', int|string $id): ?string — a reason holds the purge
      */
     public function __construct(
         public readonly Config $config,
@@ -75,10 +77,20 @@ final class Kit
         return new Receiver($this->config, $this->store(), $this->log, $this->clock);
     }
 
-    /** @param list<string> $allow "METHOD /path" patterns that stay open while restricted */
-    public function guard(array $allow = []): ReadOnlyGuard
+    /**
+     * @param list<string> $allow "METHOD /path" patterns that stay open while restricted
+     * @param list<string> $machineAllow (1.1) writes a machine caller may make into a restricted company
+     *                                   (checkMachine()): money already moved, provider webhooks, Manage callbacks
+     */
+    public function guard(array $allow = [], array $machineAllow = []): ReadOnlyGuard
     {
-        return new ReadOnlyGuard($this->store(), $allow, $this->log);
+        return new ReadOnlyGuard($this->store(), $allow, $this->log, $machineAllow);
+    }
+
+    /** For a sender whose machine writes another product refuses with 423 (1.1). */
+    public function deferredSend(): DeferredSend
+    {
+        return new DeferredSend($this->config, $this->http, $this->clock);
     }
 
     public function manifest(): ?PurgeManifest
@@ -105,7 +117,8 @@ final class Kit
             throw new \InvalidArgumentException('The manifest is for ' . $engine->manifest()->appKey() . ', this application is ' . $this->config->appKey);
         }
 
-        return new Worker($this->config, $this->store(), $engine, $this->ackClient(), $this->options['hooks'] ?? [], $this->log, $this->options['on_finish'] ?? null);
+        return new Worker($this->config, $this->store(), $engine, $this->ackClient(), $this->options['hooks'] ?? [], $this->log, $this->options['on_finish'] ?? null,
+            $this->options['legal_hold'] ?? null);
     }
 
     /**

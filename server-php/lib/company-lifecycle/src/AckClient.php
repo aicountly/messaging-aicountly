@@ -10,7 +10,8 @@ namespace Aicountly\Lifecycle;
  *    HMAC as Manage's events. Body (built by body()):
  *      company purge  {event_id, cmp_id, app_key, status, retained, detail}
  *      account purge  {event_id, uuid, app_key, status, retained, detail}
- *    status: purged | nothing_to_purge | failed. Manage answers 200 (also for the same ack again).
+ *    status: purged | nothing_to_purge | failed | held (1.1: legal hold, detail {"reason": …}).
+ *    Manage answers 200 (also for the same ack again).
  *  - companyLifecycle(): GET {MANAGE_API_URL}/api/internal/company-status?ids=&app= with
  *    MANAGE_PRODUCT_SERVICE_KEY — the Worker's look at Manage just before a company purge runs.
  *
@@ -23,7 +24,8 @@ final class AckClient
 {
     public const MAX_ATTEMPTS = 15;
 
-    public const STATUSES = ['purged', 'nothing_to_purge', 'failed'];
+    /** held (1.1): a legal hold stops the purge; detail is {"reason": …}. Manage takes purged after it. */
+    public const STATUSES = ['purged', 'nothing_to_purge', 'failed', 'held'];
 
     private const PERMANENT = [400, 404, 409, 410, 413, 422];
 
@@ -53,7 +55,7 @@ final class AckClient
     public static function body(array $job, string $appKey, string $status, array $retained, string $detail): string
     {
         if (!in_array($status, self::STATUSES, true)) {
-            throw new \InvalidArgumentException('ack status is purged, nothing_to_purge or failed');
+            throw new \InvalidArgumentException('ack status is purged, nothing_to_purge, failed or held');
         }
         $body = ['event_id' => $job['event_id']];
         if ($job['kind'] === 'account') {
@@ -65,7 +67,7 @@ final class AckClient
             'app_key'  => $appKey,
             'status'   => $status,
             'retained' => array_values(array_slice(array_map(static fn ($r): string => mb_substr((string) $r, 0, 200), $retained), 0, 100)),
-            'detail'   => mb_substr($detail, 0, 2000),
+            'detail'   => $status === 'held' ? ['reason' => mb_substr($detail, 0, 2000)] : mb_substr($detail, 0, 2000),
         ];
 
         return (string) json_encode($body, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);

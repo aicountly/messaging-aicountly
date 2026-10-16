@@ -64,7 +64,9 @@ final class ObjectSweep
     /** The kit hook for 'company' or 'account' jobs. */
     public function hook(string $kind): callable
     {
-        return fn (int|string $target, array $result): ?string => $this->run($kind, (string) $target, $result);
+        // Kit 1.1 hooks take a HookContext third argument; the sweep changes no product row (only its own
+        // bookkeeping table), so it has nothing to archive with it.
+        return fn (int|string $target, array $result, ?\Aicountly\Lifecycle\HookContext $ctx = null): ?string => $this->run($kind, (string) $target, $result);
     }
 
     /**
