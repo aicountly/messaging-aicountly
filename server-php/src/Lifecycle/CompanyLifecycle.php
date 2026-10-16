@@ -12,6 +12,7 @@ use Aicountly\Api\Http;
 use Aicountly\Api\Router;
 use Aicountly\Lifecycle\HookContext;
 use Aicountly\Lifecycle\Kit;
+use Aicountly\Lifecycle\PurgeEngine;
 use PDO;
 
 require_once __DIR__ . '/../../lib/company-lifecycle/autoload.php';
@@ -34,7 +35,9 @@ require_once __DIR__ . '/../../lib/company-lifecycle/autoload.php';
  * database goes with it (hooks()): attachment files in MESSAGING_ATTACHMENT_DIR and attachments held
  * in Aicountly Drive are deleted (ObjectSweep, retried and recorded in lifecycle_object_deletions);
  * channel credentials are never stored here (credential_ref names a server variable or a Console
- * secret), so the ack names the references ops must remove.
+ * secret), so the ack names the references ops must remove. Inside the database, the retained audit
+ * trail's scrub is a before-hook (auditScrubHook): messaging_audit_events is append-only, and migration
+ * 012_audit_trail_lifecycle_purge.sql lets only the lifecycle worker through.
  */
 final class CompanyLifecycle
 {
@@ -239,14 +242,20 @@ final class CompanyLifecycle
         return '/api/' . trim($path, '/');
     }
 
+    /** The retained audit table and the columns the manifest scrubs on it (tests/lifecycle.php keeps them in step). */
+    public const AUDIT_TABLE = 'messaging_audit_events';
+
+    public const AUDIT_SCRUBBED = ['before_state', 'after_state'];
+
     /**
      * Data outside the database, removed after the rows (kit hooks). Kit 1.1 passes every hook a
-     * HookContext third argument; neither hook changes a product row outside the engine (the sweep
+     * HookContext third argument; the after-hooks change no product row outside the engine (the sweep
      * writes only its own lifecycle_object_deletions bookkeeping, the credentials hook only reads the
-     * archive), so neither needs $ctx->archiveRows().
+     * archive), so they need no $ctx->archiveRows(). The one before-hook, auditScrubHook, does change
+     * rows (the retained audit trail's scrub) and archives them first.
      *
      * @param array<string, callable> $deleters override a store's deleter (tests)
-     * @return array{company: list<callable>, account: list<callable>}
+     * @return array{company_before: list<callable>, company: list<callable>, account: list<callable>}
      */
     public static function hooks(PDO $pdo, array $deleters = [], ?callable $sleep = null): array
     {
@@ -277,10 +286,75 @@ final class CompanyLifecycle
             },
         ], null, $sleep);
 
+        /** @var array<string,int> $scrubbed rows redacted per company, from the before-hook to the after-hook */
+        $scrubbed = [];
+
         return [
-            'company' => [$sweep->hook('company'), self::channelCredentialsHook($pdo)],
-            'account' => [$sweep->hook('account')],
+            'company_before' => [self::auditScrubHook($scrubbed)],
+            'company'        => [$sweep->hook('company'), self::channelCredentialsHook($pdo), self::auditScrubReport($scrubbed)],
+            'account'        => [$sweep->hook('account')],
         ];
+    }
+
+    /**
+     * company_before: the retained audit trail's scrub (manifest `scrub`: before_state / after_state
+     * redacted). messaging_audit_events is append-only (009_messaging_audit_trail), and the engine's own
+     * scrub runs inside its purge transaction, where nothing may say "this is the lifecycle purge". So
+     * this hook does it first, the one way migration 012_audit_trail_lifecycle_purge.sql allows: the
+     * company's rows not yet redacted are archived ($ctx->archiveRows, scrubbed there too by the
+     * manifest's rule) and redacted in one transaction under SET LOCAL aicountly.lifecycle_purge = on.
+     * Same value and same rows as the engine's scrub (PurgeEngine::REDACTED, jsonb), which then finds
+     * nothing left to change. A failure is thrown: the kit fails the attempt and retries the job.
+     *
+     * @param array<string,int> $scrubbed
+     * @return callable(int|string, array<string,mixed>, HookContext): ?string
+     */
+    public static function auditScrubHook(array &$scrubbed): callable
+    {
+        return static function (int|string $cmpId, array $result, HookContext $ctx) use (&$scrubbed): ?string {
+            $db = $ctx->pdo();
+            $redacted = "CAST('\"" . PurgeEngine::REDACTED . "\"' AS JSONB)";
+            $set = [];
+            $differs = [];
+            foreach (self::AUDIT_SCRUBBED as $col) {
+                $set[] = "{$col} = {$redacted}";
+                $differs[] = "{$col} IS DISTINCT FROM {$redacted}";
+            }
+            $where = 'cmp_id = ? AND (' . implode(' OR ', $differs) . ')';
+            $db->beginTransaction();
+            try {
+                $db->exec("SELECT set_config('aicountly.lifecycle_purge', 'on', true)");
+                $ctx->archiveRows(self::AUDIT_TABLE, $where, [(int) $cmpId]);
+                $stmt = $db->prepare('UPDATE ' . self::AUDIT_TABLE . ' SET ' . implode(', ', $set) . ' WHERE ' . $where);
+                $stmt->execute([(int) $cmpId]);
+                $scrubbed[(string) $cmpId] = $stmt->rowCount();
+                $db->commit();
+            } catch (\Throwable $e) {
+                if ($db->inTransaction()) {
+                    $db->rollBack();
+                }
+                throw $e;
+            }
+
+            return null;
+        };
+    }
+
+    /**
+     * company (after the engine): the ack line the engine writes for its own scrub, for the rows
+     * auditScrubHook redacted.
+     *
+     * @param array<string,int> $scrubbed
+     * @return callable(int|string, array<string,mixed>, HookContext=): ?string
+     */
+    public static function auditScrubReport(array &$scrubbed): callable
+    {
+        return static function (int|string $cmpId, array $result, ?HookContext $ctx = null) use (&$scrubbed): ?string {
+            $n = $scrubbed[(string) $cmpId] ?? 0;
+            unset($scrubbed[(string) $cmpId]);
+
+            return $n > 0 ? sprintf('Personal fields scrubbed in %d retained row(s) (public.%s).', $n, self::AUDIT_TABLE) : null;
+        };
     }
 
     /**

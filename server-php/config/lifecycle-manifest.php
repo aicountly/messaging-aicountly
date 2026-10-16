@@ -6,7 +6,8 @@ declare(strict_types=1);
  * Messaging's reviewed purge manifest (lib/company-lifecycle, README § Manifest review).
  *
  * Drafted with bin/discover-manifest.php from a freshly migrated database (migrations 001–010) and
- * reviewed line by line on 2026-10-14; kit 1.1 retention period added 2026-10-16 (migration 011). Messaging holds a company's customer conversations, messages,
+ * reviewed line by line on 2026-10-14; kit 1.1 retention period added 2026-10-16 (migration 011); the
+ * append-only audit trail from main let through to the expiry and the scrub by migration 012 (2026-10-16). Messaging holds a company's customer conversations, messages,
  * attachments, templates, journeys and consent records — communications, kept by no statute on
  * AICOUNTLY's side — so a company purge deletes all of it. The one exception is the audit trail (see
  * company_retain). Attachment files and Drive documents the purged rows point at are removed by the
@@ -66,9 +67,14 @@ return [
         // the daily `bin/worker.php --expire-retained` deletes a purged company's rows 180 days after
         // created_at (archived first, recorded in aic_lifecycle_expiries). Messaging has no sweep of its
         // own on this table, so there is nothing to race; a live company's audit trail is not expired
-        // by anything (docs/DEPLOYMENT.md § Company lifecycle).
+        // by anything (docs/DEPLOYMENT.md § Company lifecycle). The table is append-only
+        // (009_messaging_audit_trail); migration 012_audit_trail_lifecycle_purge.sql lets exactly this
+        // through, under SET LOCAL aicountly.lifecycle_purge = on: the expiry's DELETE
+        // (expiry_session_settings below) and the scrub's UPDATE of before_state / after_state, which
+        // CompanyLifecycle::auditScrubHook (company_before, archived first) does because the engine's own
+        // scrub runs in a transaction nothing may mark as the purge.
         ['table' => 'messaging_audit_events', 'key' => 'cmp_id',
-            'reason' => 'CERT-In Directions under s.70B(6) IT Act 2000 (28.04.2022), direction (iv): ICT system and security logs kept 180 days; deleted after 180 days',
+            'reason' => 'CERT-In Directions under s.70B(6) IT Act 2000 (28.04.2022), direction (iv): ICT system and security logs kept 180 days; deleted after 180 days (append-only: expired and scrubbed only under aicountly.lifecycle_purge, migration 012_audit_trail_lifecycle_purge.sql)',
             'retain_days' => 180, 'retain_from' => 'created_at'],
     ],
 
@@ -81,6 +87,12 @@ return [
         'messaging_audit_events.before_state' => 'redact',
         'messaging_audit_events.after_state'  => 'redact',
     ],
+
+    // Kit 1.1.1: SET LOCAL inside the expiry transaction (and a restore's) only. messaging_audit_events is
+    // append-only; migration 012_audit_trail_lifecycle_purge.sql lets a DELETE through under this setting
+    // (the expiry) and an UPDATE of before_state / after_state only (the scrub, and a restore putting the
+    // archived rows back). Nothing in the application sets it.
+    'expiry_session_settings' => ['aicountly.lifecycle_purge' => 'on'],
 
     // Deleted on account_purge_requested: the person's own data that is not company data. Messaging has
     // no personal inbox, chat, file or device token outside companies; conversations, notes and

@@ -23,7 +23,9 @@ declare(strict_types=1);
  *   - kit 1.1: the manifest has no warnings (every retained table has a period), schema-1.1 is
  *     migrated, a product's service-key write into a read-only company is 423 (checkMachine) while
  *     provider webhooks (MACHINE_ALLOW) pass, every MACHINE_ALLOW entry matches a real route, and
- *     --expire-retained deletes a purged company's audit rows once 180 days old (and only those).
+ *     --expire-retained deletes a purged company's audit rows once 180 days old (and only those);
+ *   - the append-only audit trail (migration 012): UPDATE / DELETE refused without
+ *     aicountly.lifecycle_purge; with it (SET LOCAL) a DELETE and the scrub's UPDATE pass, nothing else.
  */
 
 namespace Aicountly\Api;
@@ -176,11 +178,32 @@ $kit = Kit::fromEnv('messaging', $pdo, CompanyLifecycle::manifestPath(), Company
 ]);
 CompanyLifecycle::overrideForTesting($kit);
 
+/**
+ * A test fixture change to the append-only audit trail: the test-suite reset flag of migration 009
+ * (messaging.audit_purge), SET LOCAL in its own transaction — never the lifecycle's own setting, which
+ * migration 012 keeps to DELETE and the scrub.
+ *
+ * @param list<mixed> $params
+ */
+function auditFixture(\PDO $pdo, string $sql, array $params = []): void
+{
+    $pdo->beginTransaction();
+    try {
+        $pdo->exec("SELECT set_config('messaging.audit_purge', 'on', true)");
+        $pdo->prepare($sql)->execute($params);
+        $pdo->commit();
+    } catch (\Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+}
+
 $clean = static function () use ($pdo): void {
     foreach ([CMP, OTHER] as $cmp) {
-        foreach (['messaging_message_attachments', 'messaging_messages', 'messaging_conversations', 'messaging_channel_connections', 'messaging_dismissed_suggestions', 'messaging_audit_events', 'messaging_settings', 'messaging_dispatch_jobs'] as $t) {
+        foreach (['messaging_message_attachments', 'messaging_messages', 'messaging_conversations', 'messaging_channel_connections', 'messaging_dismissed_suggestions', 'messaging_settings', 'messaging_dispatch_jobs'] as $t) {
             $pdo->prepare("DELETE FROM {$t} WHERE cmp_id = ?")->execute([$cmp]);
         }
+        auditFixture($pdo, 'DELETE FROM messaging_audit_events WHERE cmp_id = ?', [$cmp]);
         $pdo->prepare('DELETE FROM aic_lifecycle_state WHERE target_cmp_id = ?')->execute([$cmp]);
     }
     $pdo->exec("DELETE FROM aic_lifecycle_acks WHERE job_id IN (SELECT id FROM aic_lifecycle_jobs WHERE target_cmp_id IN (" . CMP . ',' . OTHER . ") OR target_uuid = '" . PERSON . "')");
@@ -215,6 +238,47 @@ check('kit 1.1: schema-1.1 is migrated and the manifest has no warnings (every r
     same([], PurgeManifest::load(CompanyLifecycle::manifestPath())->warnings(), 'manifest warnings');
     $audit = array_values(array_filter(PurgeManifest::load(CompanyLifecycle::manifestPath())->retained('company'), static fn (array $e): bool => $e['table'] === 'messaging_audit_events'));
     same(180, $audit[0]['retain_days'] ?? null, 'CERT-In 180 days');
+    $m = PurgeManifest::load(CompanyLifecycle::manifestPath());
+    $rules = array_keys($m->scrub('public.messaging_audit_events'));
+    $hook = CompanyLifecycle::AUDIT_SCRUBBED;
+    sort($rules);
+    sort($hook);
+    same($rules, $hook, 'CompanyLifecycle::auditScrubHook redacts exactly the manifest\'s scrub columns');
+    same(['aicountly.lifecycle_purge' => 'on'], $m->expirySessionSettings(), 'expiry_session_settings (migration 012)');
+});
+
+check('migration 012: the audit trail stays append-only; only aicountly.lifecycle_purge (SET LOCAL) lets a DELETE and a scrub UPDATE through', static function () use ($pdo): void {
+    $refused = static function (string $sql, bool $purge) use ($pdo): ?string {
+        $pdo->beginTransaction();
+        try {
+            if ($purge) {
+                $pdo->exec("SELECT set_config('aicountly.lifecycle_purge', 'on', true)");
+            }
+            $pdo->exec($sql);
+
+            return null;
+        } catch (\PDOException $e) {
+            return (string) $e->getMessage();
+        } finally {
+            $pdo->rollBack();
+        }
+    };
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, before_state, after_state) VALUES (?, 'actor-1', 'user', 'immutability.probe', 'x', '{\"a\": 1}', '{\"a\": 2}')")->execute([OTHER]);
+    $row = 'cmp_id = ' . OTHER . " AND action = 'immutability.probe'";
+    foreach (["DELETE FROM messaging_audit_events WHERE {$row}", "UPDATE messaging_audit_events SET action = 'x' WHERE {$row}", "UPDATE messaging_audit_events SET before_state = NULL WHERE {$row}"] as $sql) {
+        truthy(str_contains((string) $refused($sql, false), 'append-only'), 'refused without the setting: ' . $sql);
+    }
+    same(null, $refused("DELETE FROM messaging_audit_events WHERE {$row}", true), 'DELETE under the setting');
+    same(null, $refused("UPDATE messaging_audit_events SET before_state = '\"[redacted]\"', after_state = '\"[redacted]\"' WHERE {$row}", true), 'the scrub UPDATE under the setting');
+    // what a --restore does with rows a hook archived: an upsert of every column (unchanged but the scrubbed ones)
+    same(null, $refused("INSERT INTO messaging_audit_events SELECT * FROM messaging_audit_events WHERE {$row}
+        ON CONFLICT (audit_id) DO UPDATE SET before_state = '\"[redacted]\"', after_state = EXCLUDED.after_state, actor_uuid = EXCLUDED.actor_uuid, action = EXCLUDED.action", true), 'a restore\'s upsert under the setting');
+    foreach (["UPDATE messaging_audit_events SET action = 'x' WHERE {$row}", "UPDATE messaging_audit_events SET actor_uuid = 'someone-else' WHERE {$row}", "UPDATE messaging_audit_events SET meta_json = '{}', before_state = NULL WHERE {$row}", "UPDATE messaging_audit_events SET created_at = now() - INTERVAL '400 days' WHERE {$row}"] as $sql) {
+        truthy(str_contains((string) $refused($sql, true), 'append-only'), 'any other UPDATE is refused even under the setting: ' . $sql);
+    }
+    truthy(str_contains((string) $refused("DELETE FROM messaging_audit_events WHERE {$row}", false), 'append-only'), 'SET LOCAL ended with its transaction');
+    same(1, (int) $pdo->query("SELECT COUNT(*) FROM messaging_audit_events WHERE {$row}")->fetchColumn(), 'the probe row is untouched');
+    auditFixture($pdo, "DELETE FROM messaging_audit_events WHERE {$row}");
 });
 
 check('every allow-list and machine allow-list entry matches a real route', static function () use ($router): void {
@@ -367,6 +431,14 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
     same(['public.messaging_audit_events'], $acks[0]['body']['retained'] ?? null, 'retained reported');
     truthy(str_contains((string) $acks[0]['body']['detail'], 'CERT-In'), 'legal reason in the detail');
     same('https://manage.example.test/api/internal/company-lifecycle/ack', $acks[0]['url'], 'ack URL');
+    // The scrub ran in the first attempt (before the Drive failure); the archive keeps a scrubbed copy.
+    $copies = 0;
+    foreach (array_filter($kit->engine()->archives(), static fn (array $a): bool => $a['target'] === (string) CMP) as $a) {
+        if ((bool) $pdo->query("SELECT to_regclass('\"" . $a['schema'] . "\"._aic_h_messaging_audit_events') IS NOT NULL")->fetchColumn()) {
+            $copies += (int) $pdo->query('SELECT COUNT(*) FROM "' . $a['schema'] . "\"._aic_h_messaging_audit_events WHERE before_state = '\"[redacted]\"'::jsonb")->fetchColumn();
+        }
+    }
+    truthy($copies >= 1, 'the audit rows were archived (scrubbed) before the hook changed them');
 
     // The archive holds the purged rows until it is dropped (the kit's restore window).
     $archives = array_filter($kit->engine()->archives(), static fn (array $a): bool => $a['target'] === (string) CMP);
@@ -380,7 +452,7 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
 });
 
 check('kit 1.1: --expire-retained deletes the purged company\'s audit rows after 180 days, keeps the rest', static function () use ($pdo, $kit): void {
-    $pdo->prepare("UPDATE messaging_audit_events SET created_at = now() - INTERVAL '181 days' WHERE cmp_id = ?")->execute([CMP]);
+    auditFixture($pdo, "UPDATE messaging_audit_events SET created_at = now() - INTERVAL '181 days' WHERE cmp_id = ?", [CMP]);
     $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, created_at) VALUES (?, 'u', 'user', 'recent', 'settings', now() - INTERVAL '10 days')")->execute([CMP]);
     $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, created_at) VALUES (?, 'u', 'user', 'live-company', 'settings', now() - INTERVAL '400 days')")->execute([OTHER]);
     $old = (int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . CMP . " AND action <> 'recent'")->fetchColumn();
@@ -401,7 +473,7 @@ check('kit 1.1: --expire-retained deletes the purged company\'s audit rows after
             $kit->engine()->dropArchive($a['schema']);
         }
     }
-    $pdo->prepare('DELETE FROM messaging_audit_events WHERE cmp_id = ?')->execute([OTHER]);
+    auditFixture($pdo, 'DELETE FROM messaging_audit_events WHERE cmp_id = ?', [OTHER]);
 });
 
 check('account_purge_requested: only the person\'s own UI state goes', static function () use ($router, $pdo, $kit, &$acks): void {
