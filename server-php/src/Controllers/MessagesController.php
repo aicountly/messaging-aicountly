@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Aicountly\Api\Controllers;
 
 use Aicountly\Api\Audit;
+use Aicountly\Api\Db;
 use Aicountly\Api\Channels\ChannelConnection;
 use Aicountly\Api\Domain\AttachmentService;
 use Aicountly\Api\Domain\ConversationService;
@@ -81,12 +82,20 @@ final class MessagesController extends Controller
     {
         [$auth, $ctx] = self::enter('messaging.drafts.approve');
 
-        $result = MessageService::approve($ctx, $auth, $messageUuid, self::expectedVersion());
+        $expectedVersion = self::expectedVersion();
+        // The approval and its audit row commit together: an approval nobody can trace is the failure
+        // this product exists to prevent.
+        $result = Db::transaction(static function () use ($ctx, $auth, $messageUuid, $expectedVersion): array {
+            $result = MessageService::approve($ctx, $auth, $messageUuid, $expectedVersion);
+            if ($result['ok']) {
+                Audit::material($ctx, $auth, 'message.approved', 'message', $messageUuid);
+            }
+
+            return $result;
+        });
         if (!$result['ok']) {
             self::fail($result['code'], $result['detail']);
         }
-
-        Audit::record($ctx, $auth, 'message.approved', 'message', $messageUuid);
 
         $message = MessageService::find($ctx, $messageUuid);
 
@@ -221,7 +230,14 @@ final class MessagesController extends Controller
         [$auth, $ctx] = self::enter('messaging.messages.send');
 
         $reason = trim((string) (Http::param('reason') ?? 'Cancelled by an agent.'));
-        $cancelled = DispatchService::cancel($ctx, $messageUuid, $reason);
+        $cancelled = Db::transaction(static function () use ($ctx, $auth, $messageUuid, $reason): bool {
+            if (!DispatchService::cancel($ctx, $messageUuid, $reason)) {
+                return false;
+            }
+            Audit::material($ctx, $auth, 'message.cancelled', 'message', $messageUuid, null, ['reason' => $reason]);
+
+            return true;
+        });
 
         if (!$cancelled) {
             self::fail(
@@ -229,8 +245,6 @@ final class MessagesController extends Controller
                 'This message has already gone to the provider and cannot be unsent. Nothing about it has changed.',
             );
         }
-
-        Audit::record($ctx, $auth, 'message.cancelled', 'message', $messageUuid, null, ['reason' => $reason]);
 
         $message = MessageService::find($ctx, $messageUuid);
 
@@ -431,6 +445,11 @@ final class MessagesController extends Controller
             }
             Http::data(['url' => $url, 'expires_in_seconds' => 900]);
         }
+
+        // A download of business data leaves a row: who took which attachment, never its content.
+        Audit::record($ctx, $auth, 'attachment.downloaded', 'attachment', $attachmentUuid, null, [
+            'media_type' => (string) $attachment['media_type'],
+        ], entityLabel: (string) $attachment['filename']);
 
         header('Content-Type: ' . (string) $attachment['media_type']);
         header('Content-Length: ' . (string) filesize($path));

@@ -266,6 +266,9 @@ Permissions::forget();
 Domain\Settings::forget();
 
 foreach ($tables as $table) {
+    if ($table === 'messaging_audit_events') {
+        Db::run("SET messaging.audit_purge = 'on'"); // the test reset is a documented purge (migration 009)
+    }
     Db::run('DELETE FROM ' . $table . ' WHERE cmp_id = :cmp', ['cmp' => CMP]);
 }
 
@@ -954,6 +957,9 @@ check('with consent the notice is accepted, and the answer has the fields Secret
 
 Clock::freeze(null);
 foreach ($tables as $table) {
+    if ($table === 'messaging_audit_events') {
+        Db::run("SET messaging.audit_purge = 'on'"); // the test reset is a documented purge (migration 009)
+    }
     Db::run('DELETE FROM ' . $table . ' WHERE cmp_id = :cmp', ['cmp' => CMP]);
 }
 

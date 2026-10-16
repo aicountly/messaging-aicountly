@@ -225,6 +225,14 @@
   }
 }
 
+.shell-company-id {
+  flex: none;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 .shell-user {
   width: 34px;
   height: 34px;

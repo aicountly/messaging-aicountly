@@ -13,9 +13,10 @@
 
 import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
-import { Bell, LogOut, Menu, Search, ShieldAlert } from 'lucide-react'
+import { Bell, LogOut, Menu, Search, ShieldAlert, UserCog } from 'lucide-react'
 import { useAuth } from '../auth/AuthProvider'
 import { AppLauncher } from '../components/AppLauncher'
+import { getManageApiOrigin } from '../services/appLauncher'
 import { useMessaging } from '../context/MessagingContext'
 import { NAV } from './navConfig'
 import { Button, EmptyState, ErrorState, LoadingRows, Notice } from '../ui'
@@ -68,6 +69,20 @@ function NoAccess() {
       </div>
     </div>
   )
+}
+
+/** Manage page where the signed-in user edits their own profile. */
+function manageProfilePath(): string {
+  return '/profile'
+}
+
+/**
+ * Manage's profile page for this environment (Manage is hash-routed). A plain
+ * address — Manage signs the person in through the portal itself, so no token
+ * is ever put in it.
+ */
+function manageProfileUrl(): string {
+  return `${getManageApiOrigin()}/#${manageProfilePath()}`
 }
 
 export function AppShell() {
@@ -197,10 +212,23 @@ export function AppShell() {
               {notificationsOpen && <NotificationCentre onClose={() => setNotificationsOpen(false)} />}
             </div>
 
-            <div className="shell-user" title={session?.user.name ?? ''}>
+            <div
+              className="shell-user"
+              title={[session?.user.name, session?.user.uuid ? `Cust ID: ${session.user.uuid}` : null].filter(Boolean).join('\n')}
+            >
               <span aria-hidden>{initials(session?.user.name)}</span>
               <span className="msg-visually-hidden">{session?.user.name ?? 'Signed in'}</span>
             </div>
+
+            <Button
+              tone="ghost"
+              small
+              onClick={() => window.open(manageProfileUrl(), '_blank', 'noopener,noreferrer')}
+              title="Manage profile — opens your profile in Manage in a new tab"
+              ariaLabel="Manage profile (opens in a new tab)"
+            >
+              <UserCog size={15} aria-hidden />
+            </Button>
 
             <Button tone="ghost" small onClick={signOut} title="Log out" ariaLabel="Log out">
               <LogOut size={15} aria-hidden />

@@ -66,6 +66,25 @@ final class Http
         ]);
     }
 
+    /**
+     * A CSV download. Under CLI it throws ResponseSent carrying the file, as json() does.
+     */
+    public static function csv(string $filename, string $content, bool $truncated = false, int $rows = 0): never
+    {
+        if (PHP_SAPI === 'cli') {
+            throw new ResponseSent(200, ['csv' => $content, 'filename' => $filename, 'truncated' => $truncated, 'rows' => $rows]);
+        }
+
+        http_response_code(200);
+        header('Content-Type: text/csv; charset=utf-8');
+        header('Content-Disposition: attachment; filename="' . preg_replace('/[^A-Za-z0-9._-]/', '_', $filename) . '"');
+        header('Cache-Control: no-store, private');
+        header('X-Content-Type-Options: nosniff');
+        header('X-Export-Truncated: ' . ($truncated ? 'true' : 'false'));
+        echo "\xEF\xBB\xBF" . $content;
+        exit;
+    }
+
     /** @param array<string, mixed> $details */
     public static function error(int $status, string $code, string $message, array $details = []): never
     {

@@ -1134,37 +1134,96 @@ function AssignDrawer({
 
 const AUDIT_PAGE_SIZE = 50
 
+const SEVERITY_TONE: Record<AuditEvent['severity'], 'neutral' | 'warning' | 'danger'> = {
+  info: 'neutral',
+  material: 'warning',
+  security: 'danger',
+}
+
 function AuditTab() {
-  const { timezone } = useMessaging()
-  const [filters, setFilters] = useUrlFilters({ action: '', entity_type: '', actor_uuid: '', offset: '0' })
+  const { timezone, can } = useMessaging()
+  const [filters, setFilters] = useUrlFilters({
+    action: '',
+    severity: '',
+    q: '',
+    from: '',
+    to: '',
+    entity_type: '',
+    entity_id: '',
+    actor_uuid: '',
+    offset: '0',
+  })
   const offset = Number(filters.offset) || 0
 
+  const query = {
+    action: filters.action || undefined,
+    severity: filters.severity || undefined,
+    q: filters.q || undefined,
+    from: filters.from || undefined,
+    to: filters.to || undefined,
+    entity_type: filters.entity_type || undefined,
+    entity_id: filters.entity_id || undefined,
+    actor_uuid: filters.actor_uuid || undefined,
+  }
+
   const state = useApi(
-    (signal) =>
-      api.list<AuditEvent>(
-        'v1/audit',
-        {
-          action: filters.action || undefined,
-          entity_type: filters.entity_type || undefined,
-          actor_uuid: filters.actor_uuid || undefined,
-          limit: AUDIT_PAGE_SIZE,
-          offset,
-        },
-        signal,
-      ),
-    [filters.action, filters.entity_type, filters.actor_uuid, offset],
+    (signal) => api.list<AuditEvent>('v1/audit', { ...query, limit: AUDIT_PAGE_SIZE, offset }, signal),
+    [filters.action, filters.severity, filters.q, filters.from, filters.to, filters.entity_type, filters.entity_id, filters.actor_uuid, offset],
   )
 
-  const [expanded, setExpanded] = useState<number | null>(null)
+  const [open, setOpen] = useState<AuditEvent | null>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportNote, setExportNote] = useState<string | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
   const actions = (state.data?.meta.actions as string[] | undefined) ?? []
   const total = state.data?.meta.total ?? 0
 
+  async function exportCsv() {
+    setExporting(true)
+    setExportError(null)
+    setExportNote(null)
+    try {
+      const file = await api.download('v1/audit/export', query)
+      const url = URL.createObjectURL(file.blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = file.filename
+      link.click()
+      URL.revokeObjectURL(url)
+      if (file.truncated) {
+        setExportNote('The file holds only the newest rows and says PARTIAL on its last line. Narrow the filters and export again.')
+      }
+    } catch (error) {
+      setExportError(error instanceof ApiError ? error.message : 'The export could not be created.')
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <Panel
-      title="Audit history"
+      title="Audit trail"
       subtitle={(state.data?.meta.note as string | undefined) ?? undefined}
+      action={
+        can('messaging.export') ? (
+          <Button small pending={exporting} onClick={exportCsv}>
+            Export CSV
+          </Button>
+        ) : undefined
+      }
     >
       <div className="msg-filters">
+        <label className="msg-visually-hidden" htmlFor="audit-q">
+          Search
+        </label>
+        <input
+          id="audit-q"
+          className="msg-input"
+          placeholder="Search summary, record or action"
+          value={filters.q}
+          onChange={(event) => setFilters({ q: event.target.value, offset: '0' })}
+        />
+
         <label className="msg-visually-hidden" htmlFor="audit-action">
           Action
         </label>
@@ -1182,6 +1241,42 @@ function AuditTab() {
           ))}
         </select>
 
+        <label className="msg-visually-hidden" htmlFor="audit-severity">
+          Severity
+        </label>
+        <select
+          id="audit-severity"
+          className="msg-select"
+          value={filters.severity}
+          onChange={(event) => setFilters({ severity: event.target.value, offset: '0' })}
+        >
+          <option value="">Any severity</option>
+          <option value="security">Security</option>
+          <option value="material">Material</option>
+          <option value="info">Info</option>
+        </select>
+
+        <label className="msg-visually-hidden" htmlFor="audit-from">
+          From
+        </label>
+        <input
+          id="audit-from"
+          type="date"
+          className="msg-input"
+          value={filters.from}
+          onChange={(event) => setFilters({ from: event.target.value, offset: '0' })}
+        />
+        <label className="msg-visually-hidden" htmlFor="audit-to">
+          To
+        </label>
+        <input
+          id="audit-to"
+          type="date"
+          className="msg-input"
+          value={filters.to}
+          onChange={(event) => setFilters({ to: event.target.value, offset: '0' })}
+        />
+
         <label className="msg-visually-hidden" htmlFor="audit-actor">
           Actor UUID
         </label>
@@ -1194,10 +1289,33 @@ function AuditTab() {
         />
       </div>
 
+      {filters.entity_type && filters.entity_id && (
+        <Notice tone="info" title="History of one record">
+          Showing {humanise(filters.entity_type)} {filters.entity_id}.{' '}
+          <button
+            type="button"
+            className="msg-button msg-button-ghost msg-button-small"
+            onClick={() => setFilters({ entity_type: '', entity_id: '', offset: '0' })}
+          >
+            Show everything
+          </button>
+        </Notice>
+      )}
+      {exportError && (
+        <Notice tone="danger" title="The export could not be created">
+          {exportError}
+        </Notice>
+      )}
+      {exportNote && (
+        <Notice tone="warning" title="This export is partial">
+          {exportNote}
+        </Notice>
+      )}
+
       {state.loading && state.data === null ? (
         <LoadingRows rows={6} />
       ) : state.error ? (
-        <Notice tone="danger" title="The audit history could not be read">
+        <Notice tone="danger" title="The audit trail could not be read">
           {state.error.message}
         </Notice>
       ) : (state.data?.data ?? []).length === 0 ? (
@@ -1206,54 +1324,49 @@ function AuditTab() {
         </EmptyState>
       ) : (
         <>
-          <div className="msg-timeline">
-            {(state.data?.data ?? []).map((event) => (
-              <div className="msg-timeline-row" key={event.audit_id}>
-                <span
-                  className={`msg-timeline-dot${
-                    event.action.includes('revoked') || event.action.includes('suppress')
-                      ? ' msg-timeline-dot-warning'
-                      : ''
-                  }`}
-                  aria-hidden
-                />
-                <div className="msg-timeline-body">
-                  <strong>{humanise(event.action)}</strong>
-                  <small>
-                    {formatDateTime(event.created_at, timezone)}
-                    {' · '}
-                    {event.actor_kind === 'service'
-                      ? `${event.source_app ?? 'another Aicountly product'} (service)`
-                      : event.actor_uuid ?? 'unknown actor'}
-                    {event.entity_type && (
-                      <>
-                        {' · '}
-                        {humanise(event.entity_type)}
-                        {event.entity_id ? ` ${event.entity_id}` : ''}
-                      </>
-                    )}
-                  </small>
-                  {event.reason && <small className="msg-muted">“{event.reason}”</small>}
-
-                  {(event.before_state || event.after_state) && (
-                    <>
-                      <button
-                        type="button"
-                        className="msg-button msg-button-ghost msg-button-small"
-                        aria-expanded={expanded === event.audit_id}
-                        onClick={() => setExpanded(expanded === event.audit_id ? null : event.audit_id)}
-                      >
-                        {expanded === event.audit_id ? 'Hide what changed' : 'Show what changed'}
-                      </button>
-
-                      {expanded === event.audit_id && (
-                        <StateDiff before={event.before_state} after={event.after_state} />
+          <div className="msg-table-wrap">
+            <table className="msg-table">
+              <caption className="msg-visually-hidden">Audit trail</caption>
+              <thead>
+                <tr>
+                  <th scope="col">When</th>
+                  <th scope="col">Action</th>
+                  <th scope="col">Record</th>
+                  <th scope="col">What happened</th>
+                  <th scope="col">Who</th>
+                  <th scope="col">
+                    <span className="msg-visually-hidden">Details</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {(state.data?.data ?? []).map((event) => (
+                  <tr key={event.audit_id}>
+                    <td>{formatDateTime(event.created_at, timezone)}</td>
+                    <td>
+                      <StatusPill tone={SEVERITY_TONE[event.severity] ?? 'neutral'}>{humanise(event.action)}</StatusPill>
+                    </td>
+                    <td>
+                      {event.entity_type ? humanise(event.entity_type) : '—'}
+                      {(event.entity_label || event.entity_id) && (
+                        <small className="msg-muted"> {event.entity_label ?? event.entity_id}</small>
                       )}
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
+                    </td>
+                    <td>{event.summary ?? humanise(event.action)}</td>
+                    <td>
+                      {event.actor_kind === 'service'
+                        ? `${event.source_app ?? 'another Aicountly product'} (service)`
+                        : event.actor_label ?? event.actor_uuid ?? 'unknown actor'}
+                    </td>
+                    <td>
+                      <Button tone="ghost" small onClick={() => setOpen(event)}>
+                        Details
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
 
           <div className="msg-actions">
@@ -1275,7 +1388,113 @@ function AuditTab() {
           </div>
         </>
       )}
+
+      {open && (
+        <AuditDetail
+          event={open}
+          timezone={timezone}
+          onClose={() => setOpen(null)}
+          onHistory={() => {
+            setFilters({ entity_type: open.entity_type ?? '', entity_id: open.entity_id ?? '', offset: '0' })
+            setOpen(null)
+          }}
+        />
+      )}
     </Panel>
+  )
+}
+
+function AuditDetail({
+  event,
+  timezone,
+  onClose,
+  onHistory,
+}: {
+  event: AuditEvent
+  timezone: string
+  onClose: () => void
+  onHistory: () => void
+}) {
+  const changes = event.meta_json?.changes ?? []
+
+  return (
+    <Drawer
+      title={humanise(event.action)}
+      subtitle={event.summary ?? undefined}
+      onClose={onClose}
+      footer={
+        event.entity_type && event.entity_id ? (
+          <div className="msg-actions">
+            <Button small onClick={onHistory}>
+              History of this record
+            </Button>
+          </div>
+        ) : undefined
+      }
+    >
+      <dl className="msg-small">
+        <dt>When</dt>
+        <dd>{formatDateTime(event.created_at, timezone)}</dd>
+        <dt>Who</dt>
+        <dd>
+          {event.actor_label ?? event.actor_uuid ?? 'unknown actor'}
+          {event.actor_label && event.actor_uuid ? ` (${event.actor_uuid})` : ''}
+        </dd>
+        <dt>Record</dt>
+        <dd>
+          {event.entity_type ? humanise(event.entity_type) : '—'} {event.entity_label ?? ''} {event.entity_id ?? ''}
+        </dd>
+        {event.reason && (
+          <>
+            <dt>Reason</dt>
+            <dd>“{event.reason}”</dd>
+          </>
+        )}
+        <dt>Severity</dt>
+        <dd>{event.severity}</dd>
+        <dt>Request</dt>
+        <dd>
+          {event.request_id ?? '—'}
+          {event.ip_address ? ` from ${event.ip_address}` : ''}
+        </dd>
+      </dl>
+
+      {changes.length > 0 && (
+        <>
+          <h3>What changed</h3>
+          <div className="msg-table-wrap">
+            <table className="msg-table">
+              <caption className="msg-visually-hidden">Field changes</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Field</th>
+                  <th scope="col">Before</th>
+                  <th scope="col">After</th>
+                </tr>
+              </thead>
+              <tbody>
+                {changes.map((change) => (
+                  <tr key={change.field}>
+                    <th scope="row">{change.label}</th>
+                    <td>{renderValue(change.old)}</td>
+                    <td>
+                      <strong>{renderValue(change.new)}</strong>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {(event.before_state || event.after_state) && (
+        <>
+          <h3>Snapshot</h3>
+          <StateDiff before={event.before_state} after={event.after_state} />
+        </>
+      )}
+    </Drawer>
   )
 }
 

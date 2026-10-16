@@ -374,7 +374,7 @@ final class WebhookService
             'The customer opted out over ' . $connection->channel . '.',
         );
 
-        Audit::recordProvider($ctx, $connection->provider, 'consent.withdrawn', 'consent', $address, [
+        Audit::recordProvider($ctx, $connection->provider, 'consent.withdrawn', 'consent', Audit::mask($address), [
             'channel' => $connection->channel,
             'source'  => 'customer_message',
         ]);
@@ -390,7 +390,7 @@ final class WebhookService
         $actor = Auth::forProvider($connection->provider);
         ConsentService::suppress($ctx, $actor, $connection->channel, $address, $reason, $detail);
 
-        Audit::recordProvider($ctx, $connection->provider, 'address.suppressed', 'suppression', $address, [
+        Audit::recordProvider($ctx, $connection->provider, 'address.suppressed', 'suppression', Audit::mask($address), [
             'channel' => $connection->channel,
             'reason'  => $reason,
         ]);

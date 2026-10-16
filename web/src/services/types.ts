@@ -828,16 +828,30 @@ export interface AccessResponse {
   notes: string[]
 }
 
+export interface AuditChange {
+  field: string
+  label: string
+  old: unknown
+  new: unknown
+}
+
 export interface AuditEvent {
   audit_id: number
   actor_uuid: string | null
+  actor_label: string | null
   actor_kind: string | null
   source_app: string | null
   action: string
   entity_type: string | null
   entity_id: string | null
+  entity_label: string | null
+  summary: string | null
+  severity: 'info' | 'material' | 'security'
   before_state: Record<string, unknown> | null
   after_state: Record<string, unknown> | null
+  meta_json: { changes?: AuditChange[]; reason?: string } | null
   reason: string | null
+  request_id: string | null
+  ip_address: string | null
   created_at: string
 }
