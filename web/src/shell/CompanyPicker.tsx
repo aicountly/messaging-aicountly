@@ -34,8 +34,11 @@ export function CompanyPicker() {
     return (
       <>
         {only && !isRestricted(companyId(only)) ? (
-          <span className="shell-company" style={{ display: 'inline-flex', alignItems: 'center' }}>
+          <span className="shell-company" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
             {companyName(only)}
+            <span className="shell-company-id" title={`Company ID ${companyId(only)}`}>
+              ID: {companyId(only)}
+            </span>
           </span>
         ) : null}
         <BrowseCompaniesButton compact />
@@ -64,8 +67,8 @@ export function CompanyPicker() {
         {companies.map((company) => (
           <option key={companyId(company)} value={String(companyId(company))}>
             {isRestricted(companyId(company))
-              ? `${companyName(company)} — ${accessStatusLabel(company.app_access_status ?? 'ACCESS_RESTRICTED')}`
-              : companyName(company)}
+              ? `${companyName(company)} (ID: ${companyId(company)}) — ${accessStatusLabel(company.app_access_status ?? 'ACCESS_RESTRICTED')}`
+              : `${companyName(company)} (ID: ${companyId(company)})`}
           </option>
         ))}
       </select>
