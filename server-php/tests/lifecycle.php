@@ -24,8 +24,12 @@ declare(strict_types=1);
  *     migrated, a product's service-key write into a read-only company is 423 (checkMachine) while
  *     provider webhooks (MACHINE_ALLOW) pass, every MACHINE_ALLOW entry matches a real route, and
  *     --expire-retained deletes a purged company's audit rows once 180 days old (and only those);
- *   - the append-only audit trail (migration 012): UPDATE / DELETE refused without
- *     aicountly.lifecycle_purge; with it (SET LOCAL) a DELETE and the scrub's UPDATE pass, nothing else.
+ *   - the append-only audit trail (migrations 012, 013): UPDATE / DELETE refused without
+ *     aicountly.lifecycle_purge; with it (SET LOCAL) a DELETE and the scrub's UPDATE (before_state,
+ *     after_state, entity_label, summary, meta_json.changes) pass, nothing else;
+ *   - the purge scrubs those fields in the retained rows (other meta_json keys kept), the archive copy is
+ *     scrubbed too (kit: every archive copy), a restore puts the archived rows back under the setting, and
+ *     the expiry's archive copy holds no unscrubbed content.
  */
 
 namespace Aicountly\Api;
@@ -178,10 +182,21 @@ $kit = Kit::fromEnv('messaging', $pdo, CompanyLifecycle::manifestPath(), Company
 ]);
 CompanyLifecycle::overrideForTesting($kit);
 
+/** A JSON object as an array with its keys sorted (jsonb does not keep key order). */
+function jsonSorted(mixed $json): mixed
+{
+    $v = json_decode((string) $json, true);
+    if (is_array($v)) {
+        ksort($v);
+    }
+
+    return $v;
+}
+
 /**
  * A test fixture change to the append-only audit trail: the test-suite reset flag of migration 009
  * (messaging.audit_purge), SET LOCAL in its own transaction — never the lifecycle's own setting, which
- * migration 012 keeps to DELETE and the scrub.
+ * migrations 012 / 013 keep to DELETE and the scrub.
  *
  * @param list<mixed> $params
  */
@@ -239,15 +254,17 @@ check('kit 1.1: schema-1.1 is migrated and the manifest has no warnings (every r
     $audit = array_values(array_filter(PurgeManifest::load(CompanyLifecycle::manifestPath())->retained('company'), static fn (array $e): bool => $e['table'] === 'messaging_audit_events'));
     same(180, $audit[0]['retain_days'] ?? null, 'CERT-In 180 days');
     $m = PurgeManifest::load(CompanyLifecycle::manifestPath());
-    $rules = array_keys($m->scrub('public.messaging_audit_events'));
-    $hook = CompanyLifecycle::AUDIT_SCRUBBED;
-    sort($rules);
-    sort($hook);
-    same($rules, $hook, 'CompanyLifecycle::auditScrubHook redacts exactly the manifest\'s scrub columns');
-    same(['aicountly.lifecycle_purge' => 'on'], $m->expirySessionSettings(), 'expiry_session_settings (migration 012)');
+    $rules = $m->scrub('public.messaging_audit_events');
+    $hook = array_map([PurgeManifest::class, 'scrubRule'], CompanyLifecycle::AUDIT_SCRUBBED);
+    ksort($rules);
+    ksort($hook);
+    same($rules, $hook, 'CompanyLifecycle::auditScrubHook scrubs exactly the manifest\'s scrub columns, with the same rules');
+    same(['after_state', 'before_state', 'entity_label', 'meta_json', 'summary'], array_keys($rules), 'the scrubbed columns (owner\'s decision, migration 013)');
+    same(['kind' => 'json_paths', 'paths' => ['changes']], $rules['meta_json'] ?? null, 'meta_json: only its changes key');
+    same(['aicountly.lifecycle_purge' => 'on'], $m->expirySessionSettings(), 'expiry_session_settings (migrations 012 / 013)');
 });
 
-check('migration 012: the audit trail stays append-only; only aicountly.lifecycle_purge (SET LOCAL) lets a DELETE and a scrub UPDATE through', static function () use ($pdo): void {
+check('migrations 012 / 013: the audit trail stays append-only; only aicountly.lifecycle_purge (SET LOCAL) lets a DELETE and a scrub UPDATE through', static function () use ($pdo): void {
     $refused = static function (string $sql, bool $purge) use ($pdo): ?string {
         $pdo->beginTransaction();
         try {
@@ -263,17 +280,33 @@ check('migration 012: the audit trail stays append-only; only aicountly.lifecycl
             $pdo->rollBack();
         }
     };
-    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, before_state, after_state) VALUES (?, 'actor-1', 'user', 'immutability.probe', 'x', '{\"a\": 1}', '{\"a\": 2}')")->execute([OTHER]);
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, entity_label, summary, meta_json, before_state, after_state) VALUES (?, 'actor-1', 'user', 'immutability.probe', 'x', '+919800000001', 'x +919800000001 updated', ?, '{\"a\": 1}', '{\"a\": 2}')")
+        ->execute([OTHER, '{"changes": [{"field": "a", "label": "A", "old": 1, "new": 2}], "reason": "probe"}']);
     $row = 'cmp_id = ' . OTHER . " AND action = 'immutability.probe'";
-    foreach (["DELETE FROM messaging_audit_events WHERE {$row}", "UPDATE messaging_audit_events SET action = 'x' WHERE {$row}", "UPDATE messaging_audit_events SET before_state = NULL WHERE {$row}"] as $sql) {
+    $scrub = "before_state = '\"[redacted]\"', after_state = '\"[redacted]\"', entity_label = '[redacted]', summary = '[redacted]', meta_json = jsonb_set(meta_json, '{changes}', '\"[redacted]\"')";
+    foreach (["DELETE FROM messaging_audit_events WHERE {$row}", "UPDATE messaging_audit_events SET action = 'x' WHERE {$row}", "UPDATE messaging_audit_events SET before_state = NULL WHERE {$row}",
+        "UPDATE messaging_audit_events SET entity_label = '[redacted]' WHERE {$row}", "UPDATE messaging_audit_events SET summary = '[redacted]' WHERE {$row}",
+        "UPDATE messaging_audit_events SET meta_json = jsonb_set(meta_json, '{changes}', '\"[redacted]\"') WHERE {$row}", "UPDATE messaging_audit_events SET {$scrub} WHERE {$row}"] as $sql) {
         truthy(str_contains((string) $refused($sql, false), 'append-only'), 'refused without the setting: ' . $sql);
     }
     same(null, $refused("DELETE FROM messaging_audit_events WHERE {$row}", true), 'DELETE under the setting');
-    same(null, $refused("UPDATE messaging_audit_events SET before_state = '\"[redacted]\"', after_state = '\"[redacted]\"' WHERE {$row}", true), 'the scrub UPDATE under the setting');
+    same(null, $refused("UPDATE messaging_audit_events SET before_state = '\"[redacted]\"', after_state = '\"[redacted]\"' WHERE {$row}", true), 'the 012 scrub UPDATE under the setting');
+    same(null, $refused("UPDATE messaging_audit_events SET {$scrub} WHERE {$row}", true), 'the 013 scrub UPDATE (every scrubbed field) under the setting');
+    foreach (["entity_label = '[redacted]'", "summary = NULL", "meta_json = meta_json - 'changes'", "meta_json = jsonb_set(meta_json, '{changes}', '[]')"] as $one) {
+        same(null, $refused("UPDATE messaging_audit_events SET {$one} WHERE {$row}", true), 'one scrubbed field under the setting: ' . $one);
+    }
     // what a --restore does with rows a hook archived: an upsert of every column (unchanged but the scrubbed ones)
     same(null, $refused("INSERT INTO messaging_audit_events SELECT * FROM messaging_audit_events WHERE {$row}
         ON CONFLICT (audit_id) DO UPDATE SET before_state = '\"[redacted]\"', after_state = EXCLUDED.after_state, actor_uuid = EXCLUDED.actor_uuid, action = EXCLUDED.action", true), 'a restore\'s upsert under the setting');
-    foreach (["UPDATE messaging_audit_events SET action = 'x' WHERE {$row}", "UPDATE messaging_audit_events SET actor_uuid = 'someone-else' WHERE {$row}", "UPDATE messaging_audit_events SET meta_json = '{}', before_state = NULL WHERE {$row}", "UPDATE messaging_audit_events SET created_at = now() - INTERVAL '400 days' WHERE {$row}"] as $sql) {
+    foreach (["UPDATE messaging_audit_events SET action = 'x' WHERE {$row}", "UPDATE messaging_audit_events SET actor_uuid = 'someone-else' WHERE {$row}", "UPDATE messaging_audit_events SET meta_json = '{}', before_state = NULL WHERE {$row}", "UPDATE messaging_audit_events SET created_at = now() - INTERVAL '400 days' WHERE {$row}",
+        // meta_json: anything but its changes key
+        "UPDATE messaging_audit_events SET meta_json = jsonb_set(meta_json, '{reason}', '\"[redacted]\"') WHERE {$row}",
+        "UPDATE messaging_audit_events SET meta_json = jsonb_set(meta_json, '{extra}', '1') WHERE {$row}",
+        "UPDATE messaging_audit_events SET meta_json = NULL WHERE {$row}",
+        "UPDATE messaging_audit_events SET {$scrub}, action = 'x' WHERE {$row}",
+        "UPDATE messaging_audit_events SET {$scrub}, reason = 'x' WHERE {$row}",
+        "UPDATE messaging_audit_events SET {$scrub}, entity_id = 'x' WHERE {$row}",
+        "UPDATE messaging_audit_events SET {$scrub}, actor_label = 'x' WHERE {$row}"] as $sql) {
         truthy(str_contains((string) $refused($sql, true), 'append-only'), 'any other UPDATE is refused even under the setting: ' . $sql);
     }
     truthy(str_contains((string) $refused("DELETE FROM messaging_audit_events WHERE {$row}", false), 'append-only'), 'SET LOCAL ended with its transaction');
@@ -389,7 +422,13 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
     $ins->execute([uuid4(), CMP, $msg, 'local', $localKey]);
     $ins->execute([uuid4(), CMP, $msg, 'drive', 'drive:' . CMP . ':1:0:555']);
     $ins->execute([uuid4(), CMP, $msg, 'provider', 'meta-media-1']);
-    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, before_state, after_state) VALUES (?, 'user-lifecycle', 'user', 'settings.updated', 'settings', '{\"address\": \"+919800000009\"}', '{\"address\": \"+919800000010\"}')")->execute([CMP]);
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, entity_id, entity_label, summary, meta_json, reason, before_state, after_state) VALUES (?, 'user-lifecycle', 'user', 'settings.updated', 'settings', 'e-1', '+919800000009', 'Settings +919800000009 updated', ?, 'ops', '{\"address\": \"+919800000009\"}', '{\"address\": \"+919800000010\"}')")
+        ->execute([CMP, '{"changes": [{"field": "address", "label": "Address", "old": "+919800000009", "new": "+919800000010"}], "reason": "ops", "source": "ui"}']);
+    // a row without a changes list, and one with no meta_json at all: only the whole-column fields change
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type, entity_label, summary, meta_json) VALUES (?, 'user-lifecycle', 'user', 'conversation.assigned', 'conversation', 'Customer +919800000011', 'Conversation Customer +919800000011 assigned', ?)")
+        ->execute([CMP, '{"reason": "rota"}']);
+    $pdo->prepare("INSERT INTO messaging_audit_events (cmp_id, actor_uuid, actor_kind, action, entity_type) VALUES (?, 'user-lifecycle', 'user', 'audit.exported', 'audit')")->execute([CMP]);
+    $originals = $pdo->query('SELECT audit_id, cmp_id, bo_id, actor_uuid, actor_kind, source_app, action, entity_type, entity_id, reason, ip_address, created_at, actor_label, request_id, user_agent, severity FROM messaging_audit_events WHERE cmp_id = ' . CMP . ' ORDER BY audit_id')->fetchAll(\PDO::FETCH_ASSOC);
     // another company's rows are untouched
     $pdo->prepare("INSERT INTO messaging_dismissed_suggestions (cmp_id, user_uuid, suggestion_key) VALUES (?, 'someone', 'k1')")->execute([OTHER]);
 
@@ -421,8 +460,16 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
     same(0, (int) $pdo->query("SELECT COUNT(*) FROM lifecycle_object_deletions WHERE target_ref = '" . CMP . "' AND status <> 'deleted'")->fetchColumn(), 'every object recorded deleted');
     same(2, (int) $pdo->query("SELECT COUNT(*) FROM lifecycle_object_deletions WHERE target_ref = '" . CMP . "'")->fetchColumn(), 'provider media is not ours to delete');
     truthy((int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . CMP)->fetchColumn() >= 1, 'audit trail retained');
-    $kept = $pdo->query("SELECT action, before_state::text AS b, after_state::text AS a FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND action = 'settings.updated'")->fetch(\PDO::FETCH_ASSOC);
+    $kept = $pdo->query("SELECT action, before_state::text AS b, after_state::text AS a, entity_label, summary, meta_json::text AS m FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND action = 'settings.updated'")->fetch(\PDO::FETCH_ASSOC);
     same(['settings.updated', '"[redacted]"', '"[redacted]"'], [$kept['action'] ?? null, $kept['b'] ?? null, $kept['a'] ?? null], 'kit 1.1 scrub: who / what kept, the row copies redacted');
+    same(['[redacted]', '[redacted]'], [$kept['entity_label'] ?? null, $kept['summary'] ?? null], 'entity_label and summary redacted (migration 013)');
+    same(['changes' => '[redacted]', 'reason' => 'ops', 'source' => 'ui'], jsonSorted($kept['m'] ?? null), 'meta_json.changes redacted, every other key unchanged');
+    $plain = $pdo->query("SELECT entity_label, summary, meta_json::text AS m FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND action = 'conversation.assigned'")->fetch(\PDO::FETCH_ASSOC);
+    same(['[redacted]', '[redacted]', ['reason' => 'rota']], [$plain['entity_label'] ?? null, $plain['summary'] ?? null, jsonSorted($plain['m'] ?? null)], 'a row without changes: label / summary redacted, meta_json as it was');
+    same(null, $pdo->query("SELECT meta_json FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND action = 'audit.exported'")->fetchColumn(), 'a NULL meta_json stays NULL');
+    same(0, (int) $pdo->query("SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND CAST(to_jsonb(messaging_audit_events) AS TEXT) LIKE '%+91980000%'")->fetchColumn(), 'no retained audit row carries an old value anywhere');
+    $after = $pdo->query('SELECT audit_id, cmp_id, bo_id, actor_uuid, actor_kind, source_app, action, entity_type, entity_id, reason, ip_address, created_at, actor_label, request_id, user_agent, severity FROM messaging_audit_events WHERE cmp_id = ' . CMP . ' ORDER BY audit_id')->fetchAll(\PDO::FETCH_ASSOC);
+    same($originals, $after, 'every column the scrub does not name is unchanged');
     same(1, (int) $pdo->query('SELECT COUNT(*) FROM messaging_dismissed_suggestions WHERE cmp_id = ' . OTHER)->fetchColumn(), 'other company untouched');
 
     same(1, count($acks), 'one ack');
@@ -439,9 +486,43 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
         }
     }
     truthy($copies >= 1, 'the audit rows were archived (scrubbed) before the hook changed them');
+    // The kit scrubs every archive copy by the manifest's rules, so the archive keeps the rows (every
+    // unscrubbed column as it was) but none of the scrubbed content either.
+    $archives = array_filter($kit->engine()->archives(), static fn (array $a): bool => $a['target'] === (string) CMP);
+    $archived = [];
+    foreach ($archives as $a) {
+        if ((bool) $pdo->query("SELECT to_regclass('\"" . $a['schema'] . "\"._aic_h_messaging_audit_events') IS NOT NULL")->fetchColumn()) {
+            foreach ($pdo->query('SELECT audit_id, entity_label, summary, meta_json::text AS m, CAST(to_jsonb(t) AS TEXT) AS j FROM "' . $a['schema'] . '"._aic_h_messaging_audit_events t')->fetchAll(\PDO::FETCH_ASSOC) as $r) {
+                truthy(!isset($archived[(int) $r['audit_id']]), 'archived once: ' . $r['audit_id']);
+                $archived[(int) $r['audit_id']] = $r;
+            }
+        }
+    }
+    $ids = array_map(static fn (array $r): int => (int) $r['audit_id'], $originals);
+    $got = array_keys($archived);
+    sort($got);
+    same($ids, $got, 'every audit row of the company archived (once) before the hook changed it');
+    $probe = array_values(array_filter($originals, static fn (array $r): bool => $r['entity_id'] === 'e-1'))[0]['audit_id'] ?? 0;
+    $copy = $archived[(int) $probe] ?? [];
+    same(['[redacted]', '[redacted]', ['changes' => '[redacted]', 'reason' => 'ops', 'source' => 'ui']], [$copy['entity_label'] ?? null, $copy['summary'] ?? null, jsonSorted($copy['m'] ?? null)], 'the archive copy is scrubbed the same way (kit), other meta_json keys kept');
+    truthy(array_filter($archived, static fn (array $r): bool => str_contains((string) $r['j'], '+91980000')) === [], 'the archive copy holds no old value either');
+
+    // A restore (bin/worker.php --restore) puts the archived rows back under expiry_session_settings: the
+    // purged tables' rows as they were, the audit rows as archived (the upsert passes migration 013).
+    same(0, (int) $pdo->query('SELECT COUNT(*) FROM messaging_conversations WHERE cmp_id = ' . CMP)->fetchColumn(), 'conversation purged before the restore');
+    foreach ($archives as $a) {
+        $res = $kit->engine()->restore($a['schema'], true);
+        same(true, $res['ok'], 'restore ' . $a['schema'] . ': ' . (string) $res['error']);
+    }
+    same('+919800000009', $pdo->query('SELECT customer_address FROM messaging_conversations WHERE cmp_id = ' . CMP)->fetchColumn(), 'the purged conversation is back as it was');
+    same($originals, $pdo->query('SELECT audit_id, cmp_id, bo_id, actor_uuid, actor_kind, source_app, action, entity_type, entity_id, reason, ip_address, created_at, actor_label, request_id, user_agent, severity FROM messaging_audit_events WHERE cmp_id = ' . CMP . ' ORDER BY audit_id')->fetchAll(\PDO::FETCH_ASSOC), 'the audit rows after the restore: every unscrubbed column original');
+    same(0, (int) $pdo->query("SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND CAST(to_jsonb(messaging_audit_events) AS TEXT) LIKE '%+91980000%'")->fetchColumn(), 'a restore brings no scrubbed value back (the archive never held one)');
+    // the restored product rows go again (they were purged; the ack already went), children first
+    foreach (PurgeManifest::load(CompanyLifecycle::manifestPath())->tables('company') as $e) {
+        $pdo->prepare('DELETE FROM ' . $e['table'] . ' WHERE cmp_id = ?')->execute([CMP]);
+    }
 
     // The archive holds the purged rows until it is dropped (the kit's restore window).
-    $archives = array_filter($kit->engine()->archives(), static fn (array $a): bool => $a['target'] === (string) CMP);
     truthy(count($archives) >= 1, 'an archive holds the purged rows');
     foreach ($archives as $a) {
         $kit->engine()->dropArchive($a['schema']);
@@ -468,6 +549,15 @@ check('kit 1.1: --expire-retained deletes the purged company\'s audit rows after
     same(['recent'], $pdo->query('SELECT action FROM messaging_audit_events WHERE cmp_id = ' . CMP)->fetchAll(\PDO::FETCH_COLUMN), 'only the recent row is left');
     same(1, (int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . OTHER . " AND action = 'live-company'")->fetchColumn(), 'a live company is never expired by the kit');
     same($old, (int) $pdo->query("SELECT COALESCE(SUM(rows_deleted), 0) FROM aic_lifecycle_expiries WHERE target_cmp_id = " . CMP . " AND source_table = 'public.messaging_audit_events' AND reason = 'retention_ended'")->fetchColumn(), 'recorded');
+    $expiredCopies = 0;
+    foreach ($kit->engine()->archives() as $a) {
+        if ($a['target'] === (string) CMP && (bool) $pdo->query("SELECT to_regclass('\"" . $a['schema'] . "\".messaging_audit_events') IS NOT NULL")->fetchColumn()) {
+            $expiredCopies += (int) $pdo->query('SELECT COUNT(*) FROM "' . $a['schema'] . '".messaging_audit_events')->fetchColumn();
+            same(0, (int) $pdo->query('SELECT COUNT(*) FROM "' . $a['schema'] . "\".messaging_audit_events t WHERE CAST(to_jsonb(t) AS TEXT) LIKE '%+91980000%'
+                OR t.entity_label IS DISTINCT FROM '[redacted]' OR t.summary IS DISTINCT FROM '[redacted]' OR (t.meta_json -> 'changes') IS DISTINCT FROM (CASE WHEN t.meta_json -> 'changes' IS NULL THEN NULL ELSE '\"[redacted]\"'::jsonb END)")->fetchColumn(), 'the expiry\'s archive copy holds nothing unscrubbed');
+        }
+    }
+    same($old, $expiredCopies, 'the expired rows were archived first');
     foreach ($kit->engine()->archives() as $a) {
         if ($a['target'] === (string) CMP) {
             $kit->engine()->dropArchive($a['schema']);

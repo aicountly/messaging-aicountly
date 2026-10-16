@@ -236,11 +236,13 @@ user agent, and for updates a `changes` list of `{field, label, old, new}` in
 `meta_json`. The table is append-only: migration 009 makes UPDATE and DELETE
 raise. The only exceptions are the session flag `messaging.audit_purge`, used by the
 test-suite reset, never by application code; and the company-lifecycle worker
-(migration 012): only inside its own transaction with `SET LOCAL
+(migrations 012, 013): only inside its own transaction with `SET LOCAL
 aicountly.lifecycle_purge = on` it may delete a purged company's rows once CERT-In's
-180 days have run out, and redact `before_state` / `after_state` at purge time
-(archived first) — any other UPDATE or DELETE still raises under it, and nothing in
-the application sets it (docs/DEPLOYMENT.md § Company lifecycle). Settings, access, channel, consent, suppression, approval,
+180 days have run out, and at purge time (archived first, and every archive copy
+scrubbed alike) redact `before_state` / `after_state`, `entity_label`, `summary` and
+the `changes` key of `meta_json` (013, the owner's decision: the label, summary and
+old/new values carry the same customer data; the other `meta_json` keys stay) — any
+other UPDATE or DELETE still raises under it, and nothing in the application sets it (docs/DEPLOYMENT.md § Company lifecycle). Settings, access, channel, consent, suppression, approval,
 cancellation and journey-publication rows are written inside the transaction that
 makes the change (`Audit::material`, fail-closed); the rest are best-effort
 (`Audit::record`). A message send is recorded after the provider call and cannot be
