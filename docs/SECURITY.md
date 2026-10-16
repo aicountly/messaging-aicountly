@@ -230,6 +230,29 @@ configuration state, not an outage.
 before and after state, and reason. It is the answer to "who turned this on",
 "who approved that message" and "who read this customer's balance".
 
+Each row also carries a readable entity label and one-line summary, the actor's
+cached name, a severity (`info` | `material` | `security`), the request id, IP and
+user agent, and for updates a `changes` list of `{field, label, old, new}` in
+`meta_json`. The table is append-only: migration 009 makes UPDATE and DELETE
+raise. The only exception is the session flag `messaging.audit_purge`, used by the
+test-suite reset and by a documented company purge or retention job, never by
+application code. Settings, access, channel, consent, suppression, approval,
+cancellation and journey-publication rows are written inside the transaction that
+makes the change (`Audit::material`, fail-closed); the rest are best-effort
+(`Audit::record`). A message send is recorded after the provider call and cannot be
+rolled back, so that row is best-effort by design.
+
+Message text, note text, credentials and full contact details are never written:
+content fields are stored as "[content not logged]", addresses are masked
+(`***5678`, `a***@example.com`) and secret-named keys are `[redacted]`.
+
+Read it at `GET /api/v1/audit` (filters: `from`, `to`, `action` or `prefix.*`,
+`entity_type`, `entity_id`, `entity_label`, `actor_uuid`, `severity`, `q`, paging),
+`GET /api/v1/audit/entity/{type}/{id}` (permission `messaging.audit.view`) and
+`GET /api/v1/audit/export` (CSV, formula-safe, 5,000-row cap with a PARTIAL line and
+`X-Export-Truncated`; also needs `messaging.export` and is itself audited). All are
+scoped to the caller's company. The screen is Settings, Audit history.
+
 It records the **reference and the decision**, never the other product's
 records. An entry about a payment reminder names the invoice reference and what
 was decided; the balance stays in Books, where it is current. Tests assert that

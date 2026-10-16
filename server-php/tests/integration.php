@@ -232,6 +232,9 @@ function reset(): void
         'messaging_idempotency_keys',
         'messaging_settings',
     ] as $table) {
+        if ($table === 'messaging_audit_events') {
+            Db::run("SET messaging.audit_purge = 'on'"); // the test reset is a documented purge (migration 009)
+        }
         Db::run('DELETE FROM ' . $table . ' WHERE cmp_id = :cmp', ['cmp' => CMP]);
     }
 

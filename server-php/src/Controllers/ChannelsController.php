@@ -179,7 +179,14 @@ final class ChannelsController extends Controller
         $uuid = Uuid::v4();
         $senderAddress = trim((string) ($body['sender_address'] ?? ''));
 
+        $entityLabel = trim((string) ($body['display_name'] ?? '')) !== ''
+            ? mb_substr(trim((string) $body['display_name']), 0, 120)
+            : $channel . ' via ' . $provider;
+
         try {
+            // The connection and its audit row commit together: a credential reference nobody can
+            // trace to a person is exactly what this trail exists to prevent.
+            Db::transaction(static function () use ($uuid, $ctx, $auth, $channel, $provider, $body, $senderAddress, $credentialRef, $webhookSecretRef, $entityLabel): void {
             Db::insert('messaging_channel_connections', [
                 'connection_uuid'      => $uuid,
                 'cmp_id'               => $ctx->cmpId,
@@ -197,6 +204,15 @@ final class ChannelsController extends Controller
                 'updated_at'           => Clock::nowSql(),
                 'updated_by'           => $auth->uuid,
             ], 'connection_uuid');
+
+            Audit::material($ctx, $auth, 'channel.created', 'channel_connection', $uuid, null, [
+                'channel'        => $channel,
+                'provider'       => $provider,
+                'sender_address' => $senderAddress,
+                // Never the value.
+                'credential_ref' => $credentialRef,
+            ], entityLabel: $entityLabel);
+            });
         } catch (\PDOException $e) {
             if (str_contains($e->getMessage(), 'uq_messaging_conn_sender')) {
                 self::fail(
@@ -212,14 +228,6 @@ final class ChannelsController extends Controller
             self::recordCapabilities($connection);
             self::refreshStatus($ctx, $connection);
         }
-
-        Audit::record($ctx, $auth, 'channel.created', 'channel_connection', $uuid, null, [
-            'channel'        => $channel,
-            'provider'       => $provider,
-            'sender_address' => $senderAddress,
-            // Never the value.
-            'credential_ref' => $credentialRef,
-        ]);
 
         $refreshed = ChannelConnection::find($ctx->cmpId, $uuid);
 
@@ -274,25 +282,30 @@ final class ChannelsController extends Controller
         $values['updated_at'] = Clock::nowSql();
         $values['updated_by'] = $auth->uuid;
 
-        Db::run(
-            'UPDATE messaging_channel_connections SET ' . implode(', ', array_map(
-                static fn (string $c) => Db::quoteIdentifier($c) . ' = :' . $c,
-                array_keys($values),
-            )) . ', row_version = row_version + 1
-             WHERE cmp_id = :cmp AND connection_uuid = :uuid',
-            array_map(
-                static fn (mixed $v) => is_bool($v) ? ($v ? 'true' : 'false') : $v,
-                $values,
-            ) + ['cmp' => $ctx->cmpId, 'uuid' => $connectionUuid],
-        );
+        // The update and its audit row commit together. The row records which fields changed; a
+        // credential reference is a name and is redacted in any case.
+        Db::transaction(static function () use ($ctx, $auth, $connectionUuid, $values): void {
+            Db::run(
+                'UPDATE messaging_channel_connections SET ' . implode(', ', array_map(
+                    static fn (string $c) => Db::quoteIdentifier($c) . ' = :' . $c,
+                    array_keys($values),
+                )) . ', row_version = row_version + 1
+                 WHERE cmp_id = :cmp AND connection_uuid = :uuid',
+                array_map(
+                    static fn (mixed $v) => is_bool($v) ? ($v ? 'true' : 'false') : $v,
+                    $values,
+                ) + ['cmp' => $ctx->cmpId, 'uuid' => $connectionUuid],
+            );
+
+            Audit::material($ctx, $auth, 'channel.updated', 'channel_connection', $connectionUuid, null, $values, summary: 'Changed '
+                . implode(', ', array_diff(array_keys($values), ['updated_at', 'updated_by'])) . ' on a channel connection');
+        });
 
         $refreshed = ChannelConnection::find($ctx->cmpId, $connectionUuid);
         if ($refreshed !== null) {
             self::recordCapabilities($refreshed);
             self::refreshStatus($ctx, $refreshed);
         }
-
-        Audit::record($ctx, $auth, 'channel.updated', 'channel_connection', $connectionUuid, null, $values);
 
         $final = ChannelConnection::find($ctx->cmpId, $connectionUuid);
         $adapter = $final !== null ? ChannelRegistry::adapterFor($final) : null;

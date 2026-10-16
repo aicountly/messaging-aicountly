@@ -200,9 +200,16 @@ final class SettingsController extends Controller
             }
         }
 
-        $after = Settings::save($ctx, $auth, $body);
+        // The change and its audit row commit together, or neither does.
+        $after = Db::transaction(static function () use ($ctx, $auth, $body, $before): array {
+            $after = Settings::save($ctx, $auth, $body);
+            Audit::material(
+                $ctx, $auth, 'settings.updated', 'settings', (string) $ctx->cmpId, $before, $after,
+                entityLabel: 'Messaging settings',
+            );
 
-        Audit::record($ctx, $auth, 'settings.updated', 'settings', (string) $ctx->cmpId, $before, $after);
+            return $after;
+        });
 
         Http::data(['settings' => $after]);
     }
@@ -264,18 +271,39 @@ final class SettingsController extends Controller
         ]);
     }
 
-    /** The audit history. */
-    public static function audit(): void
-    {
-        [$auth, $ctx] = self::enter('messaging.audit.view');
+    /** Columns the trail serves, in one place so the list, the entity history and the export agree. */
+    private const AUDIT_COLUMNS = 'audit_id, actor_uuid, actor_label, actor_kind, source_app, action, entity_type, entity_id,
+                    entity_label, summary, severity, before_state, after_state, meta_json, reason, request_id,
+                    ip_address, created_at';
 
-        $params = Http::listParams(['created_at'], 'created_at');
+    /**
+     * The WHERE clause for the trail, always scoped to the caller's company.
+     *
+     * @return array{0: string, 1: array<string, mixed>}
+     */
+    private static function auditFilter(Context $ctx): array
+    {
         $where = ['cmp_id = :cmp'];
         $bind = ['cmp' => $ctx->cmpId];
 
+        // A bare date is a whole day: `to=2026-10-31` includes the 31st.
+        if (($from = Http::param('from', '')) !== '' && strtotime($from) !== false) {
+            $where[] = 'created_at >= :from';
+            $bind['from'] = date('Y-m-d H:i:sP', strtotime($from));
+        }
+        if (($to = Http::param('to', '')) !== '' && strtotime($to) !== false) {
+            $where[] = 'created_at < :to';
+            $end = preg_match('/^\d{4}-\d{2}-\d{2}$/', $to) === 1 ? strtotime($to . ' +1 day') : strtotime($to) + 1;
+            $bind['to'] = date('Y-m-d H:i:sP', (int) $end);
+        }
         if (($action = Http::param('action', '')) !== '') {
-            $where[] = 'action = :action';
-            $bind['action'] = $action;
+            if (str_ends_with($action, '.*')) {
+                $where[] = 'action LIKE :action';
+                $bind['action'] = self::likeEscape(substr($action, 0, -1)) . '%';
+            } else {
+                $where[] = 'action = :action';
+                $bind['action'] = $action;
+            }
         }
         if (($entityType = Http::param('entity_type', '')) !== '') {
             $where[] = 'entity_type = :entity_type';
@@ -285,29 +313,64 @@ final class SettingsController extends Controller
             $where[] = 'entity_id = :entity_id';
             $bind['entity_id'] = $entityId;
         }
+        if (($label = Http::param('entity_label', '')) !== '') {
+            $where[] = 'entity_label ILIKE :entity_label';
+            $bind['entity_label'] = '%' . self::likeEscape($label) . '%';
+        }
         if (($actor = Http::param('actor_uuid', '')) !== '') {
             $where[] = 'actor_uuid = :actor';
             $bind['actor'] = $actor;
         }
+        if (in_array($severity = (string) Http::param('severity', ''), ['info', 'material', 'security'], true)) {
+            $where[] = 'severity = :severity';
+            $bind['severity'] = $severity;
+        }
+        if (($q = Http::param('q', '')) !== '') {
+            $where[] = '(summary ILIKE :q OR entity_label ILIKE :q OR action ILIKE :q OR entity_id ILIKE :q OR actor_label ILIKE :q)';
+            $bind['q'] = '%' . self::likeEscape($q) . '%';
+        }
 
-        $whereSql = implode(' AND ', $where);
+        return [implode(' AND ', $where), $bind];
+    }
+
+    private static function likeEscape(string $value): string
+    {
+        return str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $value);
+    }
+
+    /**
+     * @param list<array<string, mixed>> $rows
+     * @return list<array<string, mixed>>
+     */
+    private static function decodeAuditRows(array $rows): array
+    {
+        // The JSON columns are decoded here rather than in the browser: a caller should not have to
+        // know which driver build hands back a string and which hands back an array.
+        foreach ($rows as $index => $row) {
+            foreach (['before_state', 'after_state', 'meta_json'] as $column) {
+                $rows[$index][$column] = ($row[$column] ?? null) === null ? null : Db::jsonColumn($row[$column]);
+            }
+        }
+
+        return $rows;
+    }
+
+    /** The audit history. */
+    public static function audit(): void
+    {
+        [$auth, $ctx] = self::enter('messaging.audit.view');
+
+        $params = Http::listParams(['created_at'], 'created_at');
+        [$whereSql, $bind] = self::auditFilter($ctx);
+
         $total = (int) (Db::scalar('SELECT COUNT(*) FROM messaging_audit_events WHERE ' . $whereSql, $bind) ?? 0);
 
-        $rows = Db::all(
-            'SELECT audit_id, actor_uuid, actor_kind, source_app, action, entity_type, entity_id,
-                    before_state, after_state, reason, created_at
+        $rows = self::decodeAuditRows(Db::all(
+            'SELECT ' . self::AUDIT_COLUMNS . '
              FROM messaging_audit_events WHERE ' . $whereSql . '
-             ORDER BY created_at DESC LIMIT :limit OFFSET :offset',
+             ORDER BY created_at DESC, audit_id DESC LIMIT :limit OFFSET :offset',
             $bind + ['limit' => $params['limit'], 'offset' => $params['offset']],
-        );
-
-        // The two state columns are JSON in the database and are decoded here
-        // rather than in the browser: a caller should not have to know which
-        // driver build hands back a string and which hands back an array.
-        foreach ($rows as $index => $row) {
-            $rows[$index]['before_state'] = $row['before_state'] === null ? null : Db::jsonColumn($row['before_state']);
-            $rows[$index]['after_state']  = $row['after_state'] === null ? null : Db::jsonColumn($row['after_state']);
-        }
+        ));
 
         Http::list($rows, $total, $params['limit'], $params['offset'], [
             // The distinct actions actually present for this company, so the
@@ -318,8 +381,103 @@ final class SettingsController extends Controller
                 ['cmp' => $ctx->cmpId],
             ), 'action'),
             'note' => 'This records Messaging\'s own actions. Where an action turned on another product\'s data, '
-                . 'the reference and the decision are recorded — never that product\'s records.',
+                . 'the reference and the decision are recorded — never that product\'s records. Message text, '
+                . 'credentials and full contact details are never written to it.',
         ]);
+    }
+
+    /** The history of one record. */
+    public static function auditEntity(string $entityType, string $entityId): void
+    {
+        [$auth, $ctx] = self::enter('messaging.audit.view');
+
+        $params = Http::listParams(['created_at'], 'created_at');
+        $bind = ['cmp' => $ctx->cmpId, 'type' => $entityType, 'id' => $entityId];
+        $where = 'cmp_id = :cmp AND entity_type = :type AND entity_id = :id';
+
+        $total = (int) (Db::scalar('SELECT COUNT(*) FROM messaging_audit_events WHERE ' . $where, $bind) ?? 0);
+        $rows = self::decodeAuditRows(Db::all(
+            'SELECT ' . self::AUDIT_COLUMNS . ' FROM messaging_audit_events WHERE ' . $where . '
+             ORDER BY created_at DESC, audit_id DESC LIMIT :limit OFFSET :offset',
+            $bind + ['limit' => $params['limit'], 'offset' => $params['offset']],
+        ));
+
+        Http::list($rows, $total, $params['limit'], $params['offset']);
+    }
+
+    /**
+     * The filtered trail as CSV.
+     *
+     * Needs `messaging.export` on top of `messaging.audit.view`, as every export here does, and is
+     * itself audited. Capped at Audit::EXPORT_CAP rows; a file that was cut says so on its last line
+     * and in X-Export-Truncated, because a partial trail that looks complete is worse than none.
+     */
+    public static function auditExport(): void
+    {
+        [$auth, $ctx] = self::enter('messaging.audit.view');
+        Permissions::assert($ctx, $auth, 'messaging.export');
+
+        [$whereSql, $bind] = self::auditFilter($ctx);
+        $total = (int) (Db::scalar('SELECT COUNT(*) FROM messaging_audit_events WHERE ' . $whereSql, $bind) ?? 0);
+        $rows = Db::all(
+            'SELECT audit_id, created_at, severity, action, entity_type, entity_id, entity_label, summary,
+                    actor_uuid, actor_label, actor_kind, source_app, reason, request_id, ip_address, meta_json
+             FROM messaging_audit_events WHERE ' . $whereSql . '
+             ORDER BY created_at DESC, audit_id DESC LIMIT :limit',
+            $bind + ['limit' => Audit::EXPORT_CAP],
+        );
+        $truncated = $total > count($rows);
+
+        $header = ['audit_id', 'when', 'severity', 'action', 'entity_type', 'entity_id', 'entity_label', 'summary',
+            'actor_uuid', 'actor', 'actor_kind', 'source_app', 'reason', 'request_id', 'ip_address', 'changes'];
+        $csv = self::csvLine($header);
+        foreach ($rows as $row) {
+            $changes = ($row['meta_json'] ?? null) === null ? [] : (Db::jsonColumn($row['meta_json'])['changes'] ?? []);
+            $csv .= self::csvLine([
+                $row['audit_id'], $row['created_at'], $row['severity'], $row['action'], $row['entity_type'],
+                $row['entity_id'], $row['entity_label'], $row['summary'], $row['actor_uuid'], $row['actor_label'],
+                $row['actor_kind'], $row['source_app'], $row['reason'], $row['request_id'], $row['ip_address'],
+                implode('; ', array_map(
+                    static fn (array $c): string => ($c['label'] ?? $c['field'] ?? '') . ': '
+                        . json_encode($c['old'] ?? null, JSON_UNESCAPED_UNICODE) . ' -> '
+                        . json_encode($c['new'] ?? null, JSON_UNESCAPED_UNICODE),
+                    is_array($changes) ? $changes : [],
+                )),
+            ]);
+        }
+        if ($truncated) {
+            $csv .= self::csvLine(['PARTIAL: ' . count($rows) . ' of ' . $total
+                . ' rows exported (cap ' . Audit::EXPORT_CAP . '). Narrow the filters.']);
+        }
+
+        // Exporting the trail is itself a row in it.
+        Audit::record($ctx, $auth, 'audit.exported', 'audit', null, null, [
+            'rows'      => count($rows),
+            'total'     => $total,
+            'truncated' => $truncated,
+        ], summary: 'Exported ' . count($rows) . ' audit rows' . ($truncated ? ' (truncated)' : ''));
+
+        Http::csv('messaging-audit-' . date('Ymd-His') . '.csv', $csv, $truncated, count($rows));
+    }
+
+    /**
+     * One CSV line. A cell that starts with = + - @ (or a tab / carriage return) would be executed as
+     * a formula by a spreadsheet, so it is prefixed with an apostrophe.
+     *
+     * @param list<mixed> $cells
+     */
+    private static function csvLine(array $cells): string
+    {
+        $out = [];
+        foreach ($cells as $cell) {
+            $text = $cell === null ? '' : (is_bool($cell) ? ($cell ? 'true' : 'false') : (string) $cell);
+            if ($text !== '' && strpbrk($text[0], "=+-@\t\r") !== false) {
+                $text = "'" . $text;
+            }
+            $out[] = '"' . str_replace('"', '""', $text) . '"';
+        }
+
+        return implode(',', $out) . "\r\n";
     }
 
     /** Access control: profiles and who holds them. */
@@ -410,33 +568,46 @@ final class SettingsController extends Controller
                 Http::notFound('That profile could not be found.');
             }
 
-            Db::update('messaging_permission_profiles', [
-                'name'        => $name,
-                'description' => (string) ($body['description'] ?? ''),
-                'permissions' => $permissions,
-                'is_active'   => (bool) ($body['is_active'] ?? true),
-                'updated_at'  => \Aicountly\Api\Support\Clock::nowSql(),
-                'updated_by'  => $auth->uuid,
-            ], ['cmp_id' => $ctx->cmpId, 'profile_id' => $profileId]);
+            Db::transaction(static function () use ($ctx, $auth, $body, $name, $permissions, $profileId, $existing): void {
+                Db::update('messaging_permission_profiles', [
+                    'name'        => $name,
+                    'description' => (string) ($body['description'] ?? ''),
+                    'permissions' => $permissions,
+                    'is_active'   => (bool) ($body['is_active'] ?? true),
+                    'updated_at'  => \Aicountly\Api\Support\Clock::nowSql(),
+                    'updated_by'  => $auth->uuid,
+                ], ['cmp_id' => $ctx->cmpId, 'profile_id' => $profileId]);
 
-            Audit::record($ctx, $auth, 'access.profile_updated', 'permission_profile', $profileId, [
-                'permissions' => Db::jsonColumn($existing['permissions'] ?? null),
-            ], ['permissions' => $permissions]);
+                Audit::material($ctx, $auth, 'access.profile_updated', 'permission_profile', $profileId, [
+                    'name'        => (string) ($existing['name'] ?? ''),
+                    'permissions' => Db::jsonColumn($existing['permissions'] ?? null),
+                    'is_active'   => (bool) ($existing['is_active'] ?? true),
+                ], [
+                    'name'        => $name,
+                    'permissions' => $permissions,
+                    'is_active'   => (bool) ($body['is_active'] ?? true),
+                ], entityLabel: $name);
+            });
         } else {
-            $profileId = (int) Db::insert('messaging_permission_profiles', [
-                'cmp_id'      => $ctx->cmpId,
-                'name'        => $name,
-                'description' => (string) ($body['description'] ?? ''),
-                'permissions' => $permissions,
-                'created_at'  => \Aicountly\Api\Support\Clock::nowSql(),
-                'created_by'  => $auth->uuid,
-                'updated_at'  => \Aicountly\Api\Support\Clock::nowSql(),
-                'updated_by'  => $auth->uuid,
-            ], 'profile_id');
+            $profileId = Db::transaction(static function () use ($ctx, $auth, $body, $name, $permissions): int {
+                $profileId = (int) Db::insert('messaging_permission_profiles', [
+                    'cmp_id'      => $ctx->cmpId,
+                    'name'        => $name,
+                    'description' => (string) ($body['description'] ?? ''),
+                    'permissions' => $permissions,
+                    'created_at'  => \Aicountly\Api\Support\Clock::nowSql(),
+                    'created_by'  => $auth->uuid,
+                    'updated_at'  => \Aicountly\Api\Support\Clock::nowSql(),
+                    'updated_by'  => $auth->uuid,
+                ], 'profile_id');
 
-            Audit::record($ctx, $auth, 'access.profile_created', 'permission_profile', $profileId, null, [
-                'permissions' => $permissions,
-            ]);
+                Audit::material($ctx, $auth, 'access.profile_created', 'permission_profile', $profileId, null, [
+                    'name'        => $name,
+                    'permissions' => $permissions,
+                ], entityLabel: $name);
+
+                return $profileId;
+            });
         }
 
         // The caller may have just changed their own grants.
@@ -458,7 +629,7 @@ final class SettingsController extends Controller
         }
 
         $profile = Db::first(
-            'SELECT profile_id, permissions FROM messaging_permission_profiles
+            'SELECT profile_id, name, permissions FROM messaging_permission_profiles
              WHERE cmp_id = :cmp AND profile_id = :id',
             ['cmp' => $ctx->cmpId, 'id' => $profileId],
         );
@@ -477,16 +648,20 @@ final class SettingsController extends Controller
             );
         }
 
-        Db::run(
-            'INSERT INTO messaging_permission_assignments (cmp_id, user_uuid, profile_id, created_at, created_by)
-             VALUES (:cmp, :uuid, :profile, NOW(), :actor)
-             ON CONFLICT (cmp_id, user_uuid, profile_id) DO NOTHING',
-            ['cmp' => $ctx->cmpId, 'uuid' => $userUuid, 'profile' => $profileId, 'actor' => $auth->uuid],
-        );
+        Db::transaction(static function () use ($ctx, $auth, $userUuid, $profileId, $profile): void {
+            Db::run(
+                'INSERT INTO messaging_permission_assignments (cmp_id, user_uuid, profile_id, created_at, created_by)
+                 VALUES (:cmp, :uuid, :profile, NOW(), :actor)
+                 ON CONFLICT (cmp_id, user_uuid, profile_id) DO NOTHING',
+                ['cmp' => $ctx->cmpId, 'uuid' => $userUuid, 'profile' => $profileId, 'actor' => $auth->uuid],
+            );
 
-        Audit::record($ctx, $auth, 'access.profile_assigned', 'permission_assignment', $userUuid, null, [
-            'profile_id' => $profileId,
-        ]);
+            Audit::material($ctx, $auth, 'access.profile_assigned', 'permission_assignment', $userUuid, null, [
+                'profile_id'   => $profileId,
+                'profile_name' => (string) ($profile['name'] ?? ''),
+            ], summary: 'Gave user ' . $userUuid . ' the profile "' . (string) ($profile['name'] ?? $profileId) . '"',
+               entityLabel: $userUuid);
+        });
 
         Permissions::forget();
 
@@ -504,15 +679,24 @@ final class SettingsController extends Controller
             Http::validationFailed('user_uuid and profile_id are required.');
         }
 
-        Db::run(
-            'DELETE FROM messaging_permission_assignments
-             WHERE cmp_id = :cmp AND user_uuid = :uuid AND profile_id = :profile',
-            ['cmp' => $ctx->cmpId, 'uuid' => $userUuid, 'profile' => $profileId],
-        );
+        Db::transaction(static function () use ($ctx, $auth, $userUuid, $profileId): void {
+            $profileName = (string) (Db::scalar(
+                'SELECT name FROM messaging_permission_profiles WHERE cmp_id = :cmp AND profile_id = :id',
+                ['cmp' => $ctx->cmpId, 'id' => $profileId],
+            ) ?? '');
 
-        Audit::record($ctx, $auth, 'access.profile_revoked', 'permission_assignment', $userUuid, null, [
-            'profile_id' => $profileId,
-        ]);
+            Db::run(
+                'DELETE FROM messaging_permission_assignments
+                 WHERE cmp_id = :cmp AND user_uuid = :uuid AND profile_id = :profile',
+                ['cmp' => $ctx->cmpId, 'uuid' => $userUuid, 'profile' => $profileId],
+            );
+
+            Audit::material($ctx, $auth, 'access.profile_revoked', 'permission_assignment', $userUuid, null, [
+                'profile_id'   => $profileId,
+                'profile_name' => $profileName,
+            ], summary: 'Removed the profile "' . ($profileName !== '' ? $profileName : (string) $profileId)
+                . '" from user ' . $userUuid, entityLabel: $userUuid);
+        });
 
         Permissions::forget();
 
