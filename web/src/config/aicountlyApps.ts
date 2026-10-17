@@ -342,21 +342,11 @@ export const CURRENT_APP_ID = 'messaging'
  */
 export const CORE_APP_IDS: readonly string[] = [
   'books',
-  'hrms',
   'notes',
   'billing',
   'inventory',
   'docs',
-  'remote',
-  'chat',
-  'buddy',
-  'calendar',
-  'contacts',
   'manage',
-  'insights',
-  'sales',
-  'purchases',
-  'email',
 ]
 
 /** True for a product that is catalogued but not yet part of the launch line-up. */
