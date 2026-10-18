@@ -407,6 +407,45 @@ jobs:
             exit 1
           fi
 
+      # --------------------------------------------------------------------
+      # Scheduled jobs (E8-OPS F160 — a README cron is not a worker)
+      #
+      # bin/ops/post-deploy-jobs.sh ON THE SERVER: writes the Cron Job Monitor
+      # key (repo secret CONSOLE_CRON_MONITOR_KEY, sent on STDIN, never an
+      # argument) into api/.env, prints the purges Manage has queued (the
+      # lifecycle worker's read-only --status), then installs
+      # server-php/bin/ops/jobs.txt into the crontab (replacing the lines
+      # docs/DEPLOYMENT.md used to have pasted by hand). Each monitored job
+      # reports to Console's Cron Job Monitor, so a job that stops shows up
+      # as OVERDUE there.
+      # --------------------------------------------------------------------
+
+      - name: Scheduled jobs (crontab + Cron Job Monitor key)
+        env:
+          REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          CONSOLE_CRON_MONITOR_KEY: ${{ secrets.CONSOLE_CRON_MONITOR_KEY }}
+        run: |
+          set +e
+          printf '%s' "$CONSOLE_CRON_MONITOR_KEY" \
+            | ssh deploy-target "bash '$REMOTE_ROOT/api/bin/ops/post-deploy-jobs.sh'" \
+            | tee /tmp/jobs.out
+          rc=${PIPESTATUS[1]}
+          set -e
+          {
+            echo "### Scheduled jobs"
+            echo ""
+            echo "Queued lifecycle purges at deploy time (read-only \`--status\`):"
+            echo '```'
+            sed -n '/^::group::preview/,/^::endgroup::/p' /tmp/jobs.out | grep -v '^::' | head -40
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          case "$rc" in
+            0)  echo "Scheduled jobs installed; heartbeats go to Console's Cron Job Monitor." ;;
+            20) echo "::warning::The jobs are installed, but api/.env has no CONSOLE_CRON_MONITOR_KEY and the repo secret is empty — they run without reporting, so Console shows them OVERDUE. Add the CONSOLE_CRON_MONITOR_KEY repository secret and deploy again." ;;
+            21) echo "::error::The crontab could not be installed on the host (output above). The release is live; the jobs are not scheduled."; exit 1 ;;
+            *)  echo "::error::post-deploy-jobs.sh failed (exit $rc, output above)."; exit 1 ;;
+          esac
+
       # Is the live site really Messaging, and the build just deployed? The host's
       # anti-bot page ("One moment, please...") answers some requests from
       # GitHub's runners with HTTP 200, so a status code proves nothing. These

@@ -1,0 +1,14 @@
+# Scheduled jobs of messaging (E8-OPS, F160). Installed into the deploy user's crontab by the production deploy
+# (bin/ops/post-deploy-jobs.sh -> bin/ops/install-jobs.sh --apply); check on the server with
+# `bash bin/ops/install-jobs.sh --check`. Monitored jobs report to Console's Cron Job Monitor through
+# bin/ops/run-job.php (key CONSOLE_CRON_MONITOR_KEY in api/.env, written by the deploy from the repo secret).
+#! app: messaging
+# Replaces the hand-installed lines docs/DEPLOYMENT.md used to give (all logged to messaging-company-lifecycle.log),
+# so no job runs twice.
+#! legacy-pattern: messaging-company-lifecycle[.]log
+# Printed in the deploy log before the jobs are installed: the purges Manage has queued (read-only).
+#! preview: {php} lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --status
+# name                   | schedule    | command (run from the api folder)
+company-lifecycle        | */5 * * * * | {php} bin/ops/run-job.php --name=company-lifecycle --every=300 --monitor=messaging.company_lifecycle -- {php} lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php
+company-lifecycle-expiry | 37 3 * * *  | {php} bin/ops/run-job.php --name=company-lifecycle-expiry --every=86400 --monitor=messaging.company_lifecycle_expiry -- {php} lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --expire-retained
+lifecycle-archive-drop   | 30 3 * * 0  | {php} lib/company-lifecycle/bin/worker.php --bootstrap=config/lifecycle-kit.php --drop-archives-older-than=90 --confirm
