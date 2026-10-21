@@ -73,8 +73,17 @@ a direct browser call would fail with nothing but a CORS message to show for it.
 The relay sidesteps that entirely. The app still falls back to calling the
 portal directly if the relay is missing — useful before the API is deployed.
 
+Production hosting adds a second reason: cPanel's Imunify360 WebShield answers
+browser requests from IPs it distrusts (common Indian CGNAT broadband) with a
+challenge page that carries no CORS headers, so any cross-site call from the app
+can fail with no response at all. Same-origin calls to `/api` pass. That is why
+sign-out (`POST /api/global/logout`) and Manage's company registry
+(`/api/manage/v1/*`, `server-php/src/ManageRelay.php` — exactly the calls
+`web/src/company-access/companyRegistryClient.ts` makes, with the person's own
+token) go through this API too.
+
 The relay is an **allowlist** (`RELAYED_PATHS` in `server-php/index.php`):
-`seskey`, `seskey/refresh`, `refresh_authtoken`. Forwarding arbitrary paths
+`seskey`, `seskey/refresh`, `refresh_authtoken`, `logout`. Forwarding arbitrary paths
 would turn this host into an open proxy for the portal's whole auth surface,
 with the portal seeing this server's IP instead of the caller's.
 
@@ -82,7 +91,7 @@ with the portal seeing this server's IP instead of the caller's.
 
 - Does **not** issue `auth_token` or `ses_key`.
 - Does **not** implement `/api/seskey`, `/api/seskey/refresh` or `/api/logout` —
-  it only relays the first two.
+  it only relays them.
 - Validates a caller by `POST https://my.aicountly.com/api/validatesession` with
   the Bearer `ses_key`; `status: 1` means the session is live. A transport
   failure counts as *not* authenticated, so a portal outage denies access rather

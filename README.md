@@ -88,6 +88,10 @@ Companies and who may open them belong to Aicountly Manage's company registry; M
   `CompanyUsersAccessPanel` and `MyWorkspacesPanel` (`web/src/company-access/`, copied verbatim from
   manage-aicountly `Saas Common Handler/company-access`; client in `web/src/services/companyRegistry.ts`).
   Permission profiles under Settings → Access still decide what people may do inside Messaging.
+- **Same-origin only:** the browser reaches the registry at `/api/manage/v1/*` on this host, never
+  manage.aicountly.com (the hosting's bot shield can answer a cross-site call with a CORS-less challenge
+  page). `server-php/src/ManageRelay.php` forwards exactly the calls `companyRegistryClient.ts` makes, with
+  the person's own token; `tests/manage_relay.php` fails if the two drift.
 - **Discovery ≠ access:** the company picker's "Browse all workspace companies" lists every company in the
   person's workspaces; a restricted one opens "Request access", never the company, and the API re-checks
   every scoped request with Manage whatever the browser shows.

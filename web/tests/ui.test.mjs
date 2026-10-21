@@ -407,7 +407,8 @@ test('the frontend sends only its own two portal credentials as bearer tokens', 
 })
 
 test('the company registry client sends Manage only the ses_key', () => {
-  // Discovery and Users & Access call Manage's registry from the browser. The vendored client's
+  // Discovery and Users & Access call Manage's registry through this product's own API (the
+  // /api/manage relay passes the Authorization on unchanged). The vendored client's
   // only bearer is what getSesKey returns, and Messaging wires that to the portal ses_key — the
   // same credential its own API takes. Nothing else is ever handed to it.
   const client = read('company-access', 'companyRegistryClient.ts')
