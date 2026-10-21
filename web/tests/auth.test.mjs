@@ -73,7 +73,11 @@ globalThis.document = {
   },
 }
 const realFetch = globalThis.fetch
-globalThis.fetch = async () => new Response('{}', { status: 200 })
+let fetched = []
+globalThis.fetch = async (url, init = {}) => {
+  fetched.push({ url: String(url), init })
+  return new Response('{}', { status: 200 })
+}
 
 const server = await createServer({
   root: join(dirname(fileURLToPath(import.meta.url)), '..'),
@@ -83,6 +87,8 @@ const server = await createServer({
 })
 const cookie = await server.ssrLoadModule('/src/auth/sharedAuthCookie.ts')
 const portal = await server.ssrLoadModule('/src/auth/portal.ts')
+const tokens = await server.ssrLoadModule('/src/auth/tokens.ts')
+const registry = await server.ssrLoadModule('/src/services/companyRegistry.ts')
 
 after(async () => {
   await server.close()
@@ -103,6 +109,7 @@ function here() {
 
 beforeEach(() => {
   replaced = []
+  fetched = []
   cookieWrites = []
   jar = ''
   sessionStorage.clear()
@@ -208,4 +215,36 @@ test('the router opens the restored address, not "/", after the callback', async
   const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '../src/App.tsx'), 'utf8')
   assert.match(app, /<Route path="auth\/callback" element=\{<AfterSignIn \/>\} \/>/)
   assert.match(app, /normaliseReturnRoute\(`\$\{pathname\}\$\{search\}\$\{hash\}`\) \?\? '\/'/)
+})
+
+// ---------------------------------------------------------------------------
+// Same-origin only: Manage's registry and the portal's logout go through this
+// product's own API. The hosting's bot shield can answer a cross-site call with
+// a challenge page that has no CORS headers, which the browser reports as no
+// response at all; a call to the app's own /api passes.
+// ---------------------------------------------------------------------------
+
+test("the company registry is called on this product's own API, not manage.aicountly.com", async () => {
+  // The client was built when the module loaded, on http://localhost:5173.
+  assert.equal(registry.companyRegistry.baseUrl, 'http://localhost:5173/api/manage')
+  tokens.saveSession('ses-key-1', 900)
+  await registry.companyRegistry.workspaces()
+  assert.equal(fetched.length, 1)
+  assert.equal(fetched[0].url, 'http://localhost:5173/api/manage/v1/workspaces')
+  assert.equal(fetched[0].init.headers.Authorization, 'Bearer ses-key-1')
+  tokens.clearAllTokens()
+})
+
+test('sign-out tells the portal through the same-origin relay, fire-and-forget', () => {
+  at('https://messaging.aicountly.com/inbox')
+  tokens.setAuthToken('auth-token-1')
+  portal.performLogout()
+  const calls = fetched.filter((c) => c.url.includes('logout'))
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].url, 'https://messaging.aicountly.com/api/global/logout')
+  assert.equal(calls[0].init.method, 'POST')
+  assert.equal(calls[0].init.keepalive, true)
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer auth-token-1')
+  assert.ok(!fetched.some((c) => c.url.startsWith('https://my.aicountly.com')), 'no cross-site call to the portal')
+  assert.ok(replaced.some((u) => u.includes('/login/logout')), 'the portal logout page still opens')
 })

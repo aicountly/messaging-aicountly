@@ -11,6 +11,7 @@ declare(strict_types=1);
  * Routes:
  *   GET  /api/health              liveness, database readiness, channel and integration state
  *   POST /api/global/{path}       allow-listed relay to the portal auth API
+ *   *    /api/manage/v1/{path}    allow-listed relay to Manage's company registry (src/ManageRelay.php)
  *   GET  /api/session             who the caller is, per the portal
  *   *    /api/webhooks/...        provider callbacks — NO session, signature verified
  *   *    /api/v1/...              the Messaging API proper — see src/Routes.php
@@ -40,6 +41,10 @@ const RELAYED_PATHS = [
     'seskey',
     'seskey/refresh',
     'refresh_authtoken',
+    // Sign-out. The browser used to POST my.aicountly.com/api/logout itself; from networks the
+    // hosting's bot shield distrusts that cross-site call got a challenge page with no CORS
+    // headers and failed, leaving the portal token alive. Same-origin through here, it passes.
+    'logout',
 ];
 
 // ---------------------------------------------------------------------------
@@ -230,6 +235,21 @@ if (strpos($path, 'global/') === 0) {
     header('Cache-Control: no-store');
     echo $result['body'];
     exit;
+}
+
+// Manage's company registry (Users & Access, My workspaces, the company picker), same-origin for
+// the same reason as the portal relay above: a cross-site call to manage.aicountly.com can be
+// answered by the hosting's bot shield with a challenge page that has no CORS headers, and the
+// browser then sees no response at all. ManageRelay forwards only the calls the shared client
+// makes; the raw (still encoded) path is passed so each segment is decoded and checked once.
+if ($path === 'manage' || strpos($path, 'manage/') === 0) {
+    ManageRelay::serve($method, $uri, (string) ($_SERVER['QUERY_STRING'] ?? ''), [
+        'Authorization'    => authorization_header(),
+        'Content-Type'     => (string) ($_SERVER['CONTENT_TYPE'] ?? ''),
+        'Accept'           => (string) ($_SERVER['HTTP_ACCEPT'] ?? ''),
+        'Idempotency-Key'  => (string) ($_SERVER['HTTP_IDEMPOTENCY_KEY'] ?? ''),
+        'X-Correlation-Id' => (string) ($_SERVER['HTTP_X_CORRELATION_ID'] ?? ''),
+    ], (string) file_get_contents('php://input'));
 }
 
 if ($path === 'session') {

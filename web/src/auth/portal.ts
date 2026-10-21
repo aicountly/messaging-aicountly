@@ -457,8 +457,11 @@ export function performLogout(): void {
 
   if (authToken) {
     // Fire-and-forget: the portal invalidates the token server-side, but the
-    // redirect must not wait on it.
-    fetch(`${PORTAL_AUTH_API}/api/logout`, {
+    // redirect must not wait on it. Through this product's own API relay
+    // (server-php `/api/global/logout`), not my.aicountly.com directly: the
+    // hosting's bot shield can answer a cross-site call with a challenge page
+    // that has no CORS headers, and the token would then stay alive.
+    fetch(`${getApiBaseUrl()}/global/logout`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

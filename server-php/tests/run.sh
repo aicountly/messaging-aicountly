@@ -125,3 +125,8 @@ SIBLINGS=down php "$ROOT/tests/http.php"
 
 # E8-ID / MY-AW-04: a portal outage is 503 + Retry-After, never 401 (real HTTP through index.php).
 E8ID_API_PORT="${E8ID_API_PORT:-$((STUB_PORT+40))}" E8ID_PORTAL_FAULT_PORT="${E8ID_PORTAL_FAULT_PORT:-$((STUB_PORT+41))}" php "$ROOT/tests/e8id_portal_outage.php"
+
+# The same-origin relays to Manage's company registry (/api/manage/v1/*) and the portal's logout:
+# the allowlist against web/src/company-access/companyRegistryClient.ts, the refusals, and real HTTP
+# through index.php against a fake Manage (headers, body, status, 504 when Manage does not answer).
+MANAGE_RELAY_API_PORT="${MANAGE_RELAY_API_PORT:-$((STUB_PORT+50))}" php "$ROOT/tests/manage_relay.php"
