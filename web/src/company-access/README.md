@@ -1,4 +1,4 @@
-# AICOUNTLY shared company access (v1.0.0)
+# AICOUNTLY shared company access (v1.2.0)
 
 One company directory, one access model and one set of screens for every AICOUNTLY product.
 The authority is Manage's company registry (`/api/v1/*`, contract in
@@ -107,10 +107,64 @@ history. Anyone else sees their own access and can ask for it. No redirect to Ma
 profiles, Contacts roles…): the product remains authoritative for what a role may do. Books maps
 `role_key` to its profile template and is seated by Manage at grant time.
 
-`<MyWorkspacesPanel>` lists the person's workspaces and invitations (accept / decline / leave).
+`<MyWorkspacesPanel>` lists the person's workspaces and invitations (accept / decline). Each row
+expands: the person's **own** workspace opens `<WorkspaceManager>` (rename, members with name and
+e-mail, remove, invite by e-mail, suggestions); a workspace they **belong to** lists its companies
+(`directory({ workspace_id })`) with their access badge, and offers Leave. Pass `onOpenCompany` to
+make the companies they may open clickable. Each owner has exactly **one** workspace — everyone
+they invite, or share a company with (on accepting the share), joins it. An unnamed workspace comes back from the server as
+"<Owner name>'s workspace"; rows the person does not own carry `owner_name` / `owner_email`.
+
+`<WorkspaceManager>` is the same owner view on its own (Users & Access uses it for its Workspace
+tab); without a `workspace` prop it manages the one the signed-in person owns.
 `<DuplicateCompanyNotice>` shows `client.duplicateCheck()` results on a create-company form.
 
-## 5. Mock / offline mode
+## 5. Workspace sharing settings and creating a company in a workspace (v1.2.0)
+
+Each person has exactly **one** workspace of their own (created the first time they look — no
+company needed). What a member may do in someone else's workspace is set by its owner, per member,
+at invite time or later (Manage `PATCH v1/workspaces/{id}/members/{uuid}`, CONTRACTS §1):
+
+```ts
+interface WorkspaceSettings {
+  can_create_companies: boolean;            // default false
+  max_companies_created: number | null;     // null = only the owner's plan limit
+  creator_roles: Record<string, string[]>;  // roles they may give THEMSELVES on companies they create
+  all_companies_access: Record<string, string>; // a role on EVERY company of the workspace
+}
+```
+
+`<WorkspaceManager>` now shows each member's settings with a **Settings** button and offers
+"Sharing settings…" on the invite form; `<WorkspaceMemberSettingsForm value onChange appRoles />`
+is the same form on its own (`appRoles` from `fetchAppRoles(client)` → `GET v1/app-roles`; the
+owner role is never listed or accepted). An older Manage without `v1/app-roles` simply hides it.
+
+A company created in someone else's workspace is **owned by the workspace owner** (their plan
+applies; they share and grant). The creator gets the access they choose, within the roles the
+owner allows. A create form adds two things:
+
+```tsx
+const targets = await fetchCreationTargets(client);          // own workspace first
+<WorkspaceTargetPicker targets={targets} value={wsId} onChange={setWsId} />
+<CreatorAccessFields target={chosen} value={access} onChange={setAccess} />  // nothing for one's own
+await createCompany({ ...form, ...createCompanyRequestFields(chosen, access) }); // {workspace_id, creator_access}
+```
+
+The create answer adds `owner {is_me, name}` and `creator_access [{app, role_key, status}]`
+(`granted | seat_pending | refused`); `client.retryCreatorAccess(cmpId)` seats pending ones again.
+Refusals: `WORKSPACE_NOT_MEMBER` / `WORKSPACE_CREATE_NOT_ALLOWED` (403), `CREATOR_ACCESS_REQUIRED`,
+`CREATOR_ROLE_NOT_ALLOWED`, `WORKSPACE_COMPANY_LIMIT_REACHED`, `PLAN_LIMIT_REACHED` (422).
+A form that sends no `workspace_id` creates in the person's own workspace, exactly as before.
+
+Directory rows may now say `access_via: 'workspace'` with `workspace_role_key` (access from the
+settings rather than a share); `client.pendingCounts()` answers what waits on the person (workspace
+invitations, requests to review). A request may name Manage itself (`app: 'manage'`).
+
+**Relays.** Products that relay the client's calls through an allow-list must add
+`GET v1/app-roles`, `GET v1/company-creation-targets`, `PATCH v1/workspaces/{id}/members/{uuid}`,
+`POST v1/companies/{id}/creator-access/retry` and `GET v1/me/pending`.
+
+## 6. Mock / offline mode
 
 Products with a mock API layer should stub `client.directory()` / `permissions()` with fixtures;
 the components accept any object implementing `CompanyRegistryClient`.

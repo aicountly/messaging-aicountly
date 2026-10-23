@@ -5,13 +5,12 @@ import type {
   CompanyPermissions,
   CompanyRegistryClient,
   DirectoryCompany,
-  MemberSuggestion,
   PermissionMember,
-  Workspace,
-  WorkspaceMember,
 } from './companyRegistryClient.ts';
 import { CompanyRegistryError } from './companyRegistryClient.ts';
 import { CompanyAccessBadge } from './CompanyAccessBadge.tsx';
+import { WorkspaceManager } from './WorkspaceManager.tsx';
+import { personName as who, shortDate, shortDateTime } from './people.ts';
 import { injectCompanyAccessStyles } from './styles.ts';
 
 export interface CompanyUsersAccessPanelProps {
@@ -50,10 +49,6 @@ const OPS: Record<string, string> = {
   'workspace.member_removed': 'removed a workspace member',
   'workspace.renamed': 'renamed the workspace',
 };
-
-function who(m: { name?: string | null; email?: string | null; uuid?: string }): string {
-  return m.name || m.email || (m.uuid ? `User #${m.uuid}` : 'Someone');
-}
 
 function message(e: unknown, fallback: string): string {
   return e instanceof CompanyRegistryError ? e.message : fallback;
@@ -123,6 +118,10 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
 
   const pending = useMemo(() => requests.filter((r) => r.status === 'pending'), [requests]);
   const isOwner = perm?.can_manage_access === true;
+  // Read defensively: a registry that answers without `company` or `members` (an older or partial
+  // deployment) must leave this panel usable, not take the host's whole settings route down.
+  const companyName = perm?.company?.name || 'this company';
+  const members = perm?.members ?? [];
 
   if (loading && !perm) {
     return <div className="aic-ca aic-ca-card aic-ca-empty">Loading users &amp; access…</div>;
@@ -142,7 +141,7 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
         <div>
           <h2 className="aic-ca-title">Users &amp; Access</h2>
           <p className="aic-ca-sub">
-            {perm.company.name} · access in {appName}. Workspace members can see this company; only people granted access can open it.
+            {companyName} · access in {appName}. Workspace members can see this company; only people granted access can open it.
           </p>
         </div>
         {isOwner && summary ? (
@@ -181,7 +180,7 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
 
       {tab === 'people' ? (
         isOwner ? (
-          <OwnerPeople perm={perm} appName={appName} roles={roles} busyKey={busyKey} run={run} client={client} cmpId={cmpId} />
+          <OwnerPeople members={members} companyName={companyName} appName={appName} roles={roles} busyKey={busyKey} run={run} client={client} cmpId={cmpId} />
         ) : (
           <MyAccess summary={summary} appName={appName} roles={roles} busyKey={busyKey} run={run} client={client} cmpId={cmpId} />
         )
@@ -189,16 +188,16 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
       {tab === 'requests' ? (
         <Requests requests={requests} isOwner={isOwner} roles={roles} busyKey={busyKey} run={run} client={client} />
       ) : null}
-      {tab === 'workspace' && isOwner ? <WorkspaceTab client={client} run={run} busyKey={busyKey} /> : null}
-      {tab === 'history' && isOwner ? <History client={client} cmpId={cmpId} people={perm.members} /> : null}
+      {tab === 'workspace' && isOwner ? <WorkspaceManager client={client} run={run} busyKey={busyKey} /> : null}
+      {tab === 'history' && isOwner ? <History client={client} cmpId={cmpId} people={members} /> : null}
     </div>
   );
 }
 
 type Run = (key: string, fn: () => Promise<unknown>, done: string) => Promise<void>;
 
-function OwnerPeople({ perm, appName, roles, busyKey, run, client, cmpId }: {
-  perm: CompanyPermissions; appName: string; roles?: Array<{ key: string; label: string }>; busyKey: string | null; run: Run;
+function OwnerPeople({ members, companyName, appName, roles, busyKey, run, client, cmpId }: {
+  members: PermissionMember[]; companyName: string; appName: string; roles?: Array<{ key: string; label: string }>; busyKey: string | null; run: Run;
   client: CompanyRegistryClient; cmpId: number;
 }) {
   const [role, setRole] = useState<Record<string, string>>({});
@@ -218,13 +217,15 @@ function OwnerPeople({ perm, appName, roles, busyKey, run, client, cmpId }: {
           </tr>
         </thead>
         <tbody>
-          {perm.members.map((m: PermissionMember) => {
-            const mine = m.entitlements.find((e) => e.app_key === appKey);
+          {members.map((m: PermissionMember) => {
+            const entitlements = m.entitlements ?? [];
+            const mine = entitlements.find((e) => e.app_key === appKey);
+            const until = shortDate(mine?.expires_at);
             const status = m.app_access_status ?? (m.is_owner ? 'OWNER' : 'ACCESS_RESTRICTED');
             const granted = status === 'ACCESS_GRANTED';
             const others = m.app_scope === 'all'
               ? ['All applications']
-              : m.entitlements.filter((e) => e.app_key !== appKey && e.state === 'active').map((e) => e.app_name);
+              : entitlements.filter((e) => e.app_key !== appKey && e.state === 'active').map((e) => e.app_name);
             const k = m.uuid;
             return (
               <tr key={m.uuid}>
@@ -238,7 +239,7 @@ function OwnerPeople({ perm, appName, roles, busyKey, run, client, cmpId }: {
                 <td>
                   <CompanyAccessBadge status={status} />
                   {mine?.role_key ? <div className="aic-ca-meta">Role: {roleLabel(mine.role_key)}</div> : null}
-                  {mine?.expires_at ? <div className="aic-ca-meta">Until {new Date(mine.expires_at).toLocaleDateString()}</div> : null}
+                  {until ? <div className="aic-ca-meta">Until {until}</div> : null}
                 </td>
                 <td>{others.length ? others.map((o) => <span className="aic-ca-chip" key={o}>{o}</span>) : <span className="aic-ca-meta">—</span>}</td>
                 <td>
@@ -262,7 +263,7 @@ function OwnerPeople({ perm, appName, roles, busyKey, run, client, cmpId }: {
                         className="aic-ca-btn aic-ca-btn-sm aic-ca-btn-danger"
                         disabled={busyKey === k}
                         onClick={() => {
-                          if (window.confirm(`Revoke ${who(m)}'s access to ${perm.company.name} in ${appName}? Their other applications are not affected.`)) {
+                          if (window.confirm(`Revoke ${who(m)}'s access to ${companyName} in ${appName}? Their other applications are not affected.`)) {
                             void run(k, () => client.revoke(cmpId, `${m.uuid}:${appKey}`), `${who(m)} can no longer open this company in ${appName}.`);
                           }
                         }}
@@ -322,6 +323,7 @@ function MyAccess({ summary, appName, roles, busyKey, run, client, cmpId }: {
   const [why, setWhy] = useState('');
   const [role, setRole] = useState('');
   if (!summary) return null;
+  const until = shortDate(summary.entitlement?.expires_at);
   return (
     <div className="aic-ca-stack">
       <div className="aic-ca-between">
@@ -329,7 +331,7 @@ function MyAccess({ summary, appName, roles, busyKey, run, client, cmpId }: {
         <CompanyAccessBadge status={summary.access_status} />
       </div>
       {summary.entitlement?.role_key ? <div className="aic-ca-meta">Role: {roles?.find((r) => r.key === summary.entitlement?.role_key)?.label ?? summary.entitlement.role_key}</div> : null}
-      {summary.entitlement?.expires_at ? <div className="aic-ca-meta">Until {new Date(summary.entitlement.expires_at).toLocaleDateString()}</div> : null}
+      {until ? <div className="aic-ca-meta">Until {until}</div> : null}
       {summary.can_request_access ? (
         <div className="aic-ca-stack">
           {roles && roles.length > 0 ? (
@@ -370,7 +372,7 @@ function Requests({ requests, isOwner, roles, busyKey, run, client }: {
             <div style={{ minWidth: 0 }}>
               <div className="aic-ca-name">{isOwner ? who({ name: r.requester_name, email: r.requester_email, uuid: r.requester_uuid }) : 'You'} · {r.app_name}</div>
               <div className="aic-ca-meta">
-                {new Date(r.created_at).toLocaleString()}
+                {shortDateTime(r.created_at) || '—'}
                 {r.requested_role ? ` · asked for ${roles?.find((x) => x.key === r.requested_role)?.label ?? r.requested_role}` : ''}
               </div>
               {r.justification ? <div style={{ marginTop: 4 }}>“{r.justification}”</div> : null}
@@ -409,99 +411,6 @@ function Requests({ requests, isOwner, roles, busyKey, run, client }: {
   );
 }
 
-function WorkspaceTab({ client, run, busyKey }: { client: CompanyRegistryClient; run: Run; busyKey: string | null }) {
-  const [ws, setWs] = useState<Workspace | null>(null);
-  const [members, setMembers] = useState<WorkspaceMember[]>([]);
-  const [suggestions, setSuggestions] = useState<MemberSuggestion[]>([]);
-  const [email, setEmail] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [tick, setTick] = useState(0);
-
-  useEffect(() => {
-    let live = true;
-    (async () => {
-      try {
-        const all = await client.workspaces();
-        const owned = all.find((w) => w.is_owner) ?? null;
-        if (!live) return;
-        setWs(owned);
-        if (owned) {
-          const [m, s] = await Promise.all([client.workspaceMembers(owned.workspace_id), client.memberSuggestions(owned.workspace_id)]);
-          if (!live) return;
-          setMembers(m);
-          setSuggestions(s);
-        }
-      } catch (e) {
-        if (live) setError(message(e, 'The workspace could not be loaded.'));
-      }
-    })();
-    return () => {
-      live = false;
-    };
-  }, [client, tick]);
-
-  const act = (key: string, fn: () => Promise<unknown>, done: string) => run(key, fn, done).then(() => setTick((t) => t + 1));
-
-  if (error) return <div className="aic-ca-alert aic-ca-tone-danger">{error}</div>;
-  if (!ws) return <div className="aic-ca-empty">Loading workspace…</div>;
-  return (
-    <div className="aic-ca-stack">
-      <p className="aic-ca-sub">
-        {ws.workspace_name}: people you trust to <strong>see</strong> your companies (names and their own access status only).
-        Seeing is not opening — grant access per application on the People tab. Invited people must accept first.
-      </p>
-      <ul className="aic-ca-list">
-        {members.filter((m) => m.status === 'active' || m.status === 'invited').map((m) => (
-          <li key={m.uuid} className="aic-ca-item" style={{ cursor: 'default' }}>
-            <span>
-              <span className="aic-ca-name">{who(m)}</span>
-              <span className="aic-ca-meta"> · {m.membership_type === 'owner' ? 'Owner' : m.status === 'invited' ? 'Invited' : 'Member'}</span>
-            </span>
-            {m.membership_type === 'owner' ? null : (
-              <span className="aic-ca-row">
-                <button type="button" className="aic-ca-btn aic-ca-btn-sm aic-ca-btn-danger" disabled={busyKey === `ws-${m.uuid}`}
-                  onClick={() => {
-                    if (!window.confirm(`Remove ${who(m)} from your workspace? They will stop seeing your companies.`)) return;
-                    const alsoRevoke = window.confirm('Also remove their access to every company you shared with them? (Cancel keeps their existing company access.)');
-                    void act(`ws-${m.uuid}`, () => client.removeMember(ws.workspace_id, m.uuid, alsoRevoke), `${who(m)} was removed from the workspace.`);
-                  }}>
-                  Remove
-                </button>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
-      {suggestions.length > 0 ? (
-        <div className="aic-ca-stack">
-          <div className="aic-ca-meta">People you already share companies with:</div>
-          <ul className="aic-ca-list">
-            {suggestions.map((s) => (
-              <li key={s.uuid} className="aic-ca-item" style={{ cursor: 'default' }}>
-                <span>
-                  <span className="aic-ca-name">{who(s)}</span>
-                  <span className="aic-ca-meta"> · shares {s.shared_company_count} of your compan{s.shared_company_count === 1 ? 'y' : 'ies'}</span>
-                </span>
-                <button type="button" className="aic-ca-btn aic-ca-btn-sm aic-ca-btn-primary" disabled={busyKey === `inv-${s.uuid}`}
-                  onClick={() => void act(`inv-${s.uuid}`, () => client.inviteMember(ws.workspace_id, { uuid: s.uuid, name: s.name, email: s.email }), `${who(s)} was invited to your workspace.`)}>
-                  Invite
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-      <div className="aic-ca-row">
-        <input className="aic-ca-input" style={{ flex: '1 1 220px' }} type="email" placeholder="Invite by email (registered Aicountly user)" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <button type="button" className="aic-ca-btn aic-ca-btn-primary" disabled={!email.trim() || busyKey === 'inv-email'}
-          onClick={() => void act('inv-email', () => client.inviteMember(ws.workspace_id, { uuid: '', email: email.trim() }), `${email.trim()} was invited to your workspace.`).then(() => setEmail(''))}>
-          Invite
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function History({ client, cmpId, people }: { client: CompanyRegistryClient; cmpId: number; people: PermissionMember[] }) {
   const [rows, setRows] = useState<AuditEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -530,7 +439,7 @@ function History({ client, cmpId, people }: { client: CompanyRegistryClient; cmp
             {r.app_key ? <span className="aic-ca-chip" style={{ marginLeft: 6 }}>{r.app_key}</span> : null}
             {r.reason ? <span className="aic-ca-meta"> — {r.reason}</span> : null}
           </span>
-          <span className="aic-ca-meta">{new Date(r.occurred_at).toLocaleString()}</span>
+          <span className="aic-ca-meta">{shortDateTime(r.occurred_at) || '—'}</span>
         </li>
       ))}
     </ul>

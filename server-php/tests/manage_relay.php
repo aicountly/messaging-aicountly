@@ -41,8 +41,11 @@ $check = static function (string $name, bool $ok, string $detail = '') use (&$pa
 // ---------------------------------------------------------------------------
 
 $client = (string) file_get_contents(dirname($root) . '/web/src/company-access/companyRegistryClient.ts');
-preg_match_all("/call<[^>]*>\\('(GET|POST|PUT|PATCH|DELETE)', [`']([^`']+)[`']/", $client, $calls, PREG_SET_ORDER);
-$check('the shared client was read (at least 20 calls)', count($calls) >= 20, (string) count($calls));
+// One level of nested generics too (`call<Array<{ key: string }>>('GET', '/v1/applications')`).
+preg_match_all("/call<(?:[^<>]|<[^<>]*>)*>\\('(GET|POST|PUT|PATCH|DELETE)', [`']([^`']+)[`']/", $client, $calls, PREG_SET_ORDER);
+$check('the shared client was read (all 29 calls of company-access 1.2.0)', count($calls) >= 29, (string) count($calls));
+$version = trim((string) file_get_contents(dirname($root) . '/web/src/company-access/VERSION'));
+$check('the vendored company-access is 1.2.0', $version === '1.2.0', $version);
 foreach ($calls as [, $method, $path]) {
     $concrete = preg_replace('/\$\{query\([^}]*\}\)?\}?/', '', $path);
     $concrete = str_replace('${action}', 'accept', (string) $concrete);
@@ -56,10 +59,27 @@ foreach (['accept', 'decline', 'exit'] as $action) {
     $check("POST v1/workspaces/3/{$action} is relayed", ManageRelay::isRelayed('POST', 'v1/workspaces/3/' . $action));
 }
 
+// The 1.1/1.2 calls and the plan reads (CONTRACTS §1, §2, §3.5), pinned by name as well as by the drift check.
+foreach ([
+    ['GET', 'v1/app-roles'],
+    ['GET', 'v1/company-creation-targets'],
+    ['PATCH', 'v1/workspaces/3'],
+    ['PATCH', 'v1/workspaces/3/members/1f2e-uuid'],
+    ['POST', 'v1/companies/74/creator-access/retry'],
+    ['GET', 'v1/companies/74/plan'],
+    ['GET', 'v1/me/plan'],
+    ['GET', 'v1/me/pending'],
+] as [$method, $path]) {
+    $check("{$method} {$path} is relayed", ManageRelay::isRelayed($method, $path));
+}
+
 $refused = [
     ['DELETE', 'manage/v1/companies/74/permissions', 'the right path with the wrong method'],
     ['POST', 'manage/v1/workspaces', 'creating a workspace is not a call the screens make'],
-    ['PATCH', 'manage/v1/workspaces/3', 'renaming a workspace is not a call this client makes'],
+    ['PATCH', 'manage/v1/workspaces', 'a PATCH without a workspace id'],
+    ['DELETE', 'manage/v1/workspaces/3', 'deleting a workspace is not a call the screens make'],
+    ['GET', 'manage/v1/me/profile', 'another v1/me path'],
+    ['POST', 'manage/v1/companies/74/plan', 'the plan is read-only here'],
     ['OPTIONS', 'manage/v1/workspaces', 'an unlisted method'],
     ['GET', 'manage/v1/audit-log', 'an unlisted Manage path'],
     ['GET', 'manage/internal/company-status', 'Manage internal routes'],
