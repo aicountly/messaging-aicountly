@@ -5,6 +5,21 @@
 # the document root, and those rules stop applying once these take over.
 # ---------------------------------------------------------------------------
 
+# HTTPS only: a plain-http request is redirected (308) to the same URL on https.
+# It never loops behind a TLS-terminating proxy: a request that arrived over TLS, that the proxy
+# marks as https (X-Forwarded-Proto / X-Forwarded-SSL) or that came in on port 443 is left alone.
+# localhost and 127.0.0.1 stay on http for local development.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTPS} !=on
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteCond %{HTTP:X-Forwarded-SSL} !=on
+    RewriteCond %{SERVER_PORT} !=443
+    RewriteCond %{HTTP_HOST} .
+    RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$ [NC]
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=308,L,NE]
+</IfModule>
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   # No RewriteBase on purpose: Apache resolves the substitution against whatever

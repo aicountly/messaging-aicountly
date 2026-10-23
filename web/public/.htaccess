@@ -3,6 +3,21 @@
 # Vite copies everything in public/ into dist/, so this ships with the build.
 # ---------------------------------------------------------------------------
 
+# HTTPS only: a plain-http request is redirected (301) to the same URL on https.
+# It never loops behind a TLS-terminating proxy: a request that arrived over TLS, that the proxy
+# marks as https (X-Forwarded-Proto / X-Forwarded-SSL) or that came in on port 443 is left alone.
+# localhost and 127.0.0.1 stay on http for local development.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteCond %{HTTPS} !=on
+    RewriteCond %{HTTP:X-Forwarded-Proto} !https [NC]
+    RewriteCond %{HTTP:X-Forwarded-SSL} !=on
+    RewriteCond %{SERVER_PORT} !=443
+    RewriteCond %{HTTP_HOST} .
+    RewriteCond %{HTTP_HOST} !^(localhost|127\.0\.0\.1|\[::1\])(:[0-9]+)?$ [NC]
+    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L,NE]
+</IfModule>
+
 # --- SPA history fallback --------------------------------------------------
 # Client-side routes have no file on disk. Send anything that is not a real
 # file or directory to index.html so a refresh or deep link does not 404.
