@@ -29,6 +29,7 @@ import { APP_ENV } from '../config'
 import './app-shell.css'
 import '../ui/messaging-ui.css'
 import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
+import { PlanLimitToast } from '../components/PlanLimitToast'
 
 function initials(name: string | null | undefined): string {
   if (!name) return '—'
@@ -238,6 +239,7 @@ export function AppShell() {
 
         <main style={{ flex: 1, minWidth: 0 }}>
           <CompanyRestrictedBanner cmpId={cmpId > 0 ? cmpId : null} />
+          <PlanLimitToast />
           {companiesError !== null && companies.length === 0 ? (
             <div className="msg-ui">
               <Notice

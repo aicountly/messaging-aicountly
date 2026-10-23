@@ -16,6 +16,7 @@ use Aicountly\Api\Domain\MessageState;
 use Aicountly\Api\Domain\TemplateService;
 use Aicountly\Api\Http;
 use Aicountly\Api\Permissions;
+use Aicountly\Api\PlanEntitlements;
 
 /**
  * Drafts, approval, dispatch and delivery investigation.
@@ -132,6 +133,13 @@ final class MessagesController extends Controller
         $message = MessageService::find($ctx, $messageUuid);
         if ($message === null || (string) $message['conversation_uuid'] !== $conversationUuid) {
             Http::notFound('That message could not be found on this conversation.');
+        }
+
+        // The company's plan (messaging.max_messages_per_month), before anything is approved or queued.
+        // A message already on the queue is not a new one and is never refused here.
+        if (($message['queued_at'] ?? null) === null) {
+            PlanEntitlements::assertWithin($ctx, $auth, PlanEntitlements::MAX_MESSAGES_PER_MONTH,
+                static fn (): int => PlanEntitlements::messagesQueuedThisMonth($ctx->cmpId));
         }
 
         // A draft can be approved and sent in one action by somebody who holds

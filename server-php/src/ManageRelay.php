@@ -39,18 +39,28 @@ final class ManageRelay
             '#^v1/access-requests$#',
             '#^v1/workspaces$#',
             '#^v1/workspaces/\d+/(members|member-suggestions)$#',
+            // company-access 1.2.0 (CONTRACTS §1/§2/§3.5): the role catalogue, where a company may be
+            // created, a company's plan and the person's own, and what waits on them in Manage.
+            '#^v1/app-roles$#',
+            '#^v1/company-creation-targets$#',
+            '#^v1/companies/\d+/plan$#',
+            '#^v1/me/(plan|pending)$#',
         ],
         'POST' => [
             '#^v1/companies/duplicate-check$#',
             '#^v1/companies/\d+/(permissions|access-requests)$#',
             '#^v1/access-requests/\d+/(approve|reject|cancel)$#',
             '#^v1/workspaces/\d+/(members|accept|decline|exit)$#',
+            '#^v1/companies/\d+/creator-access/retry$#',
         ],
         'PUT' => [
             '#^v1/companies/\d+/visibility$#',
         ],
         'PATCH' => [
             '#^v1/companies/\d+/permissions/' . self::REF . '$#',
+            // 1.1/1.2: the owner renames their workspace and edits a member's sharing settings.
+            '#^v1/workspaces/\d+$#',
+            '#^v1/workspaces/\d+/members/' . self::REF . '$#',
         ],
         'DELETE' => [
             '#^v1/companies/\d+/permissions/' . self::REF . '$#',

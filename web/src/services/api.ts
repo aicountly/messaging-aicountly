@@ -21,6 +21,7 @@
 import { getApiBaseUrl } from '../config'
 import { ensureSesKey } from '../auth/portal'
 import { noteCompanyRestricted, restrictionFromResponse } from './companyRestriction'
+import { PLAN_LIMIT_CODE, notePlanLimit, planLimitFromResponse, planLimitMessage } from './planLimit'
 
 export interface CompanyScope {
   cmp_id: number
@@ -84,6 +85,11 @@ export class ApiError extends Error {
    */
   get isCustomerDecision(): boolean {
     return this.details.customer_decision === true
+  }
+
+  /** 402 PLAN_LIMIT_REACHED: the company's plan does not allow one more (details: code, limit, used). */
+  get isPlanLimit(): boolean {
+    return this.code === PLAN_LIMIT_CODE
   }
 
   /** The draft was edited after it was approved, so the approval no longer applies. */
@@ -232,6 +238,13 @@ async function send<T>(path: string, options: RequestOptions, sesKey: string, ke
     const envelope = parsed as
       | { error?: { code?: string; message?: string; details?: Record<string, unknown> }; message?: string }
       | null
+    // A write the company's plan does not allow (402 PLAN_LIMIT_REACHED): one sentence naming the limit
+    // and who can change it, and the shell's toast with a link to Manage's Plans & billing.
+    const planLimit = planLimitFromResponse(response.status, parsed)
+    if (planLimit !== null) {
+      notePlanLimit(planLimit)
+      throw new ApiError(response.status, PLAN_LIMIT_CODE, planLimitMessage(planLimit), { ...(envelope?.error?.details ?? {}), ...planLimit })
+    }
     throw new ApiError(
       response.status,
       envelope?.error?.code ?? 'error',

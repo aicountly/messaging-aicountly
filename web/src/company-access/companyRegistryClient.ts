@@ -43,6 +43,10 @@ export interface DirectoryCompany {
   request: { request_id: number; status: string; created_at: string } | null;
   entitlement_version: number;
   entitlement?: Entitlement | null;
+  /** v1.2.0: 'workspace' when the access comes from the workspace sharing settings, not a share. */
+  access_via?: 'workspace' | null;
+  /** v1.2.0: the role those settings give (with access_via 'workspace'). */
+  workspace_role_key?: string | null;
 }
 
 export interface DirectoryMeta {
@@ -66,6 +70,65 @@ export interface Entitlement {
   revoked_by: string | null;
   revoked_at: string | null;
   expires_at: string | null;
+  /** v1.2.0: how the grant came about (null for grants made before Manage recorded it). */
+  granted_via?: 'grant' | 'request' | 'share' | 'creator' | null;
+  /** v1.2.0: whether Manage seated the person in the product (Books, Inventory, Billing). */
+  seat_status?: 'granted' | 'seat_pending' | 'refused' | null;
+}
+
+/** v1.2.0 — what a workspace owner lets one member do in their workspace (CONTRACTS §1). */
+export interface WorkspaceSettings {
+  can_create_companies: boolean;
+  /** null = only the owner's plan limit applies. */
+  max_companies_created: number | null;
+  /** Per app: the roles the member may give THEMSELVES on companies they create. Absent app = none. */
+  creator_roles: Record<string, string[]>;
+  /** Per app: the role the member holds on EVERY company of the workspace. Absent = none. */
+  all_companies_access: Record<string, string>;
+}
+
+export interface AppRole {
+  key: string;
+  label: string;
+}
+
+/** v1.2.0 — GET v1/app-roles: role keys per application (owner never listed). */
+export type AppRoles = Record<string, AppRole[]>;
+
+/** v1.2.0 — one place the person may create a company (GET v1/company-creation-targets). */
+export interface CreationTarget {
+  workspace_id: number;
+  name: string;
+  is_own: boolean;
+  owner: { name: string | null; is_me: boolean };
+  can_create: boolean;
+  /** null = no limit known here. */
+  companies_remaining: number | null;
+  /** Shared workspaces: per app, the roles the person may choose for themselves. null on one's own. */
+  creator_roles: Record<string, AppRole[]> | null;
+  /** Why can_create is false: 'not_allowed' | 'limit_reached' (member cap) | 'plan_limit_reached' (owner's plan). */
+  reason?: 'not_allowed' | 'limit_reached' | 'plan_limit_reached' | null;
+}
+
+/** v1.2.0 — the access a creator chooses for themselves on a company created in a shared workspace. */
+export interface CreatorAccessChoice {
+  app: string;
+  role_key: string;
+}
+
+/** v1.2.0 — what the create (and retry) answer reports per chosen application. */
+export interface CreatorAccessResult {
+  app: string;
+  role_key: string | null;
+  status: 'granted' | 'seat_pending' | 'refused';
+  error?: string;
+}
+
+/** v1.2.0 — GET v1/me/pending: what waits on the person in Manage. */
+export interface PendingCounts {
+  workspace_invitations: number;
+  access_requests_to_review: number;
+  total: number;
 }
 
 export interface PermissionMember {
@@ -113,6 +176,7 @@ export interface AccessRequest {
 
 export interface Workspace {
   workspace_id: number;
+  /** Always filled: an unnamed workspace comes back as "<Owner name>'s workspace". */
   workspace_name: string;
   is_owner: boolean;
   membership_status: 'invited' | 'active';
@@ -121,6 +185,11 @@ export interface Workspace {
   accepted_at: string | null;
   company_count: number | null;
   member_count: number | null;
+  /** Who owns it — shown on workspaces the person belongs to but does not own. */
+  owner_name?: string | null;
+  owner_email?: string | null;
+  /** v1.2.0: what the owner lets this person do here (null on one's own workspace). */
+  my_settings?: WorkspaceSettings | null;
 }
 
 export interface WorkspaceMember {
@@ -132,6 +201,8 @@ export interface WorkspaceMember {
   email: string | null;
   invited_at: string | null;
   accepted_at: string | null;
+  /** v1.2.0: the owner's sharing settings for this member (null for the owner's own row). */
+  settings?: WorkspaceSettings | null;
 }
 
 export interface MemberSuggestion {
@@ -262,9 +333,21 @@ export interface CompanyRegistryClient {
   rejectRequest(requestId: number, note?: string): Promise<{ request: AccessRequest }>;
   cancelRequest(requestId: number): Promise<{ request: AccessRequest }>;
   workspaces(): Promise<Workspace[]>;
+  /** Owner only. Each owner has exactly one workspace; this changes what it is called. */
+  renameWorkspace(workspaceId: number, workspaceName: string): Promise<{ workspace_id: number; workspace_name: string }>;
   workspaceMembers(workspaceId: number): Promise<WorkspaceMember[]>;
   memberSuggestions(workspaceId: number): Promise<MemberSuggestion[]>;
-  inviteMember(workspaceId: number, body: { uuid: string; name?: string | null; email?: string | null }): Promise<{ changed: boolean }>;
+  inviteMember(workspaceId: number, body: { uuid: string; name?: string | null; email?: string | null; settings?: Partial<WorkspaceSettings> }): Promise<{ changed: boolean; email_sent?: boolean }>;
+  /** v1.2.0 — owner only. Keys not sent keep their value. */
+  updateMemberSettings(workspaceId: number, uuid: string, settings: Partial<WorkspaceSettings>): Promise<{ membership: WorkspaceMember; changed: boolean }>;
+  /** v1.2.0 — the role catalogue settings and creator access may name. */
+  appRoles(): Promise<AppRoles>;
+  /** v1.2.0 — where the person may create a company; their own workspace first. */
+  creationTargets(): Promise<CreationTarget[]>;
+  /** v1.2.0 — seat the creator again where a product seat is still pending. */
+  retryCreatorAccess(cmpId: number): Promise<{ cmp_id: number; creator_access: CreatorAccessResult[] }>;
+  /** v1.2.0 — workspace invitations and access requests waiting on the person. */
+  pendingCounts(): Promise<PendingCounts>;
   removeMember(workspaceId: number, uuid: string, revokeCompanyAccess?: boolean): Promise<unknown>;
   respondToWorkspace(workspaceId: number, action: 'accept' | 'decline' | 'exit'): Promise<unknown>;
   duplicateCheck(body: { comp_name?: string; pan?: string; cin?: string; llpin?: string; gstins?: string[] }): Promise<{ matches: DuplicateMatch[]; can_create: boolean; needs_acknowledgement: boolean }>;
@@ -338,13 +421,53 @@ export function createCompanyRegistryClient(options: CompanyRegistryClientOption
     rejectRequest: async (requestId, note) => (await call<{ request: AccessRequest }>('POST', `/v1/access-requests/${requestId}/reject`, note ? { note } : {})).data,
     cancelRequest: async (requestId) => (await call<{ request: AccessRequest }>('POST', `/v1/access-requests/${requestId}/cancel`, {})).data,
     workspaces: async () => (await call<Workspace[]>('GET', '/v1/workspaces')).data ?? [],
+    renameWorkspace: async (workspaceId, workspaceName) =>
+      (await call<{ workspace_id: number; workspace_name: string }>('PATCH', `/v1/workspaces/${workspaceId}`, { workspace_name: workspaceName })).data,
     workspaceMembers: async (workspaceId) => (await call<WorkspaceMember[]>('GET', `/v1/workspaces/${workspaceId}/members`)).data ?? [],
     memberSuggestions: async (workspaceId) => (await call<MemberSuggestion[]>('GET', `/v1/workspaces/${workspaceId}/member-suggestions`)).data ?? [],
-    inviteMember: async (workspaceId, body) => (await call<{ changed: boolean }>('POST', `/v1/workspaces/${workspaceId}/members`, body)).data,
+    inviteMember: async (workspaceId, body) => (await call<{ changed: boolean; email_sent?: boolean }>('POST', `/v1/workspaces/${workspaceId}/members`, body)).data,
+    updateMemberSettings: async (workspaceId, uuid, settings) =>
+      (await call<{ membership: WorkspaceMember; changed: boolean }>('PATCH', `/v1/workspaces/${workspaceId}/members/${enc(uuid)}`, { settings })).data,
+    appRoles: async () => (await call<AppRoles>('GET', '/v1/app-roles')).data ?? {},
+    creationTargets: async () => (await call<CreationTarget[]>('GET', '/v1/company-creation-targets')).data ?? [],
+    retryCreatorAccess: async (cmpId) =>
+      (await call<{ cmp_id: number; creator_access: CreatorAccessResult[] }>('POST', `/v1/companies/${cmpId}/creator-access/retry`, {})).data,
+    pendingCounts: async () => (await call<PendingCounts>('GET', '/v1/me/pending')).data ?? { workspace_invitations: 0, access_requests_to_review: 0, total: 0 },
     removeMember: async (workspaceId, uuid, revokeCompanyAccess = false) =>
       (await call<unknown>('DELETE', `/v1/workspaces/${workspaceId}/members/${enc(uuid)}`, { revoke_company_access: revokeCompanyAccess })).data,
     respondToWorkspace: async (workspaceId, action) => (await call<unknown>('POST', `/v1/workspaces/${workspaceId}/${action}`, {})).data,
     duplicateCheck: async (body) =>
       (await call<{ matches: DuplicateMatch[]; can_create: boolean; needs_acknowledgement: boolean }>('POST', '/v1/companies/duplicate-check', body)).data,
   };
+}
+
+/** v1.2.0 — the places the signed-in person may create a company (their own workspace first). */
+export function fetchCreationTargets(client: CompanyRegistryClient): Promise<CreationTarget[]> {
+  return client.creationTargets();
+}
+
+/** v1.2.0 — the role catalogue (owner never listed). */
+export function fetchAppRoles(client: CompanyRegistryClient): Promise<AppRoles> {
+  return client.appRoles();
+}
+
+/**
+ * v1.2.0 — the extra fields for POST /api/companies/create. Nothing for no target (the server then
+ * uses the person's own workspace, as old clients always did); for a shared workspace the chosen
+ * creator access goes with it (the server re-checks every choice against the owner's settings).
+ */
+export function createCompanyRequestFields(
+  target: Pick<CreationTarget, 'workspace_id' | 'is_own'> | null | undefined,
+  creatorAccess: CreatorAccessChoice[] | null | undefined,
+): { workspace_id?: number; creator_access?: CreatorAccessChoice[] } {
+  if (!target) return {};
+  return {
+    workspace_id: target.workspace_id,
+    creator_access: target.is_own ? [] : (creatorAccess ?? []).filter((c) => c.app && c.role_key),
+  };
+}
+
+/** v1.2.0 — settings with nothing allowed (discovery only), the server's default. */
+export function emptyWorkspaceSettings(): WorkspaceSettings {
+  return { can_create_companies: false, max_companies_created: null, creator_roles: {}, all_companies_access: {} };
 }

@@ -102,6 +102,10 @@ php "$ROOT/tests/integration.php"
 # read API (filters, company scoping, permission gating, CSV export).
 php "$ROOT/tests/audit.php"
 
+# Plan limits (CONTRACTS §3.6): messaging.max_channels and messaging.max_messages_per_month from the
+# company's plan in Manage's companyinfo — 402 PLAN_LIMIT_REACHED, never inbound, reads or service keys.
+php "$ROOT/tests/plan_limits.php"
+
 # Usage metering (what is reported to Manage's usage meter, and that it never
 # changes a send). No provider and no Manage is reached.
 php "$ROOT/tests/metering.php"

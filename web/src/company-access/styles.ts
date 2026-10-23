@@ -35,6 +35,15 @@ const CSS = `
 .aic-ca-item:hover{background:var(--aic-ca-subtle)}
 .aic-ca-item[aria-current="true"]{background:var(--aic-ca-accent-soft)}
 .aic-ca-item-restricted .aic-ca-name{color:var(--aic-ca-muted)}
+.aic-ca-list>li+li{border-top:1px solid var(--aic-ca-border)}
+.aic-ca-ws-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 12px 4px 4px}
+.aic-ca-ws-toggle{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:10px;border:0;border-radius:8px;background:none;padding:8px;font:inherit;color:inherit;text-align:left;cursor:pointer}
+.aic-ca-ws-toggle:hover{background:var(--aic-ca-subtle)}
+.aic-ca-ws-toggle:focus-visible{outline:2px solid var(--aic-ca-accent);outline-offset:1px}
+.aic-ca-ws-chevron{display:inline-block;width:12px;flex:0 0 12px;color:var(--aic-ca-muted);font-size:18px;line-height:1;transition:transform .15s}
+.aic-ca-ws-toggle[aria-expanded="true"] .aic-ca-ws-chevron{transform:rotate(90deg)}
+.aic-ca-ws-body{padding:4px 16px 16px 34px}
+@media (max-width:640px){.aic-ca-ws-body{padding:4px 12px 12px}}
 .aic-ca-name{font-weight:600;overflow:hidden;text-overflow:ellipsis}
 .aic-ca-meta{color:var(--aic-ca-muted);font-size:12px}
 .aic-ca-tabs{display:flex;gap:4px;border-bottom:1px solid var(--aic-ca-border);overflow-x:auto}
