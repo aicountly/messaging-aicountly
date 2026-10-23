@@ -18,6 +18,7 @@ use Aicountly\Api\Env;
 use Aicountly\Api\Features;
 use Aicountly\Api\Http;
 use Aicountly\Api\Permissions;
+use Aicountly\Api\PlanEntitlements;
 use Aicountly\Api\Support\Clock;
 use Aicountly\Api\Support\Uuid;
 
@@ -176,6 +177,10 @@ final class ChannelsController extends Controller
             Http::validationFailed('webhook_secret_ref must be the NAME of a server environment variable.');
         }
 
+        // The company's plan (messaging.max_channels): checked once the request is valid, before the insert.
+        PlanEntitlements::assertWithin($ctx, $auth, PlanEntitlements::MAX_CHANNELS,
+            static fn (): int => PlanEntitlements::activeChannels($ctx->cmpId));
+
         $uuid = Uuid::v4();
         $senderAddress = trim((string) ($body['sender_address'] ?? ''));
 
@@ -273,6 +278,12 @@ final class ChannelsController extends Controller
         }
         if (array_key_exists('is_active', $body)) {
             $values['is_active'] = (bool) $body['is_active'];
+            // Switching a switched-off connection back on adds an active one: the plan's
+            // messaging.max_channels applies, as for a new connection. Switching off never does.
+            if ($values['is_active'] && !$connection->isActive) {
+                PlanEntitlements::assertWithin($ctx, $auth, PlanEntitlements::MAX_CHANNELS,
+                    static fn (): int => PlanEntitlements::activeChannels($ctx->cmpId));
+            }
         }
 
         if ($values === []) {

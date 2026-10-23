@@ -39,7 +39,7 @@ final class Context
     /**
      * Manage's verdict per company and session, for this request.
      *
-     * @var array<string, array{owner: bool, fy_list: list<array<string, mixed>>, ho_bo?: int}>
+     * @var array<string, array{owner: bool, fy_list: list<array<string, mixed>>, ho_bo?: int, plan?: array<string, mixed>|null}>
      */
     private static array $verified = [];
 
@@ -132,7 +132,9 @@ final class Context
             Http::error(503, 'context_unavailable', 'Cannot confirm company access right now. Please retry.', ['retryable' => true]);
         }
 
-        self::$verified[$key] = ['owner' => $answer['isOwner'], 'fy_list' => $answer['fyList'], 'ho_bo' => $answer['headOfficeBranch']];
+        self::$verified[$key] = ['owner' => $answer['isOwner'], 'fy_list' => $answer['fyList'], 'ho_bo' => $answer['headOfficeBranch'],
+            // The company's plan for Messaging from the same answer (CONTRACTS §3.5); null = no limits.
+            'plan' => PlanEntitlements::fromCompanyInfo(is_array($result['body'] ?? null) ? $result['body'] : null)];
 
         // Company lifecycle (lib/company-lifecycle): companyinfo's `lifecycle` is the source of truth,
         // then a write to a company whose Messaging subscription lapsed is 423 COMPANY_RESTRICTED —
@@ -149,6 +151,23 @@ final class Context
         }
 
         return (self::$verified[$this->cmpId . ':' . $auth->fingerprint()]['owner'] ?? false) === true;
+    }
+
+    /**
+     * The company's plan for Messaging as Manage's companyinfo stated it on this request
+     * (PlanEntitlements), or null — no plan known, which means no limits: a Manage that predates
+     * plans, or a product's service key (never asked about a plan).
+     *
+     * @return array<string, mixed>|null
+     */
+    public function plan(Auth $auth): ?array
+    {
+        if ($auth->isService()) {
+            return null;
+        }
+        $plan = self::$verified[$this->cmpId . ':' . $auth->fingerprint()]['plan'] ?? null;
+
+        return is_array($plan) ? $plan : null;
     }
 
     /**
@@ -183,12 +202,13 @@ final class Context
     }
 
     /** CLI only — the test suite stands in for Manage rather than reaching it. */
-    public static function trustForTesting(int $cmpId, Auth $auth, bool $owner = false, array $fyList = [], int $headOfficeBranch = 0): void
+    public static function trustForTesting(int $cmpId, Auth $auth, bool $owner = false, array $fyList = [], int $headOfficeBranch = 0, ?array $plan = null): void
     {
         if (PHP_SAPI !== 'cli') {
             return;
         }
-        self::$verified[$cmpId . ':' . $auth->fingerprint()] = ['owner' => $owner, 'fy_list' => $fyList, 'ho_bo' => $headOfficeBranch];
+        self::$verified[$cmpId . ':' . $auth->fingerprint()] = ['owner' => $owner, 'fy_list' => $fyList, 'ho_bo' => $headOfficeBranch,
+            'plan' => $plan === null ? null : PlanEntitlements::normalize($plan)];
     }
 
     /** CLI only — forget every verdict, so one test cannot vouch for the next. */

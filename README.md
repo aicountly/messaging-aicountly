@@ -85,16 +85,39 @@ Companies and who may open them belong to Aicountly Manage's company registry; M
   `details.reason = COMPANY_ACCESS_REQUIRED`. The `/v1/manage/companies` rows keep Manage's
   `can_open_in_current_app` / `app_access_status`; a company marked `false` is never selected.
 - **Users & Access:** `/settings/users-access` (nav → Users & Access, and a link on Settings) renders the shared
-  `CompanyUsersAccessPanel` and `MyWorkspacesPanel` (`web/src/company-access/`, copied verbatim from
+  `CompanyUsersAccessPanel` and `MyWorkspacesPanel` (`web/src/company-access/`, **1.2.0**, copied verbatim from
   manage-aicountly `Saas Common Handler/company-access`; client in `web/src/services/companyRegistry.ts`).
+  A workspace owner renames the workspace, invites with sharing settings and edits each member's sharing
+  settings there (`WorkspaceManager` inside `MyWorkspacesPanel`).
   Permission profiles under Settings → Access still decide what people may do inside Messaging.
+- **Workspace-wide access:** someone the owner let into every company of the workspace
+  (`app_access_source: workspace` in companyinfo) is treated like anyone Manage lets in: Messaging seats
+  nobody on first entry — a person without a permission profile gets the default member grants
+  (`Permissions::DEFAULT_MEMBER_GRANTS`), so there is no local seat to create and Messaging serves no
+  `/api/internal/manage/seats` route (its profiles are named per company, not fixed role keys).
 - **Same-origin only:** the browser reaches the registry at `/api/manage/v1/*` on this host, never
   manage.aicountly.com (the hosting's bot shield can answer a cross-site call with a CORS-less challenge
   page). `server-php/src/ManageRelay.php` forwards exactly the calls `companyRegistryClient.ts` makes, with
-  the person's own token; `tests/manage_relay.php` fails if the two drift.
+  the person's own token; `tests/manage_relay.php` fails if the two drift (all 29 calls of 1.2.0, incl.
+  `PATCH v1/workspaces/{id}`, member settings, `v1/app-roles`, `v1/company-creation-targets`, creator-access
+  retry, `v1/companies/{cmp}/plan`, `v1/me/plan`, `v1/me/pending`).
 - **Discovery ≠ access:** the company picker's "Browse all workspace companies" lists every company in the
   person's workspaces; a restricted one opens "Request access", never the company, and the API re-checks
   every scoped request with Manage whatever the browser shows.
+
+## Plan limits
+
+The company's plan for Messaging comes from Manage's `companyinfo` (`plan.entitlements`, CONTRACTS §3.5);
+values are data in Engage. Over a limit, a new write answers **402** `{"error":{"code":"PLAN_LIMIT_REACHED",
+"details":{"code","limit","used"}}}` and the web shows "Your plan allows N … — ask the account owner to upgrade
+in Manage" with a link to Manage's Plans & billing. No plan (an older Manage), an absent code or an unreadable
+value = no limit. Reads, exports, deletes, drafts, inbound delivery (provider webhooks) and a product's
+service-key sends are never limited; nothing is removed after a downgrade (`server-php/src/PlanEntitlements.php`).
+
+| Code | What is counted | Where enforced |
+| --- | --- | --- |
+| `messaging.max_channels` | Active channel connections of the company | `POST /api/v1/channels`; `PUT /api/v1/channels/{id}` switching one back on |
+| `messaging.max_messages_per_month` | Outbound messages put on the send queue since the 1st of this month (Asia/Kolkata), every origin | `POST /api/v1/conversations/{id}/send` (before approval and queueing) |
 
 ## Company lifecycle (Manage)
 
