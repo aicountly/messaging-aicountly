@@ -1444,6 +1444,33 @@ check('an unsigned webhook is rejected', static function (): void {
     assertSame(403, (int) $result['status'], 'and answered 403');
 });
 
+check('rejected webhooks are recorded only up to a budget a minute (security audit 2026-10)', static function (): void {
+    reset();
+    connection();
+    ChannelRegistry::overrideForTesting('test_provider', new RecordingAdapter());
+    $rejected = static fn (): int => (int) Db::scalar("SELECT COUNT(*) FROM messaging_webhook_receipts WHERE status = 'rejected'");
+    $before = $rejected();
+
+    $budget = WebhookService::REJECTIONS_RECORDED_PER_MINUTE;
+    for ($i = 0; $i < $budget + 15; $i++) {
+        // Half to a connection that does not exist, half with a bad signature: both are strangers.
+        $result = $i % 2 === 0
+            ? WebhookService::receive('test_provider', '00000000-0000-4000-8000-' . str_pad((string) $i, 12, '0', STR_PAD_LEFT), '{"n":' . $i . '}', [])
+            : WebhookService::receive('test_provider', CONNECTION, '{"n":' . $i . '}', ['x-test-signature' => 'wrong']);
+        assertFalse((bool) $result['accepted'], 'every unsigned post is still refused');
+    }
+
+    // The budget is deployment-wide: rows already written this minute count against it too.
+    assertSame(max($before, $budget), $rejected(), 'no more than the budget is written in a minute');
+    $last = WebhookService::receive('test_provider', CONNECTION, '{"late":true}', ['x-test-signature' => 'wrong']);
+    assertSame(403, (int) $last['status'], 'and the caller is answered exactly as before');
+    $unknown = WebhookService::receive('test_provider', '00000000-0000-4000-8000-ffffffffffff', '{}', []);
+    assertSame(404, (int) $unknown['status'], 'an unknown connection is still a 404');
+
+    $signed = WebhookService::receive('test_provider', CONNECTION, (string) json_encode(['events' => []]), ['x-test-signature' => 'valid']);
+    assertTrue((bool) $signed['accepted'], 'a correctly signed webhook is unaffected by the budget');
+});
+
 check('the tenant comes from the connection, never from the payload', static function (): void {
     reset();
     connection();
