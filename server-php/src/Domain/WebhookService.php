@@ -451,6 +451,16 @@ final class WebhookService
         ?ChannelConnection $connection = null,
     ): void {
         try {
+            // These routes take no credential, so anybody can post to them as fast as they like:
+            // past a small budget a minute, a rejection is logged rather than written, or a
+            // stranger could grow this table without limit (security audit 2026-10). The
+            // answer to the caller is the same either way.
+            if (self::rejectionBudgetSpent()) {
+                error_log('[webhook] rejection not recorded (budget spent): ' . $provider . ' ' . $disposition);
+
+                return;
+            }
+
             Db::insert('messaging_webhook_receipts', [
                 'cmp_id'             => $connection?->cmpId,
                 'connection_uuid'    => $connection?->connectionUuid,
@@ -469,6 +479,35 @@ final class WebhookService
         } catch (\Throwable $e) {
             error_log('[webhook] could not record rejection: ' . $e->getMessage());
         }
+    }
+
+    /** Rejected webhooks recorded per minute, deployment-wide, before further ones are only logged. */
+    public const REJECTIONS_RECORDED_PER_MINUTE = 60;
+
+    /**
+     * Has the last minute already recorded as many rejections as it may?
+     *
+     * Bounded read: the received_at index and a LIMIT, so a flood cannot make this check itself
+     * expensive. WEBHOOK_REJECTIONS_PER_MINUTE overrides the budget; 0 records none.
+     */
+    private static function rejectionBudgetSpent(): bool
+    {
+        $configured = \Aicountly\Api\Env::get('WEBHOOK_REJECTIONS_PER_MINUTE');
+        $budget = $configured !== '' && ctype_digit($configured) ? (int) $configured : self::REJECTIONS_RECORDED_PER_MINUTE;
+        if ($budget <= 0) {
+            return true;
+        }
+
+        $recent = (int) (Db::scalar(
+            'SELECT COUNT(*) FROM (
+                 SELECT 1 FROM messaging_webhook_receipts
+                  WHERE received_at > :since AND status = :rejected
+                  LIMIT ' . $budget . '
+             ) AS recent',
+            ['since' => Clock::now()->modify('-60 seconds')->format('Y-m-d H:i:sP'), 'rejected' => 'rejected'],
+        ) ?? 0);
+
+        return $recent >= $budget;
     }
 
     /**

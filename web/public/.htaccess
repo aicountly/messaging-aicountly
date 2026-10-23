@@ -44,6 +44,14 @@
 <IfModule mod_headers.c>
   Header set X-Content-Type-Options "nosniff"
   Header set Referrer-Policy "strict-origin-when-cross-origin"
+  # Clickjacking: no AICOUNTLY screen is meant to be framed by another site
+  # (security audit 2026-10). frame-ancestors is the CSP form, X-Frame-Options
+  # the legacy one. This CSP restricts framing, <base> and plugins only — it does
+  # not restrict scripts, styles or connections, so it cannot break the app.
+  Header always set X-Frame-Options "DENY"
+  Header always set Content-Security-Policy "frame-ancestors 'none'; base-uri 'self'; object-src 'none'"
+  # Browsers keep to HTTPS for a year once they have seen the site over HTTPS.
+  Header always set Strict-Transport-Security "max-age=31536000" env=HTTPS
 </IfModule>
 
 # Deny access to any dotfile that somehow lands in the docroot (e.g. .env),
