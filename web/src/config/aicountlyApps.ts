@@ -277,22 +277,6 @@ export const AICOUNTLY_APPS: AicountlyAppDef[] = [
     sandboxHost: 'voice.gh.aicountly.com',
     accent: 'bg-purple-500',
   },
-  {
-    id: 'edge',
-    name: 'Edge',
-    jumpKey: 'edge',
-    prodHost: 'edge.aicountly.com',
-    sandboxHost: 'edge.gh.aicountly.com',
-    accent: 'bg-cyan-700',
-  },
-  {
-    id: 'aspire',
-    name: 'Aspire',
-    jumpKey: 'aspire',
-    prodHost: 'aspire.aicountly.com',
-    sandboxHost: 'aspire.gh.aicountly.com',
-    accent: 'bg-indigo-700',
-  },
   // New AICOUNTLY SaaS products (blank scaffold stage).
   {
     id: 'integrate',
