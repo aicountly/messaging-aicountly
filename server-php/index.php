@@ -36,6 +36,10 @@ Env::load(__DIR__ . '/.env');
  * signup, OTP, user lookups — with the portal seeing this server's IP instead
  * of the caller's, so anything it rate-limits per IP could be driven through
  * here instead.
+ *
+ * Every relayed call also names the visitor in X-Aicountly-Client-Ip (this connection's
+ * REMOTE_ADDR, never a browser-supplied header), because all of them now reach the portal from
+ * this server and its per-IP sign-in throttles would otherwise be shared by every user.
  */
 const RELAYED_PATHS = [
     'seskey',
@@ -221,6 +225,13 @@ if (strpos($path, 'global/') === 0) {
     $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
     if (is_string($contentType) && $contentType !== '') {
         $headers[] = 'Content-Type: ' . $contentType;
+    }
+    // Only the headers above are forwarded, so a browser-sent X-Aicountly-Client-Ip, X-Forwarded-For,
+    // X-Real-IP, Forwarded or Client-IP never reaches the portal; the visitor is the address this
+    // server's own connection sees (see RELAYED_PATHS).
+    $visitor = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    if (filter_var($visitor, FILTER_VALIDATE_IP) !== false) {
+        $headers[] = 'X-Aicountly-Client-Ip: ' . $visitor;
     }
 
     $body = (string) file_get_contents('php://input');
