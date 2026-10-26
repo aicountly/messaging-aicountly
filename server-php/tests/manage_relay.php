@@ -18,7 +18,9 @@ declare(strict_types=1);
  *     service key, no actor header), X-Saas-Origin names this product, the query, body, method,
  *     status, content type and X-Correlation-Id pass through, an encoded grant reference stays one
  *     path segment, and a Manage that does not answer is a 504 manage_unavailable;
- *   - POST /api/global/logout reaches the portal's /api/logout.
+ *   - POST /api/global/logout reaches the portal's /api/logout;
+ *   - a relayed portal call names the visitor in X-Aicountly-Client-Ip (REMOTE_ADDR), and a
+ *     browser-sent X-Aicountly-Client-Ip or forwarding header is neither passed on nor believed.
  *
  *   php server-php/tests/manage_relay.php
  */
@@ -229,6 +231,25 @@ try {
     $h = $seen($r);
     $check('POST /global/logout reaches the portal\'s /api/logout with the token', ($r['json']['method'] ?? '') === 'POST'
         && ($r['json']['uri'] ?? '') === '/api/logout' && ($h['authorization'] ?? '') === 'Bearer portal-auth-token' && !isset($h['cookie']), $r['raw']);
+
+    $r = $http($apiPort, 'POST', 'global/seskey', [
+        'Authorization: Bearer one-time-code',
+        'Content-Type: application/json',
+        'X-Aicountly-Client-Ip: 203.0.113.9',
+        'X-Forwarded-For: 203.0.113.10',
+        'X-Real-IP: 203.0.113.11',
+        'Forwarded: for=203.0.113.12',
+        'Client-IP: 203.0.113.13',
+    ]);
+    $h = $seen($r);
+    $check('a relayed sign-in call names the visitor: X-Aicountly-Client-Ip is this connection\'s REMOTE_ADDR', ($r['json']['uri'] ?? '') === '/api/seskey'
+        && ($h['x-aicountly-client-ip'] ?? '') === '127.0.0.1', json_encode($h));
+    $check('a browser-sent X-Aicountly-Client-Ip, X-Forwarded-For, X-Real-IP, Forwarded or Client-IP is not forwarded', !isset($h['x-forwarded-for'])
+        && !isset($h['x-real-ip']) && !isset($h['forwarded']) && !isset($h['client-ip'])
+        && !str_contains(json_encode($h), '203.0.113.'), json_encode($h));
+
+    $r = $http($apiPort, 'POST', 'global/logout', ['Authorization: Bearer portal-auth-token']);
+    $check('logout names the visitor too', (($seen($r))['x-aicountly-client-ip'] ?? '') === '127.0.0.1', $r['raw']);
 } finally {
     foreach ($procs as $p) {
         proc_terminate($p);
