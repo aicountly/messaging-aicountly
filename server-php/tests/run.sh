@@ -134,3 +134,8 @@ E8ID_API_PORT="${E8ID_API_PORT:-$((STUB_PORT+40))}" E8ID_PORTAL_FAULT_PORT="${E8
 # the allowlist against web/src/company-access/companyRegistryClient.ts, the refusals, and real HTTP
 # through index.php against a fake Manage (headers, body, status, 504 when Manage does not answer).
 MANAGE_RELAY_API_PORT="${MANAGE_RELAY_API_PORT:-$((STUB_PORT+50))}" php "$ROOT/tests/manage_relay.php"
+
+# No blank errors: an uncaught error or a fatal answers JSON with a reference the log line carries too,
+# and the atomic-deploy entry guard hands a request from the previous release to the current one
+# (index.php declares nothing, so nothing is declared twice) — real HTTP through index.php.
+UNCAUGHT_API_PORT="$((STUB_PORT+60))" php "$ROOT/tests/uncaught_errors.php"

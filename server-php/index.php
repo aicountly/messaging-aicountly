@@ -19,9 +19,31 @@ declare(strict_types=1);
 
 namespace Aicountly\Api;
 
+// Atomic deploys (bin/ops/atomic-switch.sh): api/ is a symlink to the current release. This guard,
+// pasted from bin/ops/atomic-entry.php.txt, makes every request run the current release's copy of
+// this file. It runs before anything is declared, which is why this file declares no functions or
+// classes of its own (src/front.php says why): a second copy would redeclare them and die.
+// >>> aicountly atomic entry (bin/ops/atomic-entry.php.txt) >>>
+if (PHP_SAPI !== 'cli' && !defined('AICOUNTLY_ATOMIC_ENTRY') && isset($_SERVER['SCRIPT_FILENAME'])) {
+    define('AICOUNTLY_ATOMIC_ENTRY', true);
+    clearstatcache(true);
+    $aicountlyEntry = realpath((string) $_SERVER['SCRIPT_FILENAME']);
+    if ($aicountlyEntry !== false && $aicountlyEntry !== __FILE__ && is_file($aicountlyEntry)) {
+        return require $aicountlyEntry;
+    }
+    unset($aicountlyEntry);
+}
+// <<< aicountly atomic entry <<<
+
 require __DIR__ . '/src/Env.php';
 require __DIR__ . '/src/Autoload.php';
 require __DIR__ . '/src/Portal.php';
+
+// A fatal error (not a Throwable: a failed require, memory exhausted) answers JSON with a reference
+// instead of an empty 500, and the log line carries the same reference (Http::answerFatal).
+register_shutdown_function([Http::class, 'answerFatal']);
+
+require __DIR__ . '/src/front.php';
 
 Env::load(__DIR__ . '/.env');
 
@@ -52,109 +74,14 @@ const RELAYED_PATHS = [
 ];
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/**
- * @param array<string, mixed> $payload
- */
-function send_json(int $status, array $payload): void
-{
-    http_response_code($status);
-    header('Content-Type: application/json; charset=utf-8');
-    header('Cache-Control: no-store');
-    echo json_encode($payload, JSON_UNESCAPED_SLASHES);
-    exit;
-}
-
-/**
- * The Authorization header, wherever this server happens to expose it.
- *
- * Under CGI/FastCGI Apache does not pass it to PHP unless it is copied
- * explicitly, and after an internal rewrite it arrives only under the
- * REDIRECT_ prefix. Reading just one of these is why an otherwise correct
- * deployment answers 401 to every sign-in.
- */
-function authorization_header(): string
-{
-    $candidates = [
-        $_SERVER['HTTP_AUTHORIZATION'] ?? '',
-        $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '',
-    ];
-
-    if (function_exists('apache_request_headers')) {
-        foreach ((array) apache_request_headers() as $name => $value) {
-            if (strcasecmp((string) $name, 'Authorization') === 0) {
-                $candidates[] = (string) $value;
-                break;
-            }
-        }
-    }
-
-    foreach ($candidates as $candidate) {
-        if (is_string($candidate) && $candidate !== '') {
-            return $candidate;
-        }
-    }
-
-    return '';
-}
-
-function bearer_token(): string
-{
-    $header = authorization_header();
-    if ($header === '' || preg_match('/Bearer\s+(.+)/i', $header, $matches) !== 1) {
-        return '';
-    }
-
-    return trim($matches[1]);
-}
-
-/**
- * Collapse a routed path to the exact form RELAYED_PATHS is written in.
- *
- * Percent-escapes are decoded first so `%2e%2e` cannot smuggle a traversal
- * segment past the allowlist; exact matching does the rest.
- */
-function normalise_path(string $path): string
-{
-    $decoded = str_replace('\\', '/', rawurldecode($path));
-    $segments = array_values(array_filter(explode('/', $decoded), static fn ($s) => $s !== ''));
-
-    return strtolower(implode('/', $segments));
-}
-
-/**
- * CORS for local development only.
- *
- * In both deployed environments the app and this API share an origin, so no
- * CORS headers are needed or sent. CORS_ALLOWED_ORIGINS in the server .env is
- * what lets `npm run dev` on localhost talk to a deployed API.
- */
-function apply_cors(): void
-{
-    $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
-    if ($origin === '') {
-        return;
-    }
-
-    $allowed = array_filter(array_map('trim', explode(',', Env::get('CORS_ALLOWED_ORIGINS'))));
-    if (!in_array($origin, $allowed, true)) {
-        return;
-    }
-
-    header('Access-Control-Allow-Origin: ' . $origin);
-    header('Access-Control-Allow-Headers: Authorization, Content-Type, Idempotency-Key, X-Service-Key, '
-        . 'X-Actor-Uuid, X-Saas-Origin, X-Source-App, X-Correlation-Id');
-    header('Access-Control-Allow-Methods: GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    header('Access-Control-Max-Age: 600');
-    header('Vary: Origin');
-}
-
-// ---------------------------------------------------------------------------
 // Routing
+//
+// One try around ALL of it, the relays included: whatever throws, on any path, is answered as JSON
+// with a reference the log line carries too (Http::uncaught), never as PHP's empty 500. (The body
+// is not indented, so the diff stays readable.)
 // ---------------------------------------------------------------------------
 
+try {
 apply_cors();
 
 $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
@@ -301,24 +228,20 @@ if ($path === 'session') {
 $router = new Router();
 Routes::register($router);
 
-try {
-    if ($router->dispatch($method, $path)) {
-        exit;
-    }
+if ($router->dispatch($method, $path)) {
+    exit;
+}
+
+send_json(404, ['message' => 'Not found.']);
 } catch (\PDOException $e) {
-    // A database problem is ours, not the caller's. The detail goes to the log;
-    // the caller gets something they can act on.
-    error_log('[messaging] database error on ' . $path . ': ' . $e->getMessage());
-    Http::error(503, 'database_unavailable', 'The Messaging database is not reachable right now. Please retry.', [
+    // A database problem is ours, not the caller's. The detail goes to the log, with the
+    // reference; the caller gets something they can act on.
+    Http::uncaught($e, 503, 'database_unavailable', 'The Messaging database is not reachable right now. Please retry.', [
         'retryable' => true,
     ]);
 } catch (ResponseSent $e) {
     // Only reachable under CLI, where Http throws instead of exiting.
     send_json($e->status, $e->payload);
 } catch (\Throwable $e) {
-    error_log('[messaging] unhandled error on ' . $path . ': ' . $e->getMessage()
-        . ' @ ' . $e->getFile() . ':' . $e->getLine());
-    Http::error(500, 'server_error', 'Something went wrong handling that request.');
+    Http::uncaught($e);
 }
-
-send_json(404, ['message' => 'Not found.']);

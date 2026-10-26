@@ -218,9 +218,11 @@ final class Audit
     {
         if (self::$requestId === null) {
             $given = (string) ($_SERVER['HTTP_X_REQUEST_ID'] ?? '');
-            self::$requestId = preg_match('/^[A-Za-z0-9._:-]{8,64}$/', $given) === 1
-                ? $given
-                : bin2hex(random_bytes(8));
+            // 6-64 of A-Z a-z 0-9 . _ - (the SPA sends a random 32-hex one per request), else 32-hex
+            // minted here: the reference a failed request's answer and log line carry (Http::uncaught).
+            self::$requestId = preg_match('/^[A-Za-z0-9._-]{6,64}$/D', trim($given)) === 1
+                ? trim($given)
+                : bin2hex(random_bytes(16));
         }
 
         return self::$requestId;

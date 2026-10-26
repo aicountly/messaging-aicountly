@@ -44,6 +44,8 @@ final class Http
         header('Content-Type: application/json; charset=utf-8');
         header('Cache-Control: no-store, private');
         header('X-Content-Type-Options: nosniff');
+        // The id this request's audit rows and log lines carry; the SPA quotes it on a 5xx.
+        header('X-Request-Id: ' . self::requestId());
         echo json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         exit;
     }
@@ -271,5 +273,100 @@ final class Http
         }
 
         return preg_match('/^[A-Za-z0-9._:-]+$/', $key) === 1 ? $key : '';
+    }
+
+    /** This request's reference (Audit::requestId: the caller's X-Request-Id when it is a plain token, else 32-hex). */
+    public static function requestId(): string
+    {
+        return Audit::requestId();
+    }
+
+    /**
+     * Answer a failure nothing else handled: one log line with the reference, the exception's
+     * class, message and file:line and the request's method and path, and a JSON answer with a
+     * human message, a code and the same reference. The exception's own text never goes to the
+     * caller. index.php's global catch is the caller ($logMessage: what to log instead of the
+     * exception's message, e.g. only the first line of a database error).
+     *
+     * @param array<string, mixed> $details
+     */
+    public static function uncaught(\Throwable $e, int $status = 500, string $code = 'server_error', string $message = '', array $details = [], ?string $logMessage = null): never
+    {
+        $rid = self::requestId();
+        error_log(sprintf(
+            '[messaging] uncaught %s [%s] %s %s: %s @ %s:%d',
+            $e::class,
+            $rid,
+            self::logMethod(),
+            self::logPath(),
+            str_replace(["\r", "\n"], ' ', $logMessage ?? $e->getMessage()),
+            $e->getFile(),
+            $e->getLine(),
+        ));
+        if ($message === '') {
+            // An uncaught failure can come after work was done, so a write says to check first.
+            $message = in_array(self::logMethod(), ['GET', 'HEAD', 'OPTIONS'], true)
+                ? 'Messaging could not complete this request. Try again, and quote reference ' . $rid . ' if it keeps failing.'
+                : 'Messaging could not complete this request, so it is not known whether the change was saved. Reload to check before trying again, and quote reference ' . $rid . ' if it keeps failing.';
+        } else {
+            $message .= ' Reference: ' . $rid . '.';
+        }
+        self::json($status, [
+            'error'      => ['code' => $code, 'message' => $message, 'details' => $details, 'request_id' => $rid],
+            'message'    => $message,
+            'request_id' => $rid,
+        ]);
+    }
+
+    /**
+     * register_shutdown_function target (index.php): a fatal error is not a Throwable, so the
+     * global catch never sees it and PHP would answer an empty 500. When nothing has been sent
+     * yet, answer as uncaught() does.
+     */
+    public static function answerFatal(): void
+    {
+        $error = error_get_last();
+        if ($error === null || !in_array($error['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+            return;
+        }
+        $rid = self::requestId();
+        error_log(sprintf(
+            '[messaging] fatal [%s] %s %s: %s @ %s:%d',
+            $rid,
+            self::logMethod(),
+            self::logPath(),
+            str_replace(["\r", "\n"], ' ', (string) $error['message']),
+            (string) $error['file'],
+            (int) $error['line'],
+        ));
+        if (PHP_SAPI === 'cli' || headers_sent()) {
+            return;
+        }
+        $message = 'Messaging could not complete this request. Try again, and quote reference ' . $rid . ' if it keeps failing.';
+        http_response_code(500);
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        header('X-Request-Id: ' . $rid);
+        echo json_encode([
+            'error'      => ['code' => 'server_error', 'message' => $message, 'details' => [], 'request_id' => $rid],
+            'message'    => $message,
+            'request_id' => $rid,
+        ], JSON_UNESCAPED_SLASHES);
+    }
+
+    private static function logMethod(): string
+    {
+        $method = $_SERVER['REQUEST_METHOD'] ?? '';
+
+        return is_string($method) && $method !== '' ? strtoupper(substr($method, 0, 16)) : '-';
+    }
+
+    private static function logPath(): string
+    {
+        $uri = $_SERVER['REQUEST_URI'] ?? '';
+        $path = is_string($uri) ? (string) parse_url($uri, PHP_URL_PATH) : '';
+
+        // The path only: a query string can carry a token.
+        return $path !== '' ? substr((string) preg_replace('/[^\x21-\x7E]/', '?', $path), 0, 300) : '-';
     }
 }
