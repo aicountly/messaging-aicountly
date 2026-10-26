@@ -26,11 +26,13 @@
 #    .env.* but .env.example) carried over from the CURRENT release so edits made on the server are kept,
 #    each --shared path replaced by a symlink into shared/, REVISION written.
 #  - The first run converts a plain api/ folder: each --shared path is moved into shared/ and a symlink
-#    left in its place (the old code keeps writing to the same files), then api/ is renamed aside and the
-#    symlink renamed into place — two renames in the same folder, microseconds apart. The old folder is
-#    moved out of the document root afterwards and kept as releases/<time>-pre-atomic.
-#  - --check-url: after the switch the URL must answer 2xx/3xx within 20 s, or the previous code is put
-#    back at once (on the first run: the original plain folder). A host that does not follow symlinks
+#    left in its place (the old code keeps writing to the same files); the plain folder's code is copied
+#    (hard links) to releases/<time>-pre-atomic and api/ swapped to it in ONE rename (renameat2
+#    exchange; two renames where the host cannot) — the same code, so a request already running cannot
+#    mix two releases — and after ATOMIC_SWITCH_CONVERT_WAIT seconds (130) the new release goes live. The old folder is
+#  - --check-url: after each switch the URL must answer 2xx/3xx within 20 s, or the previous code is put
+#    back at once (on the first run it is asked right after the conversion, still on the old code, and a
+#    failure puts the original plain folder back). A host that does not follow symlinks
 #    therefore costs one failed check, not an outage.
 #  - PHP resolves the symlink per request (realpath cache up to ~2 min), so a worker may finish serving the
 #    previous release for a short while — always a WHOLE release; previous releases are kept (--keep).
@@ -94,7 +96,30 @@ check() { # url -> 0 when it answers 2xx/3xx
     sleep 2
   done
   echo "atomic-switch: check $check_url answered $code"
+  # Who refused: the app's own JSON, the web server's "Forbidden" (e.g. a host that will not follow the
+  # symlink) or a firewall's page (Imunify360 …) read very differently. Tags stripped, first 300 chars.
+  curl -s -m 20 -A 'aicountly-atomic-switch/1' "$check_url" 2>/dev/null | head -c 4096 \
+    | sed -e 's/<[^>]*>/ /g' | tr -s '[:space:]' ' ' | cut -c1-300 | sed 's/^/atomic-switch: check body: /'
+  echo
   return 1
+}
+
+# Swap two paths in ONE rename: renameat2(RENAME_EXCHANGE) (Linux >= 3.15, glibc >= 2.28; ext4, xfs,
+# btrfs, tmpfs). Used where a plain folder and a symlink trade places — the first conversion and its
+# undo — which mv cannot do in one step: with two renames, api/ is missing for a moment and a request
+# arriving then gets an error. Returns non-zero when the host cannot exchange (no python3, an older
+# glibc, a file system without it); callers then fall back to two renames.
+exchange() {
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 -I - "$1" "$2" 2>/dev/null <<'PY'
+import ctypes, ctypes.util, os, sys
+libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
+fn = getattr(libc, "renameat2", None)
+if fn is None:
+    sys.exit(1)
+AT_FDCWD, RENAME_EXCHANGE = -100, 2
+sys.exit(0 if fn(AT_FDCWD, os.fsencode(sys.argv[1]), AT_FDCWD, os.fsencode(sys.argv[2]), RENAME_EXCHANGE) == 0 else 1)
+PY
 }
 
 # Point $live at $1 with a single rename (live already a symlink).
@@ -249,46 +274,68 @@ done
 printf '%s\n' "$revision" > "$rel/REVISION" && chmod 644 "$rel/REVISION"
 
 # ------------------------------------------------------------------ the switch itself
-previous="" converted=0
-if [ -L "$live" ]; then
-  previous="$cur"
-  swap_to "$rel" || { echo "atomic-switch: the switch failed; $previous is still live"; exit 17; }
-  echo "atomic-switch: $live -> $rel"
-else
-  # First run: the plain folder becomes releases/pre-atomic-<time>. Renamed aside in its own folder first
-  # (same file system, instant), the symlink renamed into its place, then moved out of the document root.
-  aside="$live.pre-atomic-$stamp"
+CONVERT_WAIT="${ATOMIC_SWITCH_CONVERT_WAIT:-130}"
+case "$CONVERT_WAIT" in '' | *[!0-9]*) CONVERT_WAIT=130 ;; esac
+converted=0
+if [ ! -L "$live" ]; then
+  # First run, in two steps, so that no request — not even one already running — mixes two releases:
+  #  1. the plain folder's own code becomes releases/<time>-pre-atomic (a hard-linked copy: instant, the
+  #     same files) and api/ becomes a symlink to it in ONE rename (exchange). A request already running
+  #     in the plain folder reads its files through api/ — and still finds the same code. --check-url must
+  #     answer now (a host that will not serve through a symlink is caught on the OLD code, and the plain
+  #     folder is put back).
+  #  2. after CONVERT_WAIT seconds (longer than a request runs; PHP's realpath cache also lets go of
+  #     "api is a folder"), the normal switch below puts the new release live.
+  pre="$releases/${stamp}-pre-atomic"
+  cp -al "$live" "$pre" 2>/dev/null || { rm -rf -- "$pre"; cp -a "$live" "$pre"; } || { rm -rf -- "$pre"; echo "atomic-switch: could not copy the plain folder"; exit 17; }
   tmp="$live.next.$$"
   rm -f "$tmp"
-  ln -s "$rel" "$tmp" || exit 17
-  if ! mv -T "$live" "$aside"; then rm -f "$tmp"; echo "atomic-switch: could not move $live aside"; exit 17; fi
-  if ! mv -T "$tmp" "$live"; then
-    mv -T "$aside" "$live"; rm -f "$tmp"; echo "atomic-switch: the switch failed; the plain folder is back"; exit 17
+  ln -s "$pre" "$tmp" || exit 17
+  if exchange "$tmp" "$live"; then
+    plain="$tmp"
+    echo "atomic-switch: swapped in one rename"
+  else
+    plain="$live.pre-atomic-$stamp"
+    if ! mv -T "$live" "$plain"; then rm -f "$tmp"; rm -rf -- "$pre"; echo "atomic-switch: could not move $live aside"; exit 17; fi
+    if ! mv -T "$tmp" "$live"; then
+      mv -T "$plain" "$live"; rm -f "$tmp"; rm -rf -- "$pre"; echo "atomic-switch: the switch failed; the plain folder is back"; exit 17
+    fi
+    echo "atomic-switch: swapped in two renames (this host cannot exchange)"
   fi
   converted=1
   date +%s > "$releases_dir/.converted-at"
-  echo "atomic-switch: $live -> $rel (converted from a plain folder)"
-  previous="$releases/${stamp}-pre-atomic"
-  if ! mv -T "$aside" "$previous" 2>/dev/null; then
-    previous="$aside"   # another file system: leave it beside api/ (its .htaccess still guards it)
-  fi
-fi
-
-if ! check; then
-  echo "atomic-switch: the new release failed its check — putting the previous code back"
-  if [ "$converted" = 1 ]; then
+  echo "atomic-switch: $live -> $pre (converted from a plain folder; the same code)"
+  if ! check; then
     # Undo the conversion completely: the plain folder goes back in place of the symlink (a host that
     # will not serve through a symlink must get a real folder again). Shared paths stay moved; the
     # symlinks left in the folder point at them.
-    failed="$live.failed-$stamp"
-    if mv -T "$live" "$failed" && mv -T "$previous" "$live"; then
-      rm -f "$failed" "$releases_dir/.converted-at"
-      echo "atomic-switch: the plain folder is back at $live"
-      exit 21
+    if exchange "$plain" "$live"; then
+      rm -f "$plain"
+    else
+      failed="$live.failed-$stamp"
+      if ! { mv -T "$live" "$failed" && mv -T "$plain" "$live"; }; then
+        echo "::error::atomic-switch: the check failed and the plain folder could not be put back ($plain) — act now"
+        exit 22
+      fi
+      rm -f "$failed"
     fi
-    echo "::error::atomic-switch: the check failed and the plain folder could not be put back ($previous) — act now"
-    exit 22
+    rm -rf -- "$pre" "$rel"; rm -f "$releases_dir/.converted-at"
+    echo "atomic-switch: the plain folder is back at $live"
+    exit 21
   fi
+  echo "atomic-switch: waiting ${CONVERT_WAIT}s for requests still running in the plain folder before the new release goes live"
+  sleep "$CONVERT_WAIT"
+  # Nothing reads the plain folder any more by its own name (requests used api/); its files live on in $pre.
+  rm -rf -- "$plain"
+  cur="$pre"
+fi
+
+previous="$cur"
+swap_to "$rel" || { echo "atomic-switch: the switch failed; $previous is still live"; exit 17; }
+echo "atomic-switch: $live -> $rel"
+
+if ! check; then
+  echo "atomic-switch: the new release failed its check — putting the previous code back"
   if [ -n "$previous" ] && swap_to "$previous"; then
     echo "atomic-switch: $live -> $previous restored"
     exit 21
