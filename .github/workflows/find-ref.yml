@@ -1,0 +1,166 @@
+# ---------------------------------------------------------------------------
+# Find a support reference in the server logs, WITHOUT changing anything
+#
+# MANUAL ONLY (workflow_dispatch). A person who hits an error sees "Ref: <id>"
+# (the X-Request-Id the app sent, which the API logs beside the failure). This
+# prints the log lines carrying it, from production or sandbox, with e-mail
+# addresses and secrets masked: scripts/ops/find-ref.sh, piped over SSH. Read
+# only: it greps log files and writes nothing on the server.
+#
+# Where it looks: the API folder <document root>/api (PHP's error_log beside
+# index.php) and, once the API deploys atomically, the releases folder
+# ~/aicountly-releases/<site>-api (its shared/ runtime state and the error_log
+# of every kept release), plus ~/logs (the scheduled jobs' logs).
+# ---------------------------------------------------------------------------
+name: Find a support reference
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: The reference from the error (Ref …), 6-64 letters, digits, . _ -
+        required: true
+        type: string
+      environment:
+        description: Which deployment's logs to search
+        required: true
+        default: production
+        type: choice
+        options:
+          - production
+          - sandbox
+      days:
+        description: Search log files changed in the last N days (1-31)
+        required: false
+        default: '7'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  find:
+    name: Find ${{ inputs.ref }} in ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check the reference
+        env:
+          REF: ${{ inputs.ref }}
+          DAYS: ${{ inputs.days }}
+        run: |
+          if ! printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9._-]{6,64}$'; then
+            echo "::error::The reference must be 6-64 characters of letters, digits, . _ - (as shown after Ref:)."
+            exit 1
+          fi
+          case "$DAYS" in ''|*[!0-9]*) echo "::error::days must be a number (1-31)."; exit 1 ;; esac
+
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The same key and host-key handling as verify-live.yml for this environment (copied).
+      - name: Configure SSH
+        env:
+          TARGET: ${{ inputs.environment }}
+          SSH_PRIVATE_KEY: ${{ inputs.environment == 'production' && secrets.PROD_SSH_PRIVATE_KEY || secrets.SANDBOX_SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ inputs.environment == 'production' && secrets.PROD_SSH_HOST || secrets.SANDBOX_SSH_HOST }}
+          SSH_USER: ${{ inputs.environment == 'production' && secrets.PROD_SSH_USER || secrets.SANDBOX_SSH_USER }}
+          # The port is optional (default 22). The default sits inside each
+          # branch, so an unset production port cannot fall through to the
+          # sandbox one.
+          SSH_PORT: ${{ inputs.environment == 'production' && (secrets.PROD_SSH_PORT || '22') || (secrets.SANDBOX_SSH_PORT || '22') }}
+        run: |
+          if [ "$TARGET" = production ]; then p=PROD; else p=SANDBOX; fi
+          missing=""
+          [ -n "$SSH_HOST" ]        || missing="$missing ${p}_SSH_HOST"
+          [ -n "$SSH_USER" ]        || missing="$missing ${p}_SSH_USER"
+          [ -n "$SSH_PRIVATE_KEY" ] || missing="$missing ${p}_SSH_PRIVATE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing or empty required secret(s):$missing"
+            exit 1
+          fi
+
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          sed -i 's/\r$//' ~/.ssh/deploy_key
+          if ! ssh-keygen -y -f ~/.ssh/deploy_key > /dev/null 2>&1; then
+            echo "::error::${p}_SSH_PRIVATE_KEY is not a usable OpenSSH private key."
+            exit 1
+          fi
+
+          # Pin the host key so the check fails closed rather than trusting
+          # whatever answers on that address.
+          if ! ssh-keyscan -p "$SSH_PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/tmp/keyscan.err; then
+            echo "::error::ssh-keyscan could not reach the host on the configured port."
+            sed 's/^/    /' /tmp/keyscan.err
+            exit 1
+          fi
+          if [ ! -s ~/.ssh/known_hosts ]; then
+            echo "::error::The host returned no SSH host key. Check ${p}_SSH_HOST and ${p}_SSH_PORT."
+            exit 1
+          fi
+          chmod 600 ~/.ssh/known_hosts
+
+          # Older cPanel hosts offer only RSA with SHA-1, hence the +ssh-rsa.
+          cat > ~/.ssh/config <<CFG
+          Host deploy-target
+            HostName $SSH_HOST
+            User $SSH_USER
+            Port $SSH_PORT
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            PubkeyAcceptedAlgorithms +ssh-rsa
+            HostKeyAlgorithms +ssh-rsa
+            BatchMode yes
+          CFG
+          chmod 600 ~/.ssh/config
+
+      # The folders, resolved the way the deploy resolves them: *_SSH_REMOTE_ROOT is the document
+      # root (relative = under the SSH user's home), the API is its api/ folder, and
+      # atomic-switch.sh keeps releases in ~/aicountly-releases/<docroot folder name>-api.
+      - name: Search the logs
+        env:
+          REF: ${{ inputs.ref }}
+          DAYS: ${{ inputs.days }}
+          REMOTE_ROOT: ${{ inputs.environment == 'production' && secrets.PROD_SSH_REMOTE_ROOT || secrets.SANDBOX_SSH_REMOTE_ROOT }}
+        run: |
+          printf '%s' "$REF" | grep -Eq '^[A-Za-z0-9._-]{6,64}$' || { echo "::error::bad reference"; exit 1; }
+          case "$DAYS" in ''|*[!0-9]*) DAYS=7 ;; esac
+          home="$(ssh -o ConnectTimeout=20 deploy-target 'printf %s "$HOME"')" || { echo "::error::SSH to the server failed."; exit 1; }
+          case "$home" in /*) ;; *) echo "::error::Could not read the server account's home folder."; exit 1 ;; esac
+          DIRS="'$home/logs'"
+          if [ -n "$REMOTE_ROOT" ]; then
+            root="${REMOTE_ROOT%/}"
+            case "$root" in /*) ;; '~/'*) root="$home/${root#\~/}" ;; *) root="$home/${root#./}" ;; esac
+            case "$root" in *"'"*) echo "::error::Unexpected document root."; exit 1 ;; esac
+            releases="$home/aicountly-releases/$(basename "$root")-api"
+            # Atomic: api/ is a symlink to a release inside $releases, which is searched whole (shared/
+            # and every kept release's error_log) — api/ itself is not named again, or the current
+            # release would be listed twice. Not yet atomic: the plain api/ folder itself (with a
+            # trailing slash, so it is entered even if it is a symlink by the time this runs).
+            if ssh deploy-target "test -L '$root/api'"; then
+              DIRS="$DIRS '$releases'"
+            else
+              DIRS="$DIRS '$root/api/'"
+              ssh deploy-target "test -d '$releases'" && DIRS="$DIRS '$releases'"
+            fi
+          else
+            echo "::warning::The ${{ inputs.environment }} document root secret is not available to this workflow; searching ~/logs and every ~/aicountly-releases folder instead."
+            DIRS="$DIRS '$home/aicountly-releases'"
+          fi
+          echo "Searching: $DIRS"
+          rc=0
+          ssh -o ConnectTimeout=20 deploy-target "bash -s -- '$REF' '$DAYS' $DIRS" < scripts/ops/find-ref.sh || rc=$?
+          case "$rc" in
+            0) ;;
+            1) echo "::notice::$REF was not found in the ${{ inputs.environment }} logs of the last $DAYS days." ;;
+            *) echo "::error::find-ref.sh failed (exit $rc)."; exit 1 ;;
+          esac
+
+      - name: Clean up SSH credentials
+        if: always()
+        run: rm -f ~/.ssh/deploy_key ~/.ssh/config

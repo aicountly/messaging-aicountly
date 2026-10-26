@@ -35,16 +35,60 @@ together, with two SSH sessions and two sets of runner setup instead of one.
 
 The web deploy step runs `rsync --delete` against the document root, which
 would otherwise remove everything not in the build — including `api/`, since
-the API lives inside the document root. That step therefore excludes `api/`
-explicitly. **Removing that exclude would delete the entire backend on the
-next deploy.**
+the API lives inside the document root. That step therefore excludes `/api`
+explicitly — anchored and **without** a trailing slash: `api` is a symlink
+(below), and `api/` matches only a real directory, so `--delete` would remove
+the symlink and take the API down. **Removing or changing that exclude would
+delete the entire backend on the next deploy.**
 
-### Why the API's .env survives the API deploy step
+### Atomic API releases
 
-The API deploy step also runs `rsync --delete`, this time against `api/`. The
-API's `.env` is created once by hand on the server and exists nowhere else, so
-both `--exclude='.env'` and `--exclude='.env.*'` are what keep it alive.
-Removing them would wipe the live configuration on the next deploy.
+The API is never rsynced over the live `api/` folder (a request that ran while
+that rsync was half done could load some new files and some old ones and die
+with an empty 500). Each deploy instead:
+
+1. uploads `server-php/` to a stage folder outside the document root,
+   `~/.aicountly-deploy/messaging-<sandbox|production>/stage/`;
+2. runs the migrations **from the stage**, against the database `api/.env`
+   names (copied into the stage, 0600, for that step only), before any code
+   changes — a failed migration leaves the live code untouched;
+3. runs `server-php/bin/ops/atomic-switch.sh` (byte-identical to the fleet kit,
+   console-react-app `ops/estate/kit/`): it builds a complete release folder in
+   `~/aicountly-releases/<docroot folder>-api/releases/`, carries the live
+   `.env` (and `.env.*` but `.env.example`) over from the current release,
+   makes `writable/` (the job state `bin/ops/run-job.php` keeps) a symlink into the shared `…/shared/` folder, writes
+   `REVISION`, and points `api` (a symlink) at the release with one rename.
+   `/api/health` must answer afterwards or the previous code is put back at once.
+
+The first deploy converts the plain `api/` folder (kept as
+`releases/<time>-pre-atomic`). `index.php` starts with the kit's entry guard
+(`bin/ops/atomic-entry.php.txt`), so a PHP worker whose realpath cache still
+holds the previous release runs the current one; that is why `index.php`
+declares no functions itself (`src/front.php`): a second copy would redeclare
+them. Five releases are kept.
+`bash ~/.aicountly-deploy/messaging-production/stage/bin/ops/atomic-switch.sh
+--status --live=<docroot>/api` lists them and `--rollback` puts the previous one
+back. Crons that run `<docroot>/api/bin/…` follow the symlink and need no change.
+
+PHP's `error_log` is written beside `index.php`, i.e. inside the current
+release; earlier releases keep theirs. The **Find a support reference**
+workflow (`find-ref.yml`) searches all of them, read-only, for the `Ref:` a
+person quotes from an error.
+
+### Why the API's .env survives a deploy
+
+The API's `.env` is created once by hand on the server and exists nowhere
+else. It is never uploaded (the stage upload excludes `.env` and `.env.*`), and
+`atomic-switch.sh` carries it from the current release into the next one, so an
+edit made on the server is kept.
+
+### Production deploy window
+
+Production deploys run between 20:00 and 08:00 IST (`scripts/ops/deploy-window.sh`,
+the first step of **Deploy to cPanel Production**). In business hours a deploy
+runs only when the owner allowed it for an exigency: start it with
+`business_hours_reason` saying who allowed it and why; the reason is recorded in
+the run summary. Sandbox deploys run at any time, and always first.
 
 Neither `.env` is ever uploaded either: `.gitignore` keeps them out of the
 repository, and the workflow fails the build outright if a committed `.env`
@@ -208,9 +252,10 @@ Nothing in `database/migrations/` drops a table, drops a column or rewrites
 data. A change that needs to is a change that needs a human and a backup, not a
 deploy step.
 
-**The deploy runs this for you.** After the API is uploaded, each workflow runs
-`php api/bin/migrate.php` over the same SSH connection and fails the job if it
-fails — an app running against a schema it does not match is worse than a
+**The deploy runs this for you.** After the API is uploaded to the stage, each
+workflow runs the stage's `bin/migrate.php` (with the live `api/.env` copied in
+for the step) over the same SSH connection, BEFORE the atomic switch, and fails
+the job — with the live code untouched — if it fails: an app running against a schema it does not match is worse than a
 visibly failed deploy. On the very first deploy the step is expected to fail,
 because `api/.env` does not exist yet; create it and re-run.
 

@@ -5,9 +5,10 @@
 # never deploys. Add no push/pull_request/schedule triggers to this file.
 #
 # What it does: builds web/ on the runner, rsyncs the built dist/ over SSH to
-# the cPanel document root, then rsyncs server-php/ to the api/ folder inside
-# that same document root. No source, no node_modules, and no .env ever reach
-# the server.
+# the cPanel document root, then uploads server-php/ to a stage folder outside
+# it, migrates from there and switches <document root>/api (a symlink) to a
+# complete new release in one rename (server-php/bin/ops/atomic-switch.sh).
+# No source, no node_modules, and no .env ever reach the server.
 # ---------------------------------------------------------------------------
 name: Deploy to cPanel Sandbox
 
@@ -294,16 +295,19 @@ jobs:
           # --delete keeps the docroot free of files removed from the build.
           # The excludes below protect paths that are not part of the web build
           # and must survive a deploy:
-          #   api/         — the PHP backend lives inside the document root and
-          #                  is deployed by the next step. Without this exclude
-          #                  this step would delete the entire API.
+          #   /api         — the PHP backend lives inside the document root and
+          #                  is deployed by the steps below. Without this exclude
+          #                  this step would delete the entire API. Anchored and
+          #                  WITHOUT a trailing slash: api is a symlink to the
+          #                  current release, and 'api/' matches only a real
+          #                  directory, so --delete would remove the symlink.
           #   .env         — server-side env file, if one is placed there
           #   .well-known/ — Let's Encrypt / AutoSSL validation; deleting it
           #                  breaks certificate renewal
           #   cgi-bin/     — cPanel-managed, present in every docroot
           #   .git*        — never publish repository metadata
           rsync -avz --delete \
-            --exclude='api/' \
+            --exclude='/api' \
             --exclude='.env' \
             --exclude='.env.*' \
             --exclude='.git*' \
@@ -313,10 +317,14 @@ jobs:
             -e ssh \
             web/dist/ "deploy-target:$REMOTE_ROOT/"
 
-      - name: Deploy server-php to the api folder
+      - name: Upload server-php to the stage folder
         env:
-          REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          STAGE: .aicountly-deploy/messaging-sandbox/stage
         run: |
+          # The stage is OUTSIDE the document root (relative = under the SSH user's
+          # home), so nothing in it is ever served, and the live api/ is not touched
+          # by this step: atomic-switch.sh below puts the release live in one rename.
+          ssh deploy-target "mkdir -p '$STAGE'"
           # The API's .env is created once by hand on the server and read at
           # runtime on every request, unlike the web build. It must never be
           # uploaded and must never be deleted, hence the excludes below
@@ -345,13 +353,14 @@ jobs:
             --filter='H /tests/' \
             --chmod=D755,F644 \
             -e ssh \
-            server-php/ "deploy-target:$REMOTE_ROOT/api/"
-
-          echo "Deployed server-php to \$REMOTE_ROOT/api/"
+            server-php/ "deploy-target:$STAGE/"
+          echo "Uploaded server-php to ~/$STAGE/"
           echo "::notice::If this is the first API deploy, create api/.env on the server from server-php/.env.example — it is never uploaded."
 
-      # Apply pending database migrations, on the server, using the server's
-      # own api/.env.
+      # Apply pending database migrations, on the server, from the STAGE (the
+      # code about to go live) and BEFORE the switch, using the server's own
+      # api/.env (copied into the stage, 0600, for this step only). A failure
+      # leaves the live code untouched.
       #
       # Every migration is additive and idempotent: each runs in its own
       # transaction, is recorded with a checksum, and nothing in
@@ -367,6 +376,7 @@ jobs:
       - name: Apply database migrations
         env:
           REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          STAGE: .aicountly-deploy/messaging-sandbox/stage
         run: |
           # Find the account's PHP CLI. cPanel accounts often have several and
           # the one on PATH is not reliably the CLI build.
@@ -382,21 +392,58 @@ jobs:
             exit 1
           fi
 
+          # From the STAGE (the code about to go live), BEFORE the switch, with the live
+          # configuration copied into the stage only while the migrations run.
+          cleanup() { ssh deploy-target "rm -f '$STAGE/.env'" || true; }
+          trap cleanup EXIT
+          ssh deploy-target "umask 077 && cp '$REMOTE_ROOT/api/.env' '$STAGE/.env'"
+
           echo "--- pending ---"
-          ssh deploy-target "$php_bin '$REMOTE_ROOT/api/bin/migrate.php' --status" || true
+          ssh deploy-target "$php_bin '$STAGE/bin/migrate.php' --status" || true
 
           echo "--- applying ---"
-          if ssh deploy-target "$php_bin '$REMOTE_ROOT/api/bin/migrate.php'"; then
+          if ssh deploy-target "$php_bin '$STAGE/bin/migrate.php'"; then
             echo "Migrations applied."
           else
             code=$?
             if [ "$code" = "2" ]; then
               echo "::error::A migration that has already been applied has been EDITED since. Reapplying it would not undo what the old version did — resolve this by hand rather than by redeploying."
             else
-              echo "::error::Migrations failed (exit $code). The API is deployed but its schema may not match. Fix this before announcing the release."
+              echo "::error::Migrations failed (exit $code). The new release was NOT switched in; the live code is untouched. Fix this, then deploy again."
             fi
             exit 1
           fi
+
+      # --------------------------------------------------------------------
+      # The switch (server-php/bin/ops/atomic-switch.sh, byte-identical to the
+      # fleet kit: console-react-app ops/estate/kit/DEPLOY_SAFETY.md). It builds a
+      # complete release folder from the stage under
+      # ~/aicountly-releases/<docroot folder>-api/releases/, carries the live
+      # api/.env (and .env.* but .env.example) over from the current release,
+      # makes writable a symlink into the releases' shared/ folder, writes
+      # REVISION, and points api (a symlink) at the release with ONE rename, so no
+      # request ever runs a mix of old and new files. The first run converts the
+      # plain api/ folder (kept as releases/<time>-pre-atomic). /api/health must
+      # answer afterwards or the previous code is put back at once (exit 21).
+      # --------------------------------------------------------------------
+
+      - name: Switch the API to the new release (atomic)
+        env:
+          REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          STAGE: .aicountly-deploy/messaging-sandbox/stage
+          CHECK_URL: https://messaging.gh.aicountly.com/api/health
+        run: |
+          rc=0
+          ssh deploy-target "bash '$STAGE/bin/ops/atomic-switch.sh' --src='$STAGE' --live='$REMOTE_ROOT/api' --revision='$GITHUB_SHA' --shared=writable --check-url='$CHECK_URL'" || rc=$?
+          case "$rc" in
+            0)  echo "The API is live at ${GITHUB_SHA:0:7}." ;;
+            11) echo "::error::api/.env does not exist on the server, so there is no configuration to carry into the release. Nothing was switched. Create api/.env from server-php/.env.example (docs/DEPLOYMENT.md), then deploy again."; exit 1 ;;
+            10) echo "::error::The stage folder is missing or empty on the server. Nothing was switched."; exit 1 ;;
+            17) echo "::error::The release could not be switched (output above). The previous code is still live."; exit 1 ;;
+            21) echo "::error::The new release did not answer $CHECK_URL, so the previous code was put back and is live again. If this was the first (converting) run, the host may not serve through a symlink: see the output above."; exit 1 ;;
+            22) echo "::error::The new release failed its check AND the previous code could not be restored. Act now: ssh in and run bash ~/$STAGE/bin/ops/atomic-switch.sh --status --live=<docroot>/api."; exit 1 ;;
+            *)  echo "::error::atomic-switch.sh failed (exit $rc, output above)."; exit 1 ;;
+          esac
 
       # Is the live site really Messaging, and the build just deployed? The host's
       # anti-bot page ("One moment, please...") answers some requests from
@@ -438,7 +485,7 @@ jobs:
             echo "|---|---|"
             echo "| Target | https://messaging.gh.aicountly.com |"
             echo "| Web | \`web/dist/\` → document root |"
-            echo "| API | \`server-php/\` → \`api/\` in the document root (tests/ excluded) |"
+            echo "| API | \`server-php/\` → stage → migrations → atomic release (\`api/\` → \`~/aicountly-releases/\`; tests/ excluded) |"
             echo "| Migrations | applied on the server from \`api/bin/migrate.php\` |"
             echo "| Commit | \`${GITHUB_SHA:0:7}\` |"
             echo "| Ref | \`${GITHUB_REF_NAME}\` |"

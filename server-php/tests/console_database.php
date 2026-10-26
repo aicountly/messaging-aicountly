@@ -936,8 +936,9 @@ $setEnv($saved);
     T::ok(new DatabaseConnectionException('x', 'console_unreachable') instanceof PDOException, 'a failure to obtain the database name is a PDOException, so index.php still catches it');
     $index = (string) file_get_contents(dirname(__DIR__) . '/index.php');
     $caught = preg_match('/catch \(\\\\PDOException \$e\) \{(.*?)\n\} catch/s', $index, $m) === 1 ? $m[1] : '';
-    T::ok(str_contains($caught, "Http::error(503, 'database_unavailable'"), 'index.php still answers a PDOException with 503 database_unavailable');
-    $answered = preg_match('/Http::error\(503[^;]*;/s', $caught, $m) === 1 ? $m[0] : '';
+    T::ok(str_contains($caught, "Http::uncaught(\$e, 503, 'database_unavailable'"), 'index.php still answers a PDOException with 503 database_unavailable (and a reference)');
+    // Http::uncaught takes the exception only to log it; what the caller reads is the literal message.
+    $answered = preg_match('/Http::uncaught\(\$e, 503, \'database_unavailable\', (\'[^\']*\'),([^;]*);/s', $caught, $m) === 1 ? $m[1] . $m[2] : '';
     T::ok($answered !== '' && !str_contains($answered, '$e') && !str_contains($answered, 'getMessage'), '…with words that carry nothing from the exception (the detail goes to the log only)');
 
     // -----------------------------------------------------------------------

@@ -22,6 +22,7 @@ import { getApiBaseUrl } from '../config'
 import { ensureSesKey } from '../auth/portal'
 import { noteCompanyRestricted, restrictionFromResponse } from './companyRestriction'
 import { PLAN_LIMIT_CODE, notePlanLimit, planLimitFromResponse, planLimitMessage } from './planLimit'
+import { errorMessage, newRequestId, requestIdOf } from './requestRef'
 
 export interface CompanyScope {
   cmp_id: number
@@ -54,6 +55,8 @@ export class ApiError extends Error {
     readonly code: string,
     message: string,
     readonly details: Record<string, unknown> = {},
+    /** The reference the server logged this request under (X-Request-Id), when known. */
+    readonly requestId: string = '',
   ) {
     super(message)
     this.name = 'ApiError'
@@ -175,11 +178,13 @@ interface RequestOptions {
 async function send<T>(path: string, options: RequestOptions, sesKey: string, key: string): Promise<T> {
   const scoped = options.scoped !== false
   const method = options.method ?? 'GET'
+  const requestId = newRequestId()
 
   const headers: Record<string, string> = {
     Accept: 'application/json',
     Authorization: `Bearer ${sesKey}`,
     'X-Correlation-Id': CORRELATION_ID,
+    'X-Request-Id': requestId,
   }
 
   if (method !== 'GET') {
@@ -245,11 +250,13 @@ async function send<T>(path: string, options: RequestOptions, sesKey: string, ke
       notePlanLimit(planLimit)
       throw new ApiError(response.status, PLAN_LIMIT_CODE, planLimitMessage(planLimit), { ...(envelope?.error?.details ?? {}), ...planLimit })
     }
+    const refId = requestIdOf(response, parsed, requestId)
     throw new ApiError(
       response.status,
       envelope?.error?.code ?? 'error',
-      envelope?.error?.message ?? envelope?.message ?? `Request failed (${response.status})`,
+      errorMessage(response.status, envelope?.error?.message ?? envelope?.message, refId),
       envelope?.error?.details ?? {},
+      refId,
     )
   }
 
@@ -287,8 +294,9 @@ async function download(
   params?: QueryParams,
 ): Promise<{ blob: Blob; filename: string; truncated: boolean }> {
   const attempt = async (sesKey: string) => {
+    const requestId = newRequestId()
     const response = await fetch(buildUrl(path, params, true), {
-      headers: { Accept: 'text/csv', Authorization: `Bearer ${sesKey}`, 'X-Correlation-Id': CORRELATION_ID },
+      headers: { Accept: 'text/csv', Authorization: `Bearer ${sesKey}`, 'X-Correlation-Id': CORRELATION_ID, 'X-Request-Id': requestId },
       cache: 'no-store',
     })
     if (!response.ok) {
@@ -298,11 +306,13 @@ async function download(
       } catch {
         envelope = null
       }
+      const refId = requestIdOf(response, envelope, requestId)
       throw new ApiError(
         response.status,
         envelope?.error?.code ?? 'error',
-        envelope?.error?.message ?? envelope?.message ?? `Request failed (${response.status})`,
+        errorMessage(response.status, envelope?.error?.message ?? envelope?.message, refId),
         {},
+        refId,
       )
     }
     const disposition = response.headers.get('Content-Disposition') ?? ''
