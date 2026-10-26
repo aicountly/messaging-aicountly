@@ -20,6 +20,10 @@
 # run, every heartbeat is skipped and Console shows them OVERDUE) · 21 the crontab could not be installed ·
 # 2 bad usage / no PHP.
 set -uo pipefail
+# Whether `php -m` output names a module, without a pipe: `printf | grep -q` under pipefail can fail with
+# SIGPIPE when grep exits first, so two runs could choose different PHP CLIs (Connect sandbox: --apply
+# and --check disagreed). Same test as release.sh's php_ok().
+has_module() { case $'\n'"${1,,}"$'\n' in *$'\n'"${2,,}"$'\n'*) return 0 ;; *) return 1 ;; esac; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 api_dir="$(cd "$here/../.." && pwd)"
@@ -66,7 +70,7 @@ if [ -z "$php_bin" ]; then
   for c in /opt/cpanel/ea-php84/root/usr/bin/php /opt/cpanel/ea-php83/root/usr/bin/php \
            /opt/cpanel/ea-php82/root/usr/bin/php /opt/cpanel/ea-php81/root/usr/bin/php \
            /usr/local/bin/php /usr/bin/php "$(command -v php 2>/dev/null || true)"; do
-    if [ -n "$c" ] && [ -x "$c" ] && mods="$("$c" -m 2>/dev/null)" && printf '%s\n' "$mods" | grep -qix "$php_ext"; then php_bin="$c"; break; fi
+    if [ -n "$c" ] && [ -x "$c" ] && mods="$("$c" -m 2>/dev/null)" && has_module "$mods" "$php_ext"; then php_bin="$c"; break; fi
   done
 fi
 [ -n "$php_bin" ] && [ -x "$php_bin" ] || { echo "No PHP CLI with ${php_ext} was found. Name one with --php=PATH." >&2; exit 2; }

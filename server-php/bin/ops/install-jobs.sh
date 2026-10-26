@@ -31,6 +31,10 @@
 # Safe to run again: the block is replaced, never duplicated, and an unchanged crontab is not rewritten.
 # `flock -n` skips a run rather than stack overlapping runs (every job is also re-entrant).
 set -euo pipefail
+# Whether `php -m` output names a module, without a pipe: `printf | grep -q` under pipefail can fail with
+# SIGPIPE when grep exits first, so two runs could choose different PHP CLIs (Connect sandbox: --apply
+# and --check disagreed). Same test as release.sh's php_ok().
+has_module() { case $'\n'"${1,,}"$'\n' in *$'\n'"${2,,}"$'\n'*) return 0 ;; *) return 1 ;; esac; }
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 apply=0 remove=0 check=0 php_bin="" log_dir="${HOME}/logs" lock_dir="${HOME}/.aicountly-locks"
@@ -73,7 +77,7 @@ if [ "$remove" -eq 0 ]; then
              /opt/cpanel/ea-php82/root/usr/bin/php /opt/cpanel/ea-php81/root/usr/bin/php \
              /usr/local/bin/php /usr/bin/php "$(command -v php 2>/dev/null || true)"; do
       # php -m captured first: `php -m | grep -q` under pipefail can fail on SIGPIPE (see release.sh).
-      if [ -n "$c" ] && [ -x "$c" ] && mods="$("$c" -m 2>/dev/null)" && printf '%s\n' "$mods" | grep -qix "$php_ext"; then php_bin="$c"; break; fi
+      if [ -n "$c" ] && [ -x "$c" ] && mods="$("$c" -m 2>/dev/null)" && has_module "$mods" "$php_ext"; then php_bin="$c"; break; fi
     done
   fi
   [ -n "$php_bin" ] && [ -x "$php_bin" ] || { echo "No PHP CLI with ${php_ext} was found. Name one with --php=PATH." >&2; exit 2; }
