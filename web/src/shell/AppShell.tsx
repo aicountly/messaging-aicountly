@@ -26,6 +26,7 @@ import { BrowseCompaniesButton, RequestAccessButton } from './CompanyDiscovery'
 import { GlobalSearch } from '../components/GlobalSearch'
 import { NotificationCentre } from '../components/NotificationCentre'
 import { APP_ENV } from '../config'
+import { isAnalyticsConfigured, openAnalyticsPreferences } from '../utils/analytics'
 import './app-shell.css'
 import '../ui/messaging-ui.css'
 import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
@@ -165,6 +166,19 @@ export function AppShell() {
             <span>Stronger business</span>
           </div>
           <AppLauncher />
+          {isAnalyticsConfigured() && (
+            <button
+              type="button"
+              className="shell-foot-link"
+              onClick={() => {
+                // The card sits under the open navigation on a phone.
+                setNavOpen(false)
+                openAnalyticsPreferences()
+              }}
+            >
+              Analytics preferences
+            </button>
+          )}
         </div>
       </aside>
 
@@ -238,7 +252,7 @@ export function AppShell() {
           </div>
         </header>
 
-        <main style={{ flex: 1, minWidth: 0 }}>
+        <main className="shell-main" style={{ flex: 1, minWidth: 0 }}>
           <CompanyRestrictedBanner cmpId={cmpId > 0 ? cmpId : null} />
           <PlanLimitToast />
           {companiesError !== null && companies.length === 0 ? (

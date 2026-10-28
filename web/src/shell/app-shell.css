@@ -109,6 +109,38 @@
   opacity: 0.85;
 }
 
+/* "Analytics preferences": shows the analytics consent card again. */
+.shell-foot-link {
+  justify-self: start;
+  min-height: 2.25rem;
+  padding: 0 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.shell-foot-link:hover {
+  color: var(--fg);
+}
+
+.shell-foot-link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}
+
+/* While the analytics consent card floats at the bottom-left, the page leaves
+   that much room at its end, so nothing — the composer included — is stuck
+   under it. */
+.shell-main {
+  padding-bottom: var(--aic-consent-space, 0px);
+}
+
 /* --- Top bar -------------------------------------------------------------- */
 
 .shell-topbar {

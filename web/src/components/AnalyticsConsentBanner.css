@@ -1,0 +1,83 @@
+/*
+ * The analytics consent card: bottom-left, above the page; below the sticky
+ * top bar (40: its "Needs attention" panel opens inside it, so on a short
+ * phone the panel opens over the card), AICOUNTLY Connect (50), the mobile
+ * navigation (55/60), dialogs and drawers (60–80) and toasts (1000); never
+ * printed. Never wider than 360px, and on a phone it leaves at least 88px on
+ * the right for the Connect launcher.
+ */
+.aic-consent {
+  position: fixed;
+  left: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 39;
+  box-sizing: border-box;
+  width: min(360px, calc(100vw - 104px));
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-lg);
+  font-size: 0.93rem;
+  line-height: 1.45;
+}
+
+.aic-consent__text {
+  margin: 0 0 12px;
+}
+
+.aic-consent__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+.aic-consent__button {
+  appearance: none;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.6rem;
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.aic-consent__button--primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+.aic-consent__button:focus-visible,
+.aic-consent__link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.aic-consent__link {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/*
+ * Narrow screens with Connect mounted: its launcher is a pill about 135px wide,
+ * 16px from the corner, so the card sits just above it instead of beside it.
+ */
+@media (max-width: 640px) {
+  body:has(> #aicountly-chat-root) .aic-consent {
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Never on a printed page. */
+@media print {
+  .aic-consent {
+    display: none !important;
+  }
+}
