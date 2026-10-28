@@ -42,6 +42,14 @@ short version; there are tests that fail if the forbidden columns appear.
 Plus a contacts browser (a live window onto Aicountly Contacts, not a copy),
 settings, access control and the audit history.
 
+Every signed-in page also carries **AICOUNTLY Connect** — the widget every
+AICOUNTLY product mounts: a launcher in the bottom-right corner opens your own
+Connect conversations and calls with colleagues, with **AI Pulse** pinned first,
+scoped to the company (and branch) you are working in. It is not a customer
+channel and stores nothing here. The widget is loaded from Connect at run time
+(`web/src/connect/`, product code `messaging`); if Connect cannot be reached,
+Messaging is exactly as it was.
+
 **Things it deliberately will not do.**
 
 - Send a message that promises a payment link when no link exists. The draft is
@@ -243,6 +251,7 @@ template. There are two of them, and they work in opposite ways:
 | `VITE_APP_ENV` | `local`, `sandbox`, or `production` |
 | `VITE_PRODUCT_KEY` | Portal product key. Derived from the hostname when unset |
 | `VITE_PORTAL_LOGIN_URL` | Login portal override. Local development only |
+| `VITE_CONNECT_ORIGIN` | Where AICOUNTLY Connect's widget is loaded from. Derived from the hostname when unset; `off` builds without it |
 
 Only `VITE_`-prefixed variables reach the browser bundle, and Vite inlines them
 at build time, so **treat every one of them as public**. Never put a secret,

@@ -30,6 +30,7 @@ import './app-shell.css'
 import '../ui/messaging-ui.css'
 import { CompanyRestrictedBanner } from '../components/CompanyRestrictedBanner'
 import { PlanLimitToast } from '../components/PlanLimitToast'
+import { ConnectMount } from '../connect/ConnectMount'
 
 function initials(name: string | null | undefined): string {
   if (!name) return '—'
@@ -300,6 +301,9 @@ export function AppShell() {
       </div>
 
       {searching && <GlobalSearch onClose={() => setSearching(false)} />}
+
+      {/* AICOUNTLY Connect: started here, after sign-in; draws nothing in the shell. */}
+      <ConnectMount />
     </div>
   )
 }

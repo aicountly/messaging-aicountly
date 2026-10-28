@@ -204,6 +204,16 @@ export function buildAppLaunchUrl(app: AicountlyAppDef, options: LaunchOptions =
   return `${portal}/login/authentication_jump/${app.jumpKey}?${params.toString()}`
 }
 
+/**
+ * The portal's SSO jump into a sibling product (`authentication_jump/{key}`),
+ * for links handed to something else to render, such as Connect's Advisor
+ * link. Null for an app the catalog does not know.
+ */
+export function buildAppJumpUrl(appId: string, sandbox: boolean = isSandboxHost()): string | null {
+  const app = getAppById(appId)
+  return app ? buildAppLaunchUrl(app, { sandbox }) : null
+}
+
 export function launchApp(app: AicountlyAppDef | null | undefined, options: LaunchOptions = {}): void {
   if (!app) return
   const url = buildAppLaunchUrl(app, options)

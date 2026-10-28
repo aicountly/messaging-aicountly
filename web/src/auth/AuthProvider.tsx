@@ -15,6 +15,7 @@ import {
   redirectToPortalSso,
 } from './portal'
 import { clearAllTokens, getAuthToken, setAuthToken } from './tokens'
+import { stopConnect } from '../connect/connect'
 
 /**
  * `loading` covers both "starting up" and "leaving for the portal" — in the
@@ -134,6 +135,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       redirectToPortalLoginForm()
     },
     signOut: () => {
+      // Connect goes first: its widget and session callback must not outlive
+      // the session they belong to.
+      stopConnect()
       setState({ status: 'loading', message: null })
       performLogout()
     },
