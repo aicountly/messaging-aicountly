@@ -1,14 +1,16 @@
 /*
- * The analytics consent card: bottom-left, above the page and its sticky top
- * bar (40), below AICOUNTLY Connect (50), the mobile navigation (55/60),
- * dialogs and drawers (60–80) and toasts (1000). Never wider than 360px, and
- * on a phone it leaves at least 88px on the right for the Connect launcher.
+ * The analytics consent card: bottom-left, above the page; below the sticky
+ * top bar (40: its "Needs attention" panel opens inside it, so on a short
+ * phone the panel opens over the card), AICOUNTLY Connect (50), the mobile
+ * navigation (55/60), dialogs and drawers (60–80) and toasts (1000); never
+ * printed. Never wider than 360px, and on a phone it leaves at least 88px on
+ * the right for the Connect launcher.
  */
 .aic-consent {
   position: fixed;
   left: 16px;
   bottom: calc(16px + env(safe-area-inset-bottom, 0px));
-  z-index: 45;
+  z-index: 39;
   box-sizing: border-box;
   width: min(360px, calc(100vw - 104px));
   padding: 14px 16px;
@@ -70,5 +72,12 @@
 @media (max-width: 640px) {
   body:has(> #aicountly-chat-root) .aic-consent {
     bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* Never on a printed page. */
+@media print {
+  .aic-consent {
+    display: none !important;
   }
 }
