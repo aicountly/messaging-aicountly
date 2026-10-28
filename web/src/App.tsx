@@ -14,6 +14,8 @@ import { SettingsPage } from './pages/Settings'
 import { UsersAccessPage } from './pages/UsersAccess'
 import { JourneyRunPage } from './pages/JourneyRun'
 import SignIn from './pages/SignIn'
+import { AnalyticsConsentBanner } from './components/AnalyticsConsentBanner'
+import { pageLabel } from './shell/navConfig'
 import { initAnalytics, trackPageView } from './utils/analytics'
 import './App.css'
 
@@ -33,6 +35,7 @@ export default function App() {
     <BrowserRouter>
       <PageViews />
       <AuthenticatedApp />
+      <AnalyticsConsentBanner />
     </BrowserRouter>
   )
 }
@@ -105,12 +108,16 @@ function AfterSignIn() {
   return <Navigate to={normaliseReturnRoute(`${pathname}${search}${hash}`) ?? '/'} replace />
 }
 
-/** GA4 page views, on every navigation rather than only the first. */
+/**
+ * GA4 page views, on every navigation rather than only the first. The title is
+ * the route's own label (never a contact's or conversation's name), or the
+ * product name.
+ */
 function PageViews() {
   const location = useLocation()
 
   useEffect(() => {
-    trackPageView(location.pathname, document.title)
+    trackPageView(location.pathname, pageLabel(location.pathname))
   }, [location.pathname])
 
   return null

@@ -45,6 +45,23 @@ export const NAV: NavItem[] = [
   { to: '/settings/users-access', label: 'Users & Access', icon: UserCog },
 ]
 
+/** Pages that show one record: GA is told what kind of page, never which record. */
+const DETAIL_PAGES: [RegExp, string][] = [
+  [/^\/inbox\/[^/]+\/?$/, 'Conversation'],
+  [/^\/contacts\/[^/]+\/?$/, 'Contact detail'],
+  [/^\/journey-runs\/[^/]+\/?$/, 'Journey run'],
+]
+
+/**
+ * A page's generic label, for analytics: the route's name from the navigation
+ * above, or the kind of record a detail page shows. Undefined for anything
+ * else, which analytics reports under the product name.
+ */
+export function pageLabel(pathname: string): string | undefined {
+  for (const [pattern, label] of DETAIL_PAGES) if (pattern.test(pathname)) return label
+  return NAV.find((item) => item.to === pathname || `${item.to}/` === pathname)?.label
+}
+
 /**
  * The five workspaces, as the route table and the page headers both read them.
  *
