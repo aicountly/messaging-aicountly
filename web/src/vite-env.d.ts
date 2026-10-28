@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_GA4_SAAS_MESSAGING_MEASUREMENT_ID?: string
   /** Generic GA4 measurement ID fallback, checked when the product-specific one is unset. */
   readonly VITE_GA4_MEASUREMENT_ID?: string
+  /** Where AICOUNTLY Connect's embed loader is served from; `off` builds without it. Derived from the host when unset. */
+  readonly VITE_CONNECT_ORIGIN?: string
 }
 
 interface ImportMeta {

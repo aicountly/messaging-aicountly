@@ -425,12 +425,40 @@ export async function ensureSesKey(force = false): Promise<string> {
     if (existing) return existing
   }
 
+  return mintSesKey()
+}
+
+/** A new ses_key, sharing a mint already in flight. It replaces the held key only once it arrives. */
+function mintSesKey(): Promise<string> {
   if (!mintInFlight) {
     mintInFlight = requestSesKey('/seskey').finally(() => {
       mintInFlight = null
     })
   }
   return mintInFlight
+}
+
+/**
+ * The ses_key for a widget embedded in this app (AICOUNTLY Connect), in the
+ * shape its `getSesKey(forceRefresh)` contract asks for (connect-aicountly
+ * docs/EMBED_SDK.md, "Session and auth"):
+ *
+ *  - `forceRefresh` false: the key in hand, minted only when there is none —
+ *    the widget asks roughly once a minute, so this must stay cheap;
+ *  - `forceRefresh` true (the widget asks after its API answered 401): a new
+ *    key, which replaces the held one only once it arrives. Unlike
+ *    ensureSesKey(true) nothing is discarded first — this app's own requests
+ *    keep the key they are using, and a mint that fails leaves it in place;
+ *  - signed out, signing out, or a mint that failed: null. Never throws, and
+ *    never sends anybody to the portal — signing in is this app's business.
+ */
+export async function sesKeyForEmbed(forceRefresh = false): Promise<string | null> {
+  if (isLogoutInProgress() || !getAuthToken()) return null
+  try {
+    return await (forceRefresh === true ? mintSesKey() : ensureSesKey())
+  } catch {
+    return null
+  }
 }
 
 // ---------------------------------------------------------------------------
