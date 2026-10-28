@@ -18,6 +18,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'vite'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
 
 const GA_ID = 'G-TEST000000'
 const TEXT =
@@ -99,4 +100,16 @@ test('not shown when a choice was made in another AICOUNTLY app', () => {
 test('not shown while the address still holds the sign-in hand-off', () => {
   location.href = 'https://messaging.aicountly.com/auth/callback?auth_token=DUMMYTOKEN'
   assert.equal(render(), '')
+})
+
+test('the card sits above the page and under the top bar, whose "Needs attention" panel opens over it; never printed', () => {
+  const card = readFileSync(new URL('../src/components/AnalyticsConsentBanner.css', import.meta.url), 'utf8')
+  const shell = readFileSync(new URL('../src/shell/app-shell.css', import.meta.url), 'utf8')
+  const ui = readFileSync(new URL('../src/ui/messaging-ui.css', import.meta.url), 'utf8')
+  const cardZ = Number(/\.aic-consent \{[^}]*z-index: (\d+)/.exec(card)?.[1])
+  const topbarZ = Number(/\.shell-topbar \{[^}]*z-index: (\d+)/.exec(shell)?.[1])
+  const pageZ = Math.max(...[...ui.matchAll(/z-index: (\d+)/g)].map((m) => Number(m[1])).filter((z) => z < topbarZ))
+  assert.ok(cardZ < topbarZ, `card ${cardZ}, top bar ${topbarZ}`)
+  assert.ok(cardZ > pageZ, `card ${cardZ}, page ${pageZ}`)
+  assert.match(card, /@media print \{\s*\.aic-consent \{\s*display: none !important;/)
 })
