@@ -93,10 +93,16 @@ Companies and who may open them belong to Aicountly Manage's company registry; M
   `details.reason = COMPANY_ACCESS_REQUIRED`. The `/v1/manage/companies` rows keep Manage's
   `can_open_in_current_app` / `app_access_status`; a company marked `false` is never selected.
 - **Users & Access:** `/settings/users-access` (nav → Users & Access, and a link on Settings) renders the shared
-  `CompanyUsersAccessPanel` and `MyWorkspacesPanel` (`web/src/company-access/`, **1.2.0**, copied verbatim from
-  manage-aicountly `Saas Common Handler/company-access`; client in `web/src/services/companyRegistry.ts`).
+  `CompanyUsersAccessPanel` and `MyWorkspacesPanel` (`web/src/company-access/`, **1.4.0**, copied verbatim from
+  manage-aicountly `Saas Common Handler/company-access` with Manage's
+  `node scripts/sync-shared.mjs --to ../messaging-aicountly --as books` — `--as books` only picks the
+  `web/src/company-access` path, `--check` reports drift, the stamp is `.shared-stamp.json`; client in
+  `web/src/services/companyRegistry.ts`). Its styles come from `company-access.css`, imported once in
+  `web/src/main.tsx` after `index.css`, so the package injects no `<style>` element.
   A workspace owner renames the workspace, invites with sharing settings and edits each member's sharing
-  settings there (`WorkspaceManager` inside `MyWorkspacesPanel`).
+  settings there (`WorkspaceManager` inside `MyWorkspacesPanel`); since 1.3.0 the Workspace team and the
+  Company users are listed apart, with Move between them and Remove from one company, and since 1.4.0 one
+  set of team permissions can be given to several people at once (or several Company users moved to the team).
   Permission profiles under Settings → Access still decide what people may do inside Messaging.
 - **Workspace-wide access:** someone the owner let into every company of the workspace
   (`app_access_source: workspace` in companyinfo) is treated like anyone Manage lets in: Messaging seats
@@ -106,9 +112,11 @@ Companies and who may open them belong to Aicountly Manage's company registry; M
 - **Same-origin only:** the browser reaches the registry at `/api/manage/v1/*` on this host, never
   manage.aicountly.com (the hosting's bot shield can answer a cross-site call with a CORS-less challenge
   page). `server-php/src/ManageRelay.php` forwards exactly the calls `companyRegistryClient.ts` makes, with
-  the person's own token; `tests/manage_relay.php` fails if the two drift (all 29 calls of 1.2.0, incl.
+  the person's own token; `tests/manage_relay.php` fails if the two drift (all 32 calls of 1.4.0, incl.
   `PATCH v1/workspaces/{id}`, member settings, `v1/app-roles`, `v1/company-creation-targets`, creator-access
-  retry, `v1/companies/{cmp}/plan`, `v1/me/plan`, `v1/me/pending`).
+  retry, `v1/companies/{cmp}/plan`, `v1/me/plan`, `v1/me/pending`, and 1.3.0's
+  `GET v1/workspaces/{id}/company-users`, `POST v1/workspaces/{id}/members/{ref}/move` and
+  `DELETE v1/companies/{cmp}/members/{ref}`; 1.4.0's bulk actions make those per-person calls and add none).
 - **Discovery ≠ access:** the company picker's "Browse all workspace companies" lists every company in the
   person's workspaces; a restricted one opens "Request access", never the company, and the API re-checks
   every scoped request with Manage whatever the browser shows.

@@ -45,6 +45,8 @@ final class ManageRelay
             '#^v1/company-creation-targets$#',
             '#^v1/companies/\d+/plan$#',
             '#^v1/me/(plan|pending)$#',
+            // company-access 1.3.0: the owner's Company users (shared a company, not on the Workspace team).
+            '#^v1/workspaces/\d+/company-users$#',
         ],
         'POST' => [
             '#^v1/companies/duplicate-check$#',
@@ -52,6 +54,9 @@ final class ManageRelay
             '#^v1/access-requests/\d+/(approve|reject|cancel)$#',
             '#^v1/workspaces/\d+/(members|accept|decline|exit)$#',
             '#^v1/companies/\d+/creator-access/retry$#',
+            // 1.3.0: move one person between the Workspace team and Company users (1.4.0 moves several
+            // people by making this call once per person).
+            '#^v1/workspaces/\d+/members/' . self::REF . '/move$#',
         ],
         'PUT' => [
             '#^v1/companies/\d+/visibility$#',
@@ -65,6 +70,8 @@ final class ManageRelay
         'DELETE' => [
             '#^v1/companies/\d+/permissions/' . self::REF . '$#',
             '#^v1/workspaces/\d+/members/' . self::REF . '$#',
+            // 1.3.0: end one person's share of one company (never every member at once).
+            '#^v1/companies/\d+/members/' . self::REF . '$#',
         ],
     ];
 

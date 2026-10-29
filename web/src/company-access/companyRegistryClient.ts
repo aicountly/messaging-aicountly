@@ -5,10 +5,13 @@
  * and copy it again, so every product talks to the registry the same way.
  *
  * The registry answers two different questions and never conflates them:
- *   directory()  which companies may this person SEE (owned, shared, and every workspace they
- *                actively belong to) — with their access status in THIS application;
+ *   directory()  which companies may this person SEE (owned, shared with them, and — on a Workspace
+ *                team — every company of that workspace) — with their access status in THIS application;
  *   access()     may they OPEN this company here. Products still enforce this server-side through
  *                Manage companyinfo with their application key; this call only drives the UI.
+ *
+ * v1.3.0: a workspace owner's people are in two groups — the Workspace team (every company of the
+ * workspace, with their team permissions) and Company users (only the companies shared with them).
  */
 
 export type AccessStatus =
@@ -47,6 +50,8 @@ export interface DirectoryCompany {
   access_via?: 'workspace' | null;
   /** v1.2.0: the role those settings give (with access_via 'workspace'). */
   workspace_role_key?: string | null;
+  /** v1.3.0: the person reaches this company through the Workspace team (whatever the application). */
+  workspace_team?: boolean;
 }
 
 export interface DirectoryMeta {
@@ -74,6 +79,62 @@ export interface Entitlement {
   granted_via?: 'grant' | 'request' | 'share' | 'creator' | null;
   /** v1.2.0: whether Manage seated the person in the product (Books, Inventory, Billing). */
   seat_status?: 'granted' | 'seat_pending' | 'refused' | null;
+}
+
+/**
+ * v1.3.0 — the two groups of a workspace owner's people: the Workspace team opens every company of the
+ * workspace (with its team permissions); Company users open only the companies shared with them.
+ */
+export type WorkspaceGroup = 'team' | 'company_users';
+
+/** v1.3.0 — one company shared with a person directly (what a Company user holds). */
+export interface DirectCompany {
+  cmp_id: number;
+  name: string;
+  company_status: 'active' | 'recycled';
+  /** The applications the share opens; null = every application. */
+  apps: string[] | null;
+  /** A legacy owner-level row (opens everything; cannot share). */
+  owner_level: boolean;
+}
+
+/** v1.3.0 — a Company user of the owner's workspace (GET v1/workspaces/{id}/company-users). */
+export interface CompanyUser {
+  uuid: string;
+  name: string | null;
+  email: string | null;
+  /** Their membership row's status, or null when they hold shares without one. */
+  membership_status: string | null;
+  member_group: 'company_users';
+  member_group_changed_at: string | null;
+  companies: DirectCompany[];
+}
+
+/** v1.3.0 — POST v1/workspaces/{id}/members/{uuid}/move. */
+export interface MoveMemberResult {
+  membership: WorkspaceMember | null;
+  changed: boolean;
+  member_group: WorkspaceGroup;
+  /** Moving to Company users: the companies they keep (shared with them directly). Empty = no access left. */
+  kept_companies: DirectCompany[];
+  /** Moving to the team: how many companies the team opens now. */
+  team_company_count: number | null;
+}
+
+/** v1.3.0 — DELETE v1/workspaces/{id}/members/{uuid}: what ended. */
+export interface RemoveMemberResult {
+  ended?: { workspace_team: boolean; invitation: boolean; companies: number };
+  kept_companies?: DirectCompany[];
+  company_access_revoked?: Array<{ cmp_id: number; name?: string; revoked: boolean }>;
+}
+
+/** v1.3.0 — DELETE v1/companies/{id}/members/{uuid}: one company ended. */
+export interface RemoveFromCompanyResult {
+  cmp_id: number;
+  revoked: boolean;
+  /** They still open the company through the Workspace team. */
+  opens_through_team: boolean;
+  other_companies: DirectCompany[];
 }
 
 /** v1.2.0 — what a workspace owner lets one member do in their workspace (CONTRACTS §1). */
@@ -144,6 +205,14 @@ export interface PermissionMember {
   books_profile: string | null;
   entitlements: Entitlement[];
   app_access_status?: AccessStatus;
+  /** v1.3.0: their group in the owner's workspace (null for the owner). */
+  workspace_group?: WorkspaceGroup | null;
+  /** v1.3.0: they open this company through the Workspace team. */
+  workspace_team?: boolean;
+  /** v1.3.0: the role their team permissions give in this application. */
+  workspace_role_key?: string | null;
+  /** v1.3.0: what opens this application for them. */
+  app_access_via?: 'owner' | 'share' | 'workspace' | null;
 }
 
 export interface CompanyPermissions {
@@ -190,6 +259,12 @@ export interface Workspace {
   owner_email?: string | null;
   /** v1.2.0: what the owner lets this person do here (null on one's own workspace). */
   my_settings?: WorkspaceSettings | null;
+  /** v1.3.0: the person's group here ('team' for a workspace they belong to; null on their own). */
+  my_group?: WorkspaceGroup | null;
+  /** v1.3.0, the owner's own row: people on the team, Company users, companies the team opens. */
+  team_member_count?: number;
+  company_user_count?: number;
+  team_company_count?: number;
 }
 
 export interface WorkspaceMember {
@@ -203,6 +278,11 @@ export interface WorkspaceMember {
   accepted_at: string | null;
   /** v1.2.0: the owner's sharing settings for this member (null for the owner's own row). */
   settings?: WorkspaceSettings | null;
+  /** v1.3.0: Workspace team or Company users (null for the owner). Absent from an older Manage: the team. */
+  member_group?: WorkspaceGroup | null;
+  member_group_changed_at?: string | null;
+  /** v1.3.0: the companies shared with this member directly. */
+  direct_companies?: DirectCompany[];
 }
 
 export interface MemberSuggestion {
@@ -348,7 +428,18 @@ export interface CompanyRegistryClient {
   retryCreatorAccess(cmpId: number): Promise<{ cmp_id: number; creator_access: CreatorAccessResult[] }>;
   /** v1.2.0 — workspace invitations and access requests waiting on the person. */
   pendingCounts(): Promise<PendingCounts>;
-  removeMember(workspaceId: number, uuid: string, revokeCompanyAccess?: boolean): Promise<unknown>;
+  /**
+   * Owner only. Ends ALL of the person's access in the workspace (v1.3.0): team access and every company shared
+   * with them directly; an invitation is just withdrawn. Pass false only to keep their direct shares (what older
+   * screens offered) — moveMember(…, 'company_users') is the way to keep some companies.
+   */
+  removeMember(workspaceId: number, uuid: string, revokeCompanyAccess?: boolean): Promise<RemoveMemberResult>;
+  /** v1.3.0 — owner only: the Company users of the workspace, each with the companies shared with them. */
+  companyUsers(workspaceId: number): Promise<CompanyUser[]>;
+  /** v1.3.0 — owner only: move someone to the Workspace team (with team permissions) or to Company users. */
+  moveMember(workspaceId: number, uuid: string, to: WorkspaceGroup, settings?: Partial<WorkspaceSettings>): Promise<MoveMemberResult>;
+  /** v1.3.0 — owner only: end one person's direct share of one company (nothing else changes). */
+  removeFromCompany(cmpId: number, uuid: string): Promise<RemoveFromCompanyResult>;
   respondToWorkspace(workspaceId: number, action: 'accept' | 'decline' | 'exit'): Promise<unknown>;
   duplicateCheck(body: { comp_name?: string; pan?: string; cin?: string; llpin?: string; gstins?: string[] }): Promise<{ matches: DuplicateMatch[]; can_create: boolean; needs_acknowledgement: boolean }>;
 }
@@ -433,8 +524,14 @@ export function createCompanyRegistryClient(options: CompanyRegistryClientOption
     retryCreatorAccess: async (cmpId) =>
       (await call<{ cmp_id: number; creator_access: CreatorAccessResult[] }>('POST', `/v1/companies/${cmpId}/creator-access/retry`, {})).data,
     pendingCounts: async () => (await call<PendingCounts>('GET', '/v1/me/pending')).data ?? { workspace_invitations: 0, access_requests_to_review: 0, total: 0 },
-    removeMember: async (workspaceId, uuid, revokeCompanyAccess = false) =>
-      (await call<unknown>('DELETE', `/v1/workspaces/${workspaceId}/members/${enc(uuid)}`, { revoke_company_access: revokeCompanyAccess })).data,
+    removeMember: async (workspaceId, uuid, revokeCompanyAccess) =>
+      (await call<RemoveMemberResult>('DELETE', `/v1/workspaces/${workspaceId}/members/${enc(uuid)}`,
+        revokeCompanyAccess === undefined ? {} : { revoke_company_access: revokeCompanyAccess })).data ?? {},
+    companyUsers: async (workspaceId) => (await call<CompanyUser[]>('GET', `/v1/workspaces/${workspaceId}/company-users`)).data ?? [],
+    moveMember: async (workspaceId, uuid, to, settings) =>
+      (await call<MoveMemberResult>('POST', `/v1/workspaces/${workspaceId}/members/${enc(uuid)}/move`, settings ? { to, settings } : { to })).data,
+    removeFromCompany: async (cmpId, uuid) =>
+      (await call<RemoveFromCompanyResult>('DELETE', `/v1/companies/${cmpId}/members/${enc(uuid)}`, {})).data,
     respondToWorkspace: async (workspaceId, action) => (await call<unknown>('POST', `/v1/workspaces/${workspaceId}/${action}`, {})).data,
     duplicateCheck: async (body) =>
       (await call<{ matches: DuplicateMatch[]; can_create: boolean; needs_acknowledgement: boolean }>('POST', '/v1/companies/duplicate-check', body)).data,

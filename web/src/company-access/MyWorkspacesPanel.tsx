@@ -33,11 +33,12 @@ function ownerLabel(w: Workspace): string | null {
 }
 
 /**
- * The workspaces the person owns or belongs to, and the invitations waiting for them. Each row
- * opens: the person's own workspace (one per owner) shows who is in it and lets them rename it and
- * invite or remove people; a workspace they belong to lists its companies with their access, and
- * lets them leave. Accepting is what lets them discover a workspace's companies; leaving stops it
- * (company shares they hold directly are not affected).
+ * The workspaces the person owns or is on the team of, and the invitations waiting for them. Each
+ * row opens: the person's own workspace (one per owner) shows its Workspace team and Company users
+ * and lets them rename it, invite, move and remove people; a workspace whose team they are on lists
+ * its companies with their access, and lets them leave. Accepting an invitation puts them on the
+ * team (every company of the workspace); leaving ends that (companies shared with them directly
+ * stay). Someone who is only shared a company is a Company user and sees no workspace here.
  */
 export function MyWorkspacesPanel({ client, onChanged, onOpenCompany }: MyWorkspacesPanelProps) {
   injectCompanyAccessStyles();
@@ -53,7 +54,7 @@ export function MyWorkspacesPanel({ client, onChanged, onOpenCompany }: MyWorksp
   useEffect(load, [load]);
 
   const act = async (ws: Workspace, action: 'accept' | 'decline' | 'exit') => {
-    if (action === 'exit' && !window.confirm(`Leave ${workspaceDisplayName(ws)}? You will stop seeing its companies, except those shared with you directly.`)) return;
+    if (action === 'exit' && !window.confirm(`Leave ${workspaceDisplayName(ws)}? You will lose access to its companies, except those shared with you directly.`)) return;
     setBusy(ws.workspace_id);
     setError(null);
     try {
@@ -74,8 +75,8 @@ export function MyWorkspacesPanel({ client, onChanged, onOpenCompany }: MyWorksp
     <div className="aic-ca aic-ca-card aic-ca-stack">
       <div>
         <h2 className="aic-ca-title">My workspaces</h2>
-        {ownsOne ? <p className="aic-ca-sub">You have one workspace. Everyone you invite (or share a company with) joins it.</p> : null}
-        <p className="aic-ca-sub">A workspace lets a company owner's trusted team see every company they registered, so nobody registers one twice. Open a workspace to see more.</p>
+        {ownsOne ? <p className="aic-ca-sub">You have one workspace. People you invite join its Workspace team and open every company in it; people you only share a company with are Company users and see just that company.</p> : null}
+        <p className="aic-ca-sub">On a workspace&apos;s team you open every company it holds, with the app permissions its owner chooses. Open a workspace to see more.</p>
       </div>
       {error ? <div className="aic-ca-alert aic-ca-tone-danger" role="alert">{error}</div> : null}
       {rows === null ? (
@@ -103,13 +104,15 @@ export function MyWorkspacesPanel({ client, onChanged, onOpenCompany }: MyWorksp
                     <span style={{ minWidth: 0 }}>
                       <span className="aic-ca-name" style={{ display: 'block' }}>{workspaceDisplayName(w)}</span>
                       <span className="aic-ca-meta">
-                        {w.is_owner ? 'Your workspace' : invited ? 'Invitation' : 'Member'}
+                        {w.is_owner ? 'Your workspace' : invited ? 'Invitation to the team' : 'Team member'}
                         {owner ? ` · ${owner}` : ''}
                         {w.company_count != null ? ` · ${w.company_count} compan${w.company_count === 1 ? 'y' : 'ies'}` : ''}
-                        {w.is_owner && w.member_count != null ? ` · ${w.member_count} ${w.member_count === 1 ? 'person' : 'people'}` : ''}
+                        {w.is_owner && w.team_member_count != null
+                          ? ` · ${w.team_member_count} on the team · ${w.company_user_count ?? 0} Company user${(w.company_user_count ?? 0) === 1 ? '' : 's'}`
+                          : w.is_owner && w.member_count != null ? ` · ${w.member_count} ${w.member_count === 1 ? 'person' : 'people'}` : ''}
                       </span>
                       {!w.is_owner && w.my_settings ? (
-                        <span className="aic-ca-meta" style={{ display: 'block' }}>You {workspaceSettingsSummary(w.my_settings)}</span>
+                        <span className="aic-ca-meta" style={{ display: 'block' }}>Your access: {workspaceSettingsSummary(w.my_settings)}</span>
                       ) : null}
                     </span>
                   </button>
@@ -133,7 +136,7 @@ export function MyWorkspacesPanel({ client, onChanged, onOpenCompany }: MyWorksp
                       />
                     ) : invited ? (
                       <div className="aic-ca-empty">
-                        {owner ?? 'The owner'} invited you. Accept to see the companies in this workspace — seeing a company is not opening it; that still needs the owner's grant.
+                        {owner ?? 'The owner'} invited you to their Workspace team. Accept to open every company in this workspace, with the app permissions they chose.
                       </div>
                     ) : (
                       <WorkspaceCompanies
@@ -166,7 +169,7 @@ function WorkspaceCompanies({ client, workspace, onOpenCompany, leaving, onLeave
   return (
     <div className="aic-ca-stack">
       <p className="aic-ca-sub">
-        Companies in this workspace, with your access to each. Seeing a company is not opening it — ask its owner for access to the ones marked restricted.
+        Every company in this workspace, with your access to each here. Ask its owner for the ones marked restricted.
       </p>
       {dir.error ? (
         <div className="aic-ca-alert aic-ca-tone-danger aic-ca-between" role="alert">

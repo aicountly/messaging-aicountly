@@ -1,4 +1,4 @@
-# AICOUNTLY shared company access (v1.2.0)
+# AICOUNTLY shared company access (v1.4.0)
 
 One company directory, one access model and one set of screens for every AICOUNTLY product.
 The authority is Manage's company registry (`/api/v1/*`, contract in
@@ -11,16 +11,23 @@ each product while every change goes to the same central API.
 > `server-php/tests/company_access_package_drift_test.php`.
 
 TypeScript sources (`.ts` / `.tsx`); Vite compiles them in JavaScript products too. No
-dependencies beyond React 18/19. Styles are injected once (`aic-ca-*` classes, theme `#25b003`,
-overridable through the CSS variables in `styles.ts`).
+dependencies beyond React 18/19. Styles: `aic-ca-*` classes, theme `#25b003`, overridable through
+the CSS variables in `styles.ts`.
+
+> **Import the stylesheet once in the app entry**, after the product's own CSS (v1.3.1):
+> `import './company-access/company-access.css';` — the bundler then serves it as a same-origin CSS
+> file, which a Content-Security-Policy without `'unsafe-inline'` (`style-src 'self'`) allows. A
+> product that does not import it still gets the same rules, injected at run time as a `<style>`
+> element; such a policy refuses that element and the screens render unstyled.
 
 ## The two rules
 
 1. **Discovery is not access.** `directory()` lists every company the person may *see*: those
-   they own, those shared with them, and those of every workspace they actively belong to — each
-   with `access_status` for *this* application. A restricted company is listed (never hidden), so
-   nobody concludes it does not exist and registers it again. Choosing it opens
-   `RestrictedCompanyDialog` ("Request access"), never the company.
+   they own, those shared with them, and — on a workspace's **Workspace team** — every company of
+   that workspace, each with `access_status` for *this* application. A restricted company is listed
+   (never hidden), so nobody concludes it does not exist and registers it again. Choosing it opens
+   `RestrictedCompanyDialog` ("Request access"), never the company. A **Company user** (someone only
+   shared a company) sees just the companies shared with them (v1.3.0).
 2. **Only the server decides.** The UI is a convenience. Every product must keep checking the
    company on every scoped request through Manage `GET /api/companyinfo` **naming itself**
    (`?app=<key>`, or the `X-Saas-Origin` header most products already send). Manage then answers
@@ -32,9 +39,10 @@ overridable through the CSS variables in `styles.ts`).
 Manage catalog ids: `books`, `inventory`, `sales`, `purchases`, `billing`, `pos`, `pay`,
 `contacts`, `insights`, `capital`, `valuations`, `benefits`, `contracts`, `hrms`, `calendar`,
 `appointments`, `notes`, `docs` (Drive), `vault`, `chat` (Connect), `crm`, `helpdesk`, `remote`,
-`messaging`, `voice`, `email`, `receptionist` (Lobby), `fr`, `secretarial`, `advisor`, `edge`,
-`aspire`, `integrate`, `apis`, `buddy` (Pulse). Aliases accepted: `drive`, `connect`, `pulse`,
-`lobby`, `purchase`. Auditor is not part of this (its own seat leg).
+`messaging`, `voice`, `email`, `receptionist` (Lobby), `fr`, `secretarial`, `advisor`,
+`integrate`, `apis`, `buddy` (Pulse). Aliases accepted: `drive`, `connect`, `pulse`,
+`lobby`, `purchase`. Auditor is not part of this (its own seat leg). Aicountly Edge and Aicountly
+Aspire are not either: they are Aicountly Academy courses, not business apps (owner decision, 2026-10).
 
 ## 1. Backend — name the product to Manage (required)
 
@@ -108,12 +116,33 @@ profiles, Contacts roles…): the product remains authoritative for what a role 
 `role_key` to its profile template and is seated by Manage at grant time.
 
 `<MyWorkspacesPanel>` lists the person's workspaces and invitations (accept / decline). Each row
-expands: the person's **own** workspace opens `<WorkspaceManager>` (rename, members with name and
-e-mail, remove, invite by e-mail, suggestions); a workspace they **belong to** lists its companies
-(`directory({ workspace_id })`) with their access badge, and offers Leave. Pass `onOpenCompany` to
-make the companies they may open clickable. Each owner has exactly **one** workspace — everyone
-they invite, or share a company with (on accepting the share), joins it. An unnamed workspace comes back from the server as
+expands: the person's **own** workspace opens `<WorkspaceManager>` (rename, the Workspace team and the
+Company users, invite by e-mail, move, remove); a workspace whose **team** they are on lists its
+companies (`directory({ workspace_id })`) with their access badge, and offers Leave. Pass
+`onOpenCompany` to make the companies they may open clickable. Each owner has exactly **one**
+workspace: people they invite join its Workspace team; people they only share a company with are its
+Company users (they see no workspace here). An unnamed workspace comes back from the server as
 "<Owner name>'s workspace"; rows the person does not own carry `owner_name` / `owner_email`.
+
+### Workspace team and Company users (v1.3.0)
+
+| | Workspace team | Company users |
+|---|---|---|
+| opens | every company of the workspace (not the ones the owner hides), now and later | only the companies shared with them |
+| in each app | their team permissions (`all_companies_access`), plus anything shared with them directly | what each share allows |
+| joins by | accepting the owner's invitation, or the owner moving them | accepting a company share (or being moved) |
+| removing them | ends ALL their access in the workspace (team and direct shares) | one company (`removeFromCompany`) or all of them |
+
+`client.moveMember(ws, uuid, 'company_users')` answers `kept_companies` (the shares they keep — none means
+no access left); `client.moveMember(ws, uuid, 'team', settings)` gives every company with those team
+permissions. `<WorkspaceManager>` shows both, with the confirmations the owner needs.
+
+**Several people at once (v1.4.0).** Each group has a checkbox per person and *Select all*. *Set permissions for
+N selected* (Workspace team) and *Move N selected to Workspace team* (Company users) open the permissions form once
+and give each of them exactly those team permissions, replacing what they had. The manager makes the per-person
+calls (`updateMemberSettings`, `moveMember(…, 'team', settings)`) one after another, so a relay needs nothing new;
+it shows progress, then how many were changed and why anyone was not (they stay selected to retry). Only on the
+owner's own workspace, and only when `v1/app-roles` answers.
 
 `<WorkspaceManager>` is the same owner view on its own (Users & Access uses it for its Workspace
 tab); without a `workspace` prop it manages the one the signed-in person owns.
@@ -162,7 +191,9 @@ invitations, requests to review). A request may name Manage itself (`app: 'manag
 
 **Relays.** Products that relay the client's calls through an allow-list must add
 `GET v1/app-roles`, `GET v1/company-creation-targets`, `PATCH v1/workspaces/{id}/members/{uuid}`,
-`POST v1/companies/{id}/creator-access/retry` and `GET v1/me/pending`.
+`POST v1/companies/{id}/creator-access/retry` and `GET v1/me/pending` — and, for 1.3.0,
+`GET v1/workspaces/{id}/company-users`, `POST v1/workspaces/{id}/members/{uuid}/move` and
+`DELETE v1/companies/{id}/members/{uuid}`.
 
 ## 6. Mock / offline mode
 

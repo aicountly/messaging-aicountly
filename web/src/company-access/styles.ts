@@ -1,8 +1,14 @@
 /**
- * Scoped styles for the shared company-access components (class prefix `aic-ca-`). Injected once,
- * so the components look right in every product whatever its CSS toolchain (Tailwind, CSS modules,
- * plain CSS). Colours follow the Aicountly theme (#25b003) and can be overridden per product with
- * the CSS variables below on any ancestor.
+ * Scoped styles for the shared company-access components (class prefix `aic-ca-`). Colours follow the
+ * Aicountly theme (#25b003) and can be overridden per product with the CSS variables below on any ancestor.
+ *
+ * A product imports them once as a static stylesheet — `import './company-access/company-access.css'` in its
+ * app entry (v1.3.1). Its bundler serves that as a same-origin CSS file, which a Content-Security-Policy
+ * without 'unsafe-inline' (`style-src 'self'`) allows. For a product that has not, the same rules are
+ * injected once at run time as a <style> element, so the components look right whatever its CSS toolchain
+ * (Tailwind, CSS modules, plain CSS) — but such a policy refuses that element. company-access.css sets
+ * STYLESHEET_MARKER on :root, and while it is applied nothing is injected. CSS below is company-access.css's
+ * rules line for line (Manage's company_access_package_drift_test.php compares them): change both.
  */
 const CSS = `
 .aic-ca{--aic-ca-accent:#25b003;--aic-ca-accent-soft:#e9f7e4;--aic-ca-text:#0f172a;--aic-ca-muted:#64748b;--aic-ca-border:#e2e8f0;--aic-ca-bg:#fff;--aic-ca-subtle:#f8fafc;color:var(--aic-ca-text);font:inherit;font-size:14px;line-height:1.45}
@@ -57,14 +63,29 @@ const CSS = `
 .aic-ca-dialog{background:#fff;border-radius:14px;max-width:480px;width:100%;padding:20px;box-shadow:0 20px 50px rgba(15,23,42,.25)}
 .aic-ca-empty{padding:24px;text-align:center;color:var(--aic-ca-muted)}
 .aic-ca-chip{display:inline-block;background:#f1f5f9;border-radius:6px;padding:1px 7px;font-size:12px;margin:2px 4px 2px 0}
+.aic-ca-confirm{margin-top:8px;border:1px solid var(--aic-ca-border);border-left:3px solid #f59e0b;border-radius:10px;background:var(--aic-ca-subtle);padding:10px 12px;font-size:13px;overflow-wrap:anywhere}
+.aic-ca-confirm [tabindex="-1"]:focus{outline:none}
 @media (max-width:640px){.aic-ca-table thead{display:none}.aic-ca-table tr{display:block;border-top:1px solid var(--aic-ca-border);padding:6px 0}.aic-ca-table td{display:block;border:0;padding:4px 8px}}
 `;
 
+/** Set on :root by company-access.css: the product imported the static stylesheet. */
+const STYLESHEET_MARKER = '--aic-ca-stylesheet';
+
 let injected = false;
+
+/** Whether company-access.css is applied. Without getComputedStyle it counts as absent (inject, as before). */
+function staticStylesheetApplied(): boolean {
+  try {
+    return getComputedStyle(document.documentElement).getPropertyValue(STYLESHEET_MARKER).trim() !== '';
+  } catch {
+    return false;
+  }
+}
 
 export function injectCompanyAccessStyles(): void {
   if (injected || typeof document === 'undefined') return;
   injected = true;
+  if (staticStylesheetApplied()) return;
   const el = document.createElement('style');
   el.setAttribute('data-aicountly', 'company-access');
   el.textContent = CSS;

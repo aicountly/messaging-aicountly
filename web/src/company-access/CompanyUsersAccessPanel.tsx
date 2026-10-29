@@ -48,6 +48,9 @@ const OPS: Record<string, string> = {
   'workspace.member_exited': 'left the workspace',
   'workspace.member_removed': 'removed a workspace member',
   'workspace.renamed': 'renamed the workspace',
+  'workspace.member_moved': 'moved someone between the Workspace team and Company users',
+  'workspace.member_auto_enrolled': 'became a Company user by accepting a share',
+  'workspace.member_group_migrated': 'was sorted into the Workspace team or Company users',
 };
 
 function message(e: unknown, fallback: string): string {
@@ -58,8 +61,9 @@ function message(e: unknown, fallback: string): string {
  * Company Settings → Users & Access, native in every product, backed by the one central registry.
  *
  *  - The verified owner sees everyone with a relationship to the company, their access in THIS
- *    application, and grants, changes or revokes it here; reviews access requests; manages the
- *    workspace (who may discover the company); and reads the history.
+ *    application (through a share of this company, or through the Workspace team — v1.3.0), and
+ *    grants, changes or revokes it here; reviews access requests; manages the workspace (its team
+ *    and Company users); and reads the history.
  *  - Anyone else sees their own access and can ask for it. Only the owner can change sharing — an
  *    Admin cannot — and the server enforces that whatever this screen shows.
  */
@@ -141,21 +145,21 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
         <div>
           <h2 className="aic-ca-title">Users &amp; Access</h2>
           <p className="aic-ca-sub">
-            {companyName} · access in {appName}. Workspace members can see this company; only people granted access can open it.
+            {companyName} · access in {appName}. Your Workspace team opens this company with their team permissions; anyone else needs access shared or granted here.
           </p>
         </div>
         {isOwner && summary ? (
-          <label className="aic-ca-row aic-ca-meta" title="Workspace members see the company name and their own access status — never its data.">
+          <label className="aic-ca-row aic-ca-meta" title="Off: your Workspace team no longer opens this company. People it is shared with directly keep their access.">
             <input
               type="checkbox"
               checked={summary.workspace_visibility !== 'hidden'}
               disabled={busyKey === 'visibility'}
               onChange={(e) =>
                 void run('visibility', () => client.setVisibility(cmpId, e.target.checked ? 'discoverable' : 'hidden'),
-                  e.target.checked ? 'Workspace members can now see this company.' : 'This company is now hidden from workspace members who are not shared on it.')
+                  e.target.checked ? 'Your Workspace team opens this company again.' : 'Your Workspace team no longer opens this company, except people it is shared with directly.')
               }
             />
-            Visible to my workspace
+            Open to my Workspace team
           </label>
         ) : null}
       </div>
@@ -223,27 +227,37 @@ function OwnerPeople({ members, companyName, appName, roles, busyKey, run, clien
             const until = shortDate(mine?.expires_at);
             const status = m.app_access_status ?? (m.is_owner ? 'OWNER' : 'ACCESS_RESTRICTED');
             const granted = status === 'ACCESS_GRANTED';
+            // v1.3.0: access in this app through the Workspace team, not a grant here — nothing here to revoke.
+            const viaTeam = granted && m.app_access_via === 'workspace';
+            const teamToo = !viaTeam && (m.workspace_role_key ?? null) !== null;
             const others = m.app_scope === 'all'
               ? ['All applications']
               : entitlements.filter((e) => e.app_key !== appKey && e.state === 'active').map((e) => e.app_name);
+            const group = m.is_owner ? 'Owner' : m.legacy_co_owner ? 'Owner-level (legacy)'
+              : m.workspace_group === 'team' ? (m.relationship === 'workspace' ? 'Workspace team · no share of this company' : 'Workspace team')
+              : m.workspace_group === 'company_users' ? 'Company user'
+              : m.relationship === 'workspace' ? 'Workspace member' : 'Company member';
             const k = m.uuid;
             return (
               <tr key={m.uuid}>
                 <td>
                   <div className="aic-ca-name">{who(m)}</div>
                   <div className="aic-ca-meta">
-                    {m.is_owner ? 'Owner' : m.legacy_co_owner ? 'Owner-level (legacy)' : m.relationship === 'workspace' ? 'Workspace member' : 'Company member'}
+                    {group}
                     {m.email && m.name ? ` · ${m.email}` : ''}
                   </div>
                 </td>
                 <td>
                   <CompanyAccessBadge status={status} />
-                  {mine?.role_key ? <div className="aic-ca-meta">Role: {roleLabel(mine.role_key)}</div> : null}
-                  {until ? <div className="aic-ca-meta">Until {until}</div> : null}
+                  {viaTeam ? <div className="aic-ca-meta">Through the Workspace team{m.workspace_role_key ? ` · ${roleLabel(m.workspace_role_key)}` : ''}</div> : null}
+                  {!viaTeam && mine?.role_key ? <div className="aic-ca-meta">Role: {roleLabel(mine.role_key)}</div> : null}
+                  {until && !viaTeam ? <div className="aic-ca-meta">Until {until}</div> : null}
                 </td>
                 <td>{others.length ? others.map((o) => <span className="aic-ca-chip" key={o}>{o}</span>) : <span className="aic-ca-meta">—</span>}</td>
                 <td>
-                  {m.is_owner || m.legacy_co_owner ? null : granted ? (
+                  {m.is_owner || m.legacy_co_owner ? null : viaTeam ? (
+                    <span className="aic-ca-meta">Change it in the Workspace team&apos;s settings</span>
+                  ) : granted ? (
                     <div className="aic-ca-row">
                       {roles && roles.length > 0 ? (
                         <select
@@ -263,8 +277,12 @@ function OwnerPeople({ members, companyName, appName, roles, busyKey, run, clien
                         className="aic-ca-btn aic-ca-btn-sm aic-ca-btn-danger"
                         disabled={busyKey === k}
                         onClick={() => {
-                          if (window.confirm(`Revoke ${who(m)}'s access to ${companyName} in ${appName}? Their other applications are not affected.`)) {
-                            void run(k, () => client.revoke(cmpId, `${m.uuid}:${appKey}`), `${who(m)} can no longer open this company in ${appName}.`);
+                          const ask = teamToo
+                            ? `Revoke the access to ${companyName} in ${appName} granted to ${who(m)} here? They are on your Workspace team, so they keep ${appName} on ${companyName} through the team (${roleLabel(m.workspace_role_key)}) — change that in the team's settings. Their other applications are not affected.`
+                            : `Revoke ${who(m)}'s access to ${companyName} in ${appName}? Their other applications are not affected.`;
+                          if (window.confirm(ask)) {
+                            void run(k, () => client.revoke(cmpId, `${m.uuid}:${appKey}`),
+                              teamToo ? `The grant here was revoked; ${who(m)} still opens this company in ${appName} through the Workspace team.` : `${who(m)} can no longer open this company in ${appName}.`);
                           }
                         }}
                       >
@@ -309,8 +327,9 @@ function OwnerPeople({ members, companyName, appName, roles, busyKey, run, clien
         </tbody>
       </table>
       <p className="aic-ca-meta">
-        To add someone who is not listed, invite them to your workspace on the Workspace tab, then grant them access here.
-        Access in each application is separate: granting {appName} gives nothing in any other application.
+        Your Workspace team and Company users are listed here. To add someone else, share the company with them (they become a
+        Company user) or invite them to your Workspace team on the Workspace tab. Access in each application is separate:
+        granting {appName} gives nothing in any other application.
       </p>
     </div>
   );
