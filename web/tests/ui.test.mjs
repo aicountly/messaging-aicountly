@@ -420,6 +420,21 @@ test('the company registry client sends Manage only the ses_key', () => {
   assert.ok(!/fetchImpl|service|secret/i.test(wiring.replace(/\/\*[\s\S]*?\*\//g, '')), 'and no other credential is configured')
 })
 
+test('the shared company-access styles are imported once, by the entry, after the product stylesheet', () => {
+  // company-access 1.3.1+: while company-access.css is applied (its :root marker), Users & Access, the
+  // company directory and the restricted-company dialog inject no <style> element — which a
+  // Content-Security-Policy without 'unsafe-inline' refuses. The bundler serves it as a same-origin file.
+  const entry = read('main.tsx')
+  const own = entry.indexOf("import './index.css'")
+  const shared = entry.indexOf("import './company-access/company-access.css'")
+  assert.ok(own >= 0, 'the entry imports the product stylesheet')
+  assert.ok(shared > own, 'and the company-access stylesheet after it')
+  const importers = sourceFiles().filter((file) => /^import ['"][^'"]*company-access\.css['"]/m.test(readFileSync(file, 'utf8')))
+  assert.deepEqual(importers.map((file) => file.slice(src.length + 1)), ['main.tsx'], 'imported nowhere else')
+  assert.ok(read('company-access', 'company-access.css').includes(':root{--aic-ca-stylesheet:1}'),
+    'and it is the package stylesheet, with the marker styles.ts looks for')
+})
+
 // ---------------------------------------------------------------------------
 // The API client's promises
 // ---------------------------------------------------------------------------

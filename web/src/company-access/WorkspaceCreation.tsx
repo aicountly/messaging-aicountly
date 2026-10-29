@@ -163,10 +163,10 @@ export interface WorkspaceMemberSettingsFormProps {
 }
 
 /**
- * What one member may do in the owner's workspace (CONTRACTS §1): create companies (you will own
- * them; your plan applies), how many, which roles they may give themselves on companies they
- * create, and access to every company of the workspace. Nothing ticked = they only see company
- * names (discovery).
+ * What one Workspace team member may do in the owner's workspace (CONTRACTS §1; v1.3.0): their app
+ * permissions on every company of the workspace, and whether they may create companies there (you
+ * will own them; your plan applies), how many, and which roles they may give themselves on those.
+ * Nothing chosen = they open every company in Manage, and in no application yet.
  */
 export function WorkspaceMemberSettingsForm({ value, onChange, appRoles, disabled }: WorkspaceMemberSettingsFormProps) {
   injectCompanyAccessStyles();
@@ -237,8 +237,8 @@ export function WorkspaceMemberSettingsForm({ value, onChange, appRoles, disable
       ) : null}
       <div className="aic-ca-stack">
         <div>
-          <span className="aic-ca-name">Access to every company in your workspace</span>
-          <span className="aic-ca-meta" style={{ display: 'block' }}>Applies to all your companies (except ones you hide), now and later. Ends at once if they leave or you remove them.</span>
+          <span className="aic-ca-name">App permissions on every company in your workspace</span>
+          <span className="aic-ca-meta" style={{ display: 'block' }}>Applies to all your companies (except ones you hide), now and later. Ends at once if they leave, you move them to Company users or you remove them.</span>
         </div>
         {apps.map((app) => (
           <label key={app} className="aic-ca-row">
@@ -262,14 +262,14 @@ export function WorkspaceMemberSettingsForm({ value, onChange, appRoles, disable
   );
 }
 
-/** A one-line summary of a member's settings, for lists. */
+/** A one-line summary of a Workspace team member's settings, for lists (v1.3.0: they open every company). */
 export function workspaceSettingsSummary(s: WorkspaceSettings | null | undefined): string {
   if (!s) return '';
   const parts: string[] = [];
+  const wide = Object.entries(s.all_companies_access ?? {});
+  parts.push(wide.length > 0 ? `every company in ${wide.map(([a]) => appLabel(a)).join(', ')}` : 'every company in Manage only (no app permissions yet)');
   if (s.can_create_companies) {
     parts.push(s.max_companies_created != null ? `may create up to ${s.max_companies_created} compan${s.max_companies_created === 1 ? 'y' : 'ies'}` : 'may create companies');
   }
-  const wide = Object.entries(s.all_companies_access ?? {});
-  if (wide.length > 0) parts.push(`access to every company in ${wide.map(([a]) => appLabel(a)).join(', ')}`);
-  return parts.length > 0 ? parts.join(' · ') : 'sees company names only';
+  return parts.join(' · ');
 }
