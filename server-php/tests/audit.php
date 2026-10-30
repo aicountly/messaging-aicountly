@@ -338,6 +338,20 @@ check('the trail is scoped to the caller\'s company', static function () use ($r
     assertSame(0, call($router, 'GET', 'v1/audit/entity/settings/other-company')['body']['meta']['total'], 'nor through the entity history');
 });
 
+check('another company\'s template id is 404 on provider-status: nothing recorded, no audit row', static function () use ($router, $owner): void {
+    $other = Context::forCompany(OTHER_CMP);
+    $saved = Domain\TemplateService::save($other, $owner, ['name' => 'other_company_tpl', 'channel' => 'sms', 'language' => 'en',
+        'category' => 'utility', 'body' => 'Hello {{1}}', 'variable_schema' => [['name' => '1', 'type' => 'text']]]);
+    assertTrue($saved['ok'] === true, 'a template exists in the other company');
+    $uuid = (string) $saved['template_uuid'];
+
+    $answer = call($router, 'POST', 'v1/templates/' . $uuid . '/provider-status', [], ['version' => 1, 'language' => 'en', 'provider_status' => 'approved']);
+    assertSame(404, $answer['status'], 'not found in the caller\'s company');
+    assertSame([], array_values(array_filter(rows('template.provider_status_recorded'), static fn (array $r) => $r['entity_id'] === $uuid)), 'no audit row names it');
+    assertSame('not_submitted', (string) Db::scalar('SELECT provider_status FROM messaging_template_versions WHERE template_uuid = :u', ['u' => $uuid]), 'its status is unchanged');
+    Db::run('DELETE FROM messaging_templates WHERE template_uuid = :u', ['u' => $uuid]);
+});
+
 check('CSV export: formula-safe cells, cap flag, audited', static function () use ($router, $ctx, $owner): void {
     Audit::record($ctx, $owner, 'journey.saved', 'journey', 'j-1', null, ['name' => '=HYPERLINK("http://x","y")']);
     $export = call($router, 'GET', 'v1/audit/export', ['entity_type' => 'journey']);
