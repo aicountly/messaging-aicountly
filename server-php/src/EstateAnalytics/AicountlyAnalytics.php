@@ -238,8 +238,11 @@ final class Analytics
             $name = (string) $e['event'];
             unset($e['event']);
             // $common wins: it carries the identity the backend verified, which a browser payload
-            // must never be able to override.
-            if ($this->track($name, $e + $common) !== null) {
+            // must never be able to override. The operand order is the whole of that guarantee —
+            // PHP's `+` keeps the LEFT array's keys, so `$common + $e` lets the verified
+            // company_id, user_uuid and user_kind stand and `$e + $common` would let the browser
+            // forge all three. Covered by trackManyTest.php.
+            if ($this->track($name, $common + $e) !== null) {
                 $n++;
             }
         }

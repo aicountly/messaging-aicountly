@@ -128,6 +128,7 @@ class AicountlyAnalytics {
     this.enabled = false
     this.lastPagePath = null
     this.pageEnteredAt = 0
+    this.auth = null
   }
 
   /**
@@ -138,12 +139,20 @@ class AicountlyAnalytics {
    * @param {() => boolean} [o.consent] gate for surfaces that need one (the public site).
    *                                    Signed-in product telemetry is first-party service data
    *                                    and does not pass a gate here; see docs/05.
+   * @param {() => (Record<string,string>|null)} [o.auth]
+   *   Request headers carrying the caller's identity, for a backend that authenticates by header
+   *   rather than by cookie — most of the estate sends `Authorization: Bearer <session key>`.
+   *   Called at flush time, not at init, so a token refreshed mid-session is picked up. Return
+   *   null or {} when there is no session: the collect endpoint then records nothing, which is
+   *   the intended behaviour for a signed-out browser. Omit entirely for a cookie-session
+   *   surface, where `credentials: 'same-origin'` already carries the identity.
    */
   init(o = {}) {
     if (this.started) return
     this.app = String(o.app || '')
     this.endpoint = o.endpoint || this.endpoint
     this.consent = typeof o.consent === 'function' ? o.consent : null
+    this.auth = typeof o.auth === 'function' ? o.auth : null
     this.enabled = o.enabled !== undefined
       ? !!o.enabled
       : !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)
@@ -223,22 +232,42 @@ class AicountlyAnalytics {
   exported(format) { this.track('export.generated', { format: String(format).slice(0, 16) }) }
 
   /**
-   * Send what is queued. On unload uses sendBeacon, which the browser delivers after the page is
-   * gone — a normal fetch would be cancelled and the events lost.
+   * Send what is queued.
+   *
+   * On unload a cookie-authenticated send uses sendBeacon, which the browser delivers after the
+   * page is gone where a normal fetch would be cancelled and the events lost. A
+   * header-authenticated send cannot: sendBeacon carries no request headers, so the batch would
+   * arrive without the Authorization header, be treated as signed out, and record nothing — the
+   * failure would be silent on both sides. Those surfaces use `fetch(keepalive: true)` instead,
+   * which survives unload and does carry headers. `session.ended` is the event this decides,
+   * since it is only ever sent on unload.
    */
   flush(isUnload = false) {
     if (!this.queue.length) return
     const batch = this.queue.splice(0, this.queue.length)
     const body = JSON.stringify({ events: batch })
 
+    let authHeaders = null
+    if (this.auth) {
+      try {
+        const h = this.auth()
+        if (h && typeof h === 'object' && Object.keys(h).length > 0) authHeaders = h
+      } catch {
+        // A throwing auth hook must not stop the page unloading.
+      }
+      // A header-authenticated surface with no session right now: nothing can be attributed, so
+      // the batch is dropped rather than sent to be ignored.
+      if (!authHeaders) return
+    }
+
     try {
-      if (isUnload && navigator.sendBeacon) {
+      if (isUnload && !authHeaders && navigator.sendBeacon) {
         navigator.sendBeacon(this.endpoint, new Blob([body], { type: 'application/json' }))
         return
       }
       fetch(this.endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(authHeaders || {}) },
         body,
         credentials: 'same-origin',
         keepalive: true,
