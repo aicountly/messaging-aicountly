@@ -129,6 +129,7 @@ class AicountlyAnalytics {
     this.lastPagePath = null
     this.pageEnteredAt = 0
     this.auth = null
+    this.context = null
   }
 
   /**
@@ -139,6 +140,13 @@ class AicountlyAnalytics {
    * @param {() => boolean} [o.consent] gate for surfaces that need one (the public site).
    *                                    Signed-in product telemetry is first-party service data
    *                                    and does not pass a gate here; see docs/05.
+   * @param {() => (Record<string,unknown>|null)} [o.context]
+   *   Extra fields for the POST envelope, beside `events` — not for the events themselves. Some
+   *   backends need the request to name the company it is for (the `Aicountly\Api` products read
+   *   `cmp_id` / `fy_id` from the query string or the body and then verify them against Manage,
+   *   the same way every other endpoint does). Called at flush time, so switching company mid
+   *   session is picked up. These are claims the backend verifies, never an identity it trusts:
+   *   `events` cannot be overridden from here.
    * @param {() => (Record<string,string>|null)} [o.auth]
    *   Request headers carrying the caller's identity, for a backend that authenticates by header
    *   rather than by cookie — most of the estate sends `Authorization: Bearer <session key>`.
@@ -153,6 +161,7 @@ class AicountlyAnalytics {
     this.endpoint = o.endpoint || this.endpoint
     this.consent = typeof o.consent === 'function' ? o.consent : null
     this.auth = typeof o.auth === 'function' ? o.auth : null
+    this.context = typeof o.context === 'function' ? o.context : null
     this.enabled = o.enabled !== undefined
       ? !!o.enabled
       : !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)
@@ -245,7 +254,19 @@ class AicountlyAnalytics {
   flush(isUnload = false) {
     if (!this.queue.length) return
     const batch = this.queue.splice(0, this.queue.length)
-    const body = JSON.stringify({ events: batch })
+
+    let envelope = {}
+    if (this.context) {
+      try {
+        const c = this.context()
+        if (c && typeof c === 'object') envelope = { ...c }
+      } catch {
+        // A throwing context hook must not stop the page unloading.
+      }
+      // `events` is ours. A context hook cannot replace the batch.
+      delete envelope.events
+    }
+    const body = JSON.stringify({ ...envelope, events: batch })
 
     let authHeaders = null
     if (this.auth) {
