@@ -236,6 +236,14 @@ final class ChannelsController extends Controller
 
         $refreshed = ChannelConnection::find($ctx->cmpId, $uuid);
 
+        // Estate analytics: Messaging's activation event. A connected channel is the first
+        // moment the product can do anything for this company. The channel and provider are
+        // kept; no credential, no number, no webhook URL.
+        EstateAnalytics::forContext($ctx, $auth, 'messaging_channel.connected', [
+            'properties'      => ['channel' => $channel, 'provider' => $provider],
+            'idempotency_key' => 'messaging:channel:' . $uuid,
+        ]);
+
         Http::data([
             'connection' => $refreshed?->toPublicArray(),
             'configuration_gap' => $refreshed !== null ? $adapter->configurationGap($refreshed) : null,

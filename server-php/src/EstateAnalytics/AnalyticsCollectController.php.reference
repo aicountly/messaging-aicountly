@@ -1,0 +1,116 @@
+<?php
+declare(strict_types=1);
+
+/*
+ * Reference collect endpoint — the browser's only destination.
+ *
+ * COPY AND ADAPT: unlike AicountlyAnalytics.php, this file has one product-specific line, marked
+ * CUSTOMISE below: how this product gets the current session. Everything else is the same
+ * everywhere and should not be changed.
+ *
+ * Mount it at:  POST /api/v1/analytics/collect   (same origin as the SPA)
+ *
+ * Why this exists at all, rather than letting the browser post straight to analytics.aicountly.org:
+ * the browser must never be trusted with an identity. Here the backend already knows, from the
+ * session it validated, exactly which company and user is acting — so it attaches those itself
+ * and the payload cannot lie about them. There is no public write key and no cross-origin
+ * collector, which removes a whole class of abuse rather than mitigating it.
+ */
+
+require_once __DIR__ . '/AicountlyAnalytics.php';
+
+use Aicountly\Analytics\Analytics;
+
+final class AnalyticsCollectController
+{
+    private const MAX_EVENTS = 50;
+
+    public function collect(): void
+    {
+        // Always answer 204 and answer fast. Analytics is never a reason for a user to wait, and
+        // never a reason for a screen to show an error.
+        $respond = static function (int $status = 204): void {
+            http_response_code($status);
+            header('Cache-Control: no-store');
+            if (function_exists('fastcgi_finish_request')) {
+                @fastcgi_finish_request();
+            }
+        };
+
+        try {
+            // Cookie-authenticated write: a browser Origin, when sent, must be this host.
+            $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
+            if ($origin !== '') {
+                $host = strtolower((string) parse_url($origin, PHP_URL_HOST));
+                $port = parse_url($origin, PHP_URL_PORT);
+                $originHost = $port ? "{$host}:{$port}" : $host;
+                if ($originHost !== strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''))) {
+                    $respond(403);
+
+                    return;
+                }
+            }
+
+            $raw = (string) file_get_contents('php://input');
+            if (strlen($raw) > 256 * 1024) {
+                $respond(413);
+
+                return;
+            }
+            $body = json_decode($raw, true);
+            $events = is_array($body) ? ($body['events'] ?? null) : null;
+            if (!is_array($events) || $events === [] || !array_is_list($events)) {
+                $respond(400);
+
+                return;
+            }
+            $events = array_slice($events, 0, self::MAX_EVENTS);
+
+            // ── CUSTOMISE: the one product-specific line ────────────────────────────────
+            // Replace with this product's own session accessor. It must return the identity the
+            // backend has ALREADY VERIFIED — never anything read from the request body.
+            //   CI4       : $s = session(); $companyId = $s->get('cmp_id'); $userUuid = $s->get('user_uuid');
+            //   plain PHP : $session = SessionAuth::current();
+            $session = $this->currentSession();
+            // ────────────────────────────────────────────────────────────────────────────
+
+            if ($session === null) {
+                // Not signed in: nothing to attribute, so nothing is recorded. A signed-out
+                // browser cannot create analytics rows.
+                $respond(204);
+
+                return;
+            }
+
+            $verified = array_filter([
+                'company_id' => $session['company_id'] ?? null,
+                'branch_id'  => $session['branch_id'] ?? null,
+                'user_uuid'  => $session['user_uuid'] ?? null,
+                // AICOUNTLY staff opening a customer workspace must never look like that customer
+                // using the product. Every report excludes 'staff' by default.
+                'user_kind'  => ($session['is_staff'] ?? false) ? 'staff' : 'customer',
+            ], static fn ($v) => $v !== null);
+
+            // $verified is passed as the common fields, which win over anything in the payload.
+            Analytics::shared()->trackMany($events, $verified + ['origin_surface' => 'web']);
+
+            $respond(204);
+        } catch (\Throwable $e) {
+            error_log('[aicountly-analytics] collect failed: ' . $e->getMessage());
+            $respond(204); // never surface an analytics failure to a user
+        }
+    }
+
+    /**
+     * CUSTOMISE. Must return ['company_id'=>?int,'branch_id'=>?int,'user_uuid'=>?string,
+     * 'is_staff'=>bool] from the session this product has already validated, or null.
+     *
+     * @return array<string,mixed>|null
+     */
+    private function currentSession(): ?array
+    {
+        throw new \LogicException(
+            'AnalyticsCollectController::currentSession() must be implemented for this product.'
+        );
+    }
+}
