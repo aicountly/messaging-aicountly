@@ -213,6 +213,15 @@ final class MessagesController extends Controller
 
         $final = MessageService::find($ctx, $messageUuid);
 
+        // Estate analytics: Messaging's recurring outcome, and only when the provider ACCEPTED
+        // it. A message that failed at dispatch is not value delivered, and counting it would
+        // make a broken channel look like a busy one. No recipient, no body, no template.
+        if (($outcome['outcome'] ?? '') === 'accepted') {
+            EstateAnalytics::forContext($ctx, $auth, 'messaging_message.sent', [
+                'idempotency_key' => 'messaging:sent:' . $messageUuid,
+            ]);
+        }
+
         Http::data([
             'message'  => $final !== null ? MessageService::shape($final) : null,
             'outcome'  => $outcome['outcome'],
