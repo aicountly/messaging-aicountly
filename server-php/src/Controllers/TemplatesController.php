@@ -123,6 +123,12 @@ final class TemplatesController extends Controller
             Http::validationFailed('version and provider_status are required.');
         }
 
+        // Only this company's template: an id from another company changes nothing there, and must
+        // not be answered "recorded" or leave an audit row here naming it.
+        if (TemplateService::find($ctx, $templateUuid) === null) {
+            Http::notFound('That template could not be found.');
+        }
+
         TemplateService::recordProviderStatus(
             $ctx,
             $templateUuid,

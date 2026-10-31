@@ -14,6 +14,7 @@ use Aicountly\Api\Domain\DispatchService;
 use Aicountly\Api\Domain\MessageService;
 use Aicountly\Api\Domain\MessageState;
 use Aicountly\Api\Domain\TemplateService;
+use Aicountly\Api\EstateAnalytics;
 use Aicountly\Api\Http;
 use Aicountly\Api\Permissions;
 use Aicountly\Api\PlanEntitlements;

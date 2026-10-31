@@ -70,6 +70,13 @@ ENVEOF
 # database and no network, so it runs first and fails fast.
 php "$ROOT/tests/pulse.php"
 
+# Every class a file in src/ names exists — a missing `use` is not a lint error, it is a 500 on
+# the one path that reaches it. No database, no network.
+php "$ROOT/tests/class_references.php"
+
+# Every variable the server reads is listed in server-php/.env.example. No database, no network.
+php "$ROOT/tests/env_example.php"
+
 php "$ROOT/bin/migrate.php" > /dev/null
 
 # Re-run the migrations to prove they are idempotent. A migration that only

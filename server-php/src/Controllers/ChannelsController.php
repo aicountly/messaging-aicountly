@@ -15,6 +15,7 @@ use Aicountly\Api\Domain\DispatchService;
 use Aicountly\Api\Domain\Settings;
 use Aicountly\Api\Domain\WebhookService;
 use Aicountly\Api\Env;
+use Aicountly\Api\EstateAnalytics;
 use Aicountly\Api\Features;
 use Aicountly\Api\Http;
 use Aicountly\Api\Permissions;
