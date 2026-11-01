@@ -1,3 +1,73 @@
+# --- Maintenance mode -----------------------------------------------------
+# CANONICAL COPY: console-react-app/ops/estate/kit/web/maintenance.htaccess
+# Installed by ops/estate/install-maintenance.py. COPY, DON'T EDIT.
+#
+# Switched by the PRESENCE OF A FILE, not by .env, and deliberately so: this has to work at the
+# moment the app does not. Mid-migration PHP is being reinstalled, the database is gone and .env may
+# not have been written yet — anything that needed PHP to read a variable would fail exactly when the
+# page is wanted. A file Apache can stat needs nothing but Apache.
+#
+#   on   : touch <docroot>/.maintenance
+#   off  : rm -f <docroot>/.maintenance
+#
+# scripts/ops/maintenance.sh does both, plus the .maintenance.json notice the page reads.
+#
+# This block MUST sit above the SPA history fallback. The fallback sends anything that is not a real
+# file to index.html; if it ran first the app shell would be served and the user would get a broken
+# app instead of this page.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # The page itself, and the notice file it reads, must stay reachable while maintenance is on —
+  # otherwise the rewrite would send the maintenance page to the maintenance page.
+  RewriteCond %{REQUEST_URI} ^/(maintenance\.html|\.maintenance\.json)$
+  RewriteRule ^ - [L]
+
+  # Let's Encrypt and the rest of /.well-known keep working, so certificates can still be renewed
+  # while the site is down. A migration is exactly when a renewal is likely to fall due.
+  RewriteCond %{REQUEST_URI} ^/\.well-known/
+  RewriteRule ^ - [L]
+
+  # Operator bypass. Put one IP per line in <docroot>/.maintenance-allow and those addresses get the
+  # real site while everyone else gets the page — so the release can be verified before the switch
+  # is turned off, rather than after.
+  RewriteCond %{DOCUMENT_ROOT}/.maintenance-allow -f
+  RewriteCond %{DOCUMENT_ROOT}/.maintenance-allow %{REMOTE_ADDR} [NC]
+  RewriteRule ^ - [L]
+
+  # Everything else, while the flag file exists: 503 with the page as the body.
+  # 503 (not 200, not 302) is load-bearing. A 200 tells a crawler this IS the page for every URL on
+  # the site; Google then deindexes the real content. 503 says "temporarily unavailable, come back",
+  # and Retry-After below says when.
+  RewriteCond %{DOCUMENT_ROOT}/.maintenance -f
+  RewriteRule ^ /maintenance.html [R=503,L]
+</IfModule>
+
+<IfModule mod_headers.c>
+  # Retry-After on the 503 (one hour). Crawlers honour it; so do some clients.
+  <If "-f '%{DOCUMENT_ROOT}/.maintenance'">
+    Header always set Retry-After "3600"
+    Header always set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+  </If>
+
+  # The notice file is read cross-origin by OTHER products' maintenance pages, which is how a
+  # product can show that the service it depends on is the one that is down. Without this header the
+  # browser blocks the read and every linked service reads "Unreachable" whatever its real state.
+  <FilesMatch "^\.maintenance\.json$">
+    Header always set Access-Control-Allow-Origin "*"
+    Header always set Cache-Control "no-store"
+  </FilesMatch>
+</IfModule>
+
+# The flag and allow files are operator state, never content. Serving .maintenance would leak the
+# reason text to anyone who asked for it by name.
+<FilesMatch "^\.maintenance(-allow)?$">
+  Require all denied
+</FilesMatch>
+
+ErrorDocument 503 /maintenance.html
+# --- end Maintenance mode -------------------------------------------------
+
 # ---------------------------------------------------------------------------
 # Apache config for the built SPA on cPanel.
 # Vite copies everything in public/ into dist/, so this ships with the build.

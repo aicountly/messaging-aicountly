@@ -1,0 +1,375 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Messaging — scheduled maintenance</title>
+<meta name="description" content="Messaging is temporarily unavailable for scheduled maintenance.">
+<!--
+  CANONICAL COPY: console-react-app/ops/estate/kit/web/maintenance.html
+  Installed per product by ops/estate/install-maintenance.py, which fills in the per-product values.
+  COPY, DON'T EDIT: change the canonical file and re-run the installer.
+
+  Deliberately a single self-contained file: no stylesheet, no font, no image, no script from
+  anywhere. This page is served exactly when the origin is broken — mid-migration, PHP reinstalling,
+  database gone — so anything it had to fetch from itself would be the thing that is down, and a
+  maintenance page that renders half-styled is worse than none. Everything below is inline.
+
+  It is served with HTTP 503 and Retry-After (see the .htaccess block) so search engines treat the
+  outage as temporary and do not deindex the site.
+-->
+<style>
+  :root {
+    --accent: 29 81 130;
+    --bg: 252 252 253;
+    --surface: 255 255 255;
+    --ink: 17 24 32;
+    --ink-soft: 92 103 115;
+    --ink-faint: 136 146 158;
+    --line: 226 230 235;
+    --ok: 22 128 84;
+    --warn: 176 104 4;
+    --down: 185 48 58;
+    --radius: 18px;
+    --shadow: 0 1px 2px rgb(16 24 40 / .04), 0 12px 32px -12px rgb(16 24 40 / .12);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: 11 14 18;
+      --surface: 19 24 30;
+      --ink: 237 241 245;
+      --ink-soft: 158 169 180;
+      --ink-faint: 120 131 143;
+      --line: 38 46 55;
+      --ok: 93 200 143;
+      --warn: 233 179 76;
+      --down: 247 136 144;
+      --shadow: 0 1px 2px rgb(0 0 0 / .4), 0 16px 40px -16px rgb(0 0 0 / .7);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 16px;
+    background: rgb(var(--bg));
+    /* A faint wash of the product's own accent, so each product's page is recognisably its own. */
+    background-image:
+      radial-gradient(1100px 520px at 50% -12%, rgb(var(--accent) / .10), transparent 70%),
+      radial-gradient(760px 420px at 12% 108%, rgb(var(--accent) / .055), transparent 72%);
+    background-repeat: no-repeat;
+    color: rgb(var(--ink));
+    font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .card {
+    width: 100%;
+    max-width: 620px;
+    background: rgb(var(--surface));
+    border: 1px solid rgb(var(--line));
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 40px 36px 32px;
+  }
+  @media (max-width: 480px) { .card { padding: 30px 22px 24px; border-radius: 14px; } }
+
+  .brand { display: flex; align-items: center; gap: 11px; margin-bottom: 30px; }
+  .mark {
+    width: 34px; height: 34px; flex: none;
+    border-radius: 9px;
+    background: linear-gradient(145deg, rgb(var(--accent)), rgb(var(--accent) / .72));
+    display: grid; place-items: center;
+    color: #fff; font-weight: 700; font-size: 15px; letter-spacing: .02em;
+    box-shadow: 0 1px 2px rgb(16 24 40 / .18);
+  }
+  .brand-text { display: flex; flex-direction: column; line-height: 1.25; min-width: 0; }
+  .brand-name { font-weight: 650; font-size: 15px; letter-spacing: -.005em; }
+  .brand-host { font-size: 12.5px; color: rgb(var(--ink-faint)); font-variant-numeric: tabular-nums; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 12px 5px 10px;
+    border-radius: 999px;
+    background: rgb(var(--warn) / .11);
+    color: rgb(var(--warn));
+    border: 1px solid rgb(var(--warn) / .22);
+    font-size: 12.5px; font-weight: 600; letter-spacing: .01em;
+    margin-bottom: 18px;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+  .dot::after {
+    content: ""; display: block; width: 7px; height: 7px; border-radius: 50%;
+    background: currentColor; animation: pulse 2.4s ease-out infinite;
+  }
+  @keyframes pulse {
+    0%   { transform: scale(1);   opacity: .85; }
+    70%  { transform: scale(3.4); opacity: 0; }
+    100% { transform: scale(3.4); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { .dot::after { animation: none; } }
+
+  h1 {
+    margin: 0 0 12px;
+    font-size: clamp(25px, 5.4vw, 31px);
+    line-height: 1.22;
+    letter-spacing: -.021em;
+    font-weight: 660;
+  }
+  .lede { margin: 0; color: rgb(var(--ink-soft)); font-size: 16px; }
+  .lede strong { color: rgb(var(--ink)); font-weight: 600; }
+
+  .meta {
+    margin: 26px 0 0;
+    border-top: 1px solid rgb(var(--line));
+    padding-top: 18px;
+    display: grid; gap: 12px;
+  }
+  .row { display: flex; gap: 14px; align-items: baseline; font-size: 14.5px; }
+  .row dt { flex: none; width: 128px; color: rgb(var(--ink-faint)); font-weight: 500; }
+  .row dd { margin: 0; color: rgb(var(--ink)); }
+
+  .linked { margin-top: 26px; border-top: 1px solid rgb(var(--line)); padding-top: 20px; }
+  .linked h2 {
+    margin: 0 0 4px; font-size: 13px; font-weight: 650;
+    letter-spacing: .055em; text-transform: uppercase; color: rgb(var(--ink-faint));
+  }
+  .linked p.hint { margin: 0 0 14px; font-size: 13.5px; color: rgb(var(--ink-soft)); }
+  ul.svc { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+  ul.svc li {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 13px;
+    border: 1px solid rgb(var(--line));
+    border-radius: 11px;
+    background: rgb(var(--bg) / .55);
+    font-size: 14px;
+  }
+  .svc-id { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; line-height: 1.35; }
+  .svc-name { font-weight: 570; }
+  .svc-host { font-size: 12.5px; color: rgb(var(--ink-faint)); overflow-wrap: anywhere; }
+  .chip {
+    flex: none; display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+    background: rgb(var(--ink-faint) / .13); color: rgb(var(--ink-soft));
+  }
+  .chip i { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+  .chip.is-ok   { background: rgb(var(--ok) / .13);   color: rgb(var(--ok)); }
+  .chip.is-main { background: rgb(var(--warn) / .14); color: rgb(var(--warn)); }
+  .chip.is-down { background: rgb(var(--down) / .13); color: rgb(var(--down)); }
+
+  footer {
+    margin-top: 28px; padding-top: 18px;
+    border-top: 1px solid rgb(var(--line));
+    display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center;
+    font-size: 13.5px; color: rgb(var(--ink-faint));
+  }
+  footer a { color: rgb(var(--accent)); text-decoration: none; font-weight: 550; }
+  footer a:hover, footer a:focus-visible { text-decoration: underline; }
+  @media (prefers-color-scheme: dark) { footer a { color: rgb(var(--accent) / 1); filter: brightness(1.45); } }
+  .spacer { margin-left: auto; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+</style>
+</head>
+<body>
+<main class="card" role="main">
+
+  <div class="brand">
+    <div class="mark" aria-hidden="true">ME</div>
+    <div class="brand-text">
+      <span class="brand-name">Messaging</span>
+      <span class="brand-host">messaging.aicountly.com</span>
+    </div>
+  </div>
+
+  <span class="pill"><span class="dot" aria-hidden="true"></span><span id="state">Under maintenance</span></span>
+
+  <h1 id="headline">We&rsquo;re carrying out scheduled maintenance</h1>
+  <p class="lede" id="lede">
+    <strong>Messaging</strong> is temporarily unavailable while we complete planned work.
+    Nothing you have saved is affected, and the service will return on its own &mdash; no action is needed from you.
+  </p>
+
+  <dl class="meta">
+    <div class="row"><dt>Status</dt><dd id="m-status">Planned maintenance in progress</dd></div>
+    <!-- Hidden until the notice file supplies a start time. The flag can also be set with a bare
+         `touch`, and an em-dash under "Started" reads as a page that failed to load rather than as
+         a page with nothing to say. -->
+    <div class="row" id="row-started" hidden><dt>Started</dt><dd id="m-started"></dd></div>
+    <div class="row"><dt>Expected back</dt><dd id="m-until">We will restore service as soon as the work is verified</dd></div>
+  </dl>
+
+  <!--
+    Linked services. The list is this product's own declared receivers (scripts/ops/receivers.txt,
+    the same list the deploy preflight uses), stamped in at install time so it is correct even with
+    no network. The status chip beside each is resolved live where possible; see the script below.
+  -->
+  <section class="linked" id="upstream" hidden>
+    <h2>Depends on</h2>
+    <p class="hint">Messaging relies on these services. Work on any of them affects it.</p>
+    <ul class="svc" id="up-list"></ul>
+  </section>
+
+  <!--
+    The other direction, and the one that matters when a hub product is taken down: everything that
+    depends on THIS service. Manage is a receiver for seven products, Smart Books for five — pausing
+    either degrades all of them, and without this list the only place that fact is written down is a
+    deploy preflight nobody reads during an outage.
+  -->
+  <section class="linked" id="downstream" hidden>
+    <h2>Services affected by this maintenance</h2>
+    <p class="hint">These depend on Messaging and may be degraded or unavailable until it is back.</p>
+    <ul class="svc" id="down-list"></ul>
+  </section>
+
+  <p class="sr" id="svc-live" aria-live="polite"></p>
+
+  <footer>
+    <span>Thank you for your patience.</span>
+    <span class="spacer"></span>
+    <a href="https://aicountly.com/support" rel="noreferrer">Contact support</a>
+  </footer>
+
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  // Both stamped at install time. UPSTREAM is this product's own receivers.txt; DOWNSTREAM is the
+  // reverse of every product's receivers.txt, i.e. who breaks when this one is paused.
+  var UPSTREAM   = [];
+  var DOWNSTREAM = [];
+
+  var fmt = function (iso) {
+    if (!iso) return null;
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return null;
+    try {
+      return d.toLocaleString(undefined, {
+        day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short"
+      });
+    } catch (e) { return d.toUTCString(); }
+  };
+
+  var text = function (id, value) {
+    var el = document.getElementById(id);
+    if (el && value) el.textContent = value;
+  };
+
+  // ---- This site's own notice -------------------------------------------------------------
+  // /.maintenance.json is written by scripts/ops/maintenance.sh when maintenance is switched on.
+  // It is optional: with no file, the baked-in copy above stands, which is why this page is still
+  // correct with JavaScript disabled or the file missing.
+  fetch("/.maintenance.json", { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (j) {
+      if (!j) return;
+      if (j.headline) text("headline", j.headline);
+      if (j.reason)   text("m-status", j.reason);
+      if (j.started) {
+        text("m-started", fmt(j.started) || j.started);
+        document.getElementById("row-started").hidden = false;
+      }
+      if (j.until)    text("m-until", fmt(j.until) || j.until);
+      // `because` names the upstream service that caused this one to be taken down, so a product
+      // pulled only because its dependency is down says so rather than implying its own fault.
+      if (j.because) {
+        text("state", "Affected by an upstream service");
+        // The headline has to move with the pill. Leaving "We're carrying out scheduled
+        // maintenance" above a paragraph saying another service caused it contradicts itself, and
+        // the headline is the part people read.
+        text("headline", j.because + " is down, so " + "Messaging" + " is paused");
+        text("lede", "Messaging is unavailable because " + j.because +
+                     " is undergoing maintenance. This service depends on it, so it has been paused" +
+                     " until that work finishes. Nothing you have saved is affected.");
+      }
+    })
+    .catch(function () { /* offline or blocked: the baked-in copy stands */ });
+
+  // ---- Linked services, with live status where we can get it ------------------------------
+  var render = function (services, listId, sectionId) {
+    if (!services.length) return [];
+    var list = document.getElementById(listId);
+    var made = services.map(function (svc) {
+    var li = document.createElement("li");
+
+    var id = document.createElement("span");
+    id.className = "svc-id";
+    var name = document.createElement("span");
+    name.className = "svc-name";
+    name.textContent = svc.name;
+    var host = document.createElement("span");
+    host.className = "svc-host";
+    host.textContent = svc.domain;
+    id.appendChild(name); id.appendChild(host);
+
+    var chip = document.createElement("span");
+    chip.className = "chip";
+    chip.innerHTML = '<i aria-hidden="true"></i>';
+    var label = document.createElement("span");
+    label.textContent = "Checking…";
+    chip.appendChild(label);
+
+      li.appendChild(id); li.appendChild(chip);
+      list.appendChild(li);
+      return { svc: svc, chip: chip, label: label, kind: sectionId };
+    });
+    document.getElementById(sectionId).hidden = false;
+    return made;
+  };
+
+  var rows = render(UPSTREAM, "up-list", "upstream")
+       .concat(render(DOWNSTREAM, "down-list", "downstream"));
+  if (!rows.length) return;
+
+  var set = function (row, cls, word) {
+    row.chip.className = "chip " + cls;
+    row.label.textContent = word;
+  };
+
+  // Three states, from one probe of the dependency's own notice file:
+  //   the file is served      -> that service is itself in maintenance
+  //   404 / any HTTP answer   -> the service is up and not in maintenance
+  //   the request fails       -> we could not reach it at all; say so rather than guess "down",
+  //                              because a CORS or DNS failure here is not evidence of an outage
+  var done = 0;
+  rows.forEach(function (row) {
+    var ctrl = typeof AbortController === "function" ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 4000);
+
+    fetch("https://" + row.svc.domain + "/.maintenance.json",
+          { cache: "no-store", mode: "cors", signal: ctrl ? ctrl.signal : undefined })
+      .then(function (r) {
+        if (r.ok) { set(row, "is-main", "In maintenance"); return; }
+        // Reachable and not in maintenance. For something that depends on this product that is not
+        // "fine" — it is still serving, but without us, so say so rather than a flat "Operational"
+        // that would read as "nothing to worry about".
+        set(row, "is-ok", row.kind === "downstream" ? "Up — may be degraded" : "Operational");
+      })
+      .catch(function () { set(row, "is-down", "Unreachable"); })
+      .then(function () {
+        clearTimeout(timer);
+        if (++done === rows.length) {
+          // De-duplicate by name: a mutual dependency (books <-> inventory) legitimately appears in
+          // both lists, and "Inventory, Inventory" read aloud is a stutter, not information.
+          var seen = {}, m = [];
+          rows.forEach(function (r) {
+            if (!/maintenance/i.test(r.label.textContent) || seen[r.svc.name]) return;
+            seen[r.svc.name] = 1;
+            m.push(r.svc.name);
+          });
+          document.getElementById("svc-live").textContent = m.length
+            ? m.length + " linked service(s) in maintenance: " + m.join(", ")
+            : "All linked services reachable.";
+        }
+      });
+  });
+})();
+</script>
+</body>
+</html>
