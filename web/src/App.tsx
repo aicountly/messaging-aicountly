@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { recordEstatePage } from './analytics/estateAnalytics'
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useAuth } from './auth/AuthProvider'
 import { normaliseReturnRoute } from './auth/portal'
@@ -118,6 +119,10 @@ function PageViews() {
 
   useEffect(() => {
     trackPageView(location.pathname, pageLabel(location.pathname))
+    // Estate analytics gets the same route from the same effect, so the two pipelines
+    // cannot drift apart. The SDK masks identifiers out of the path and records how long
+    // the previous route was open.
+    recordEstatePage(location.pathname)
   }, [location.pathname])
 
   return null

@@ -84,6 +84,16 @@ export function getSesKey(): string | null {
   return null
 }
 
+/**
+ * The key in hand, or null, WITHOUT clearing anything. getSesKey() drops an expired key as a side
+ * effect, which is right for a caller about to make a request and wrong for a passive reader.
+ * Estate analytics flushes on a timer and during pagehide and must not change session state on
+ * its way past.
+ */
+export function peekSesKey(): string | null {
+  return sesKey && Date.now() < sesExpiry ? sesKey : null
+}
+
 export function clearSession(): void {
   sesKey = null
   sesExpiry = 0

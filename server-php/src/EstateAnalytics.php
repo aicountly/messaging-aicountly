@@ -48,19 +48,59 @@ final class EstateAnalytics
      * The usual call: company, branch and actor taken from the request's own verified context, so
      * no call site has to remember the attribution rules.
      *
-     * A service principal acting for a company is recorded as `system`, and AICOUNTLY staff as
-     * `staff`, because every report excludes both from customer adoption — without that, support
-     * and automation traffic reads as customers using the product.
+     * A service principal acting for a company is recorded as `system`, because every report
+     * excludes it from customer adoption — without that, automation traffic reads as customers
+     * using the product. There is no `staff` case here on purpose: this family's Auth has no
+     * AICOUNTLY-staff principal, because support reaches a company through Remote, which marks
+     * its own events `staff`.
      *
      * @param array<string,mixed> $extra properties, idempotency_key, outcome, …
      */
     public static function forContext(Context $ctx, Auth $auth, string $event, array $extra = []): void
     {
-        self::track($event, $extra + [
+        self::track($event, $extra + self::identity($ctx, $auth));
+    }
+
+    /**
+     * A batch from the browser, recorded against the context the backend verified.
+     *
+     * Only AnalyticsCollectController calls this, and it is the one path in the product fed by a
+     * payload the user controls. The identity is passed as the SDK's common fields, which the SDK
+     * applies OVER each event — so company_id, branch_id, user_uuid and user_kind cannot be set
+     * from the browser whatever the payload says. Everything else in an event (page_path,
+     * duration_ms, properties, session_id) is the browser's to report.
+     *
+     * @param list<array<string,mixed>> $events
+     */
+    public static function trackManyForContext(Context $ctx, Auth $auth, array $events): void
+    {
+        try {
+            require_once __DIR__ . '/EstateAnalytics/AicountlyAnalytics.php';
+
+            \Aicountly\Analytics\Analytics::shared(
+                static fn (string $key): ?string => ($v = Env::get($key)) === '' ? null : $v
+            )->trackMany($events, self::identity($ctx, $auth) + ['origin_surface' => 'web']);
+        } catch (\Throwable $e) {
+            error_log('estate analytics: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * The attribution every event from this request carries.
+     *
+     * A service principal acting for a company is recorded as `system`, because every report
+     * excludes it from customer adoption — without that, automation traffic reads as customers
+     * using the product.
+     *
+     * @return array<string,mixed>
+     */
+    private static function identity(Context $ctx, Auth $auth): array
+    {
+        return [
             'company_id' => $ctx->cmpId,
             'branch_id'  => $ctx->boId > 0 ? $ctx->boId : null,
             'user_uuid'  => $auth->uuid,
             'user_kind'  => $auth->isService() ? 'system' : 'customer',
-        ]);
+        ];
     }
 }
