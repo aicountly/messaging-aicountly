@@ -23,6 +23,16 @@
   RewriteCond %{REQUEST_URI} ^/(maintenance\.html|\.maintenance\.json)$
   RewriteRule ^ - [L]
 
+  # The maintenance CONTROL endpoint must keep answering while maintenance is ON, or the switch is
+  # one-way: Console could take a site down and would then be rewritten to this very page when it
+  # tried to bring it back, with no way in but SSH. Only these two exact paths are let through —
+  # allowlisting /api wholesale would leave the product's API serving traffic through a maintenance
+  # window, which is the thing the window is for.
+  #   /api/internal/maintenance   the route in every product with a router
+  #   /api/maintenance.php        the file-is-the-route form (aicountly.com, aicountly.io)
+  RewriteCond %{REQUEST_URI} ^/api/(internal/maintenance|maintenance\.php)$
+  RewriteRule ^ - [L]
+
   # Let's Encrypt and the rest of /.well-known keep working, so certificates can still be renewed
   # while the site is down. A migration is exactly when a renewal is likely to fall due.
   RewriteCond %{REQUEST_URI} ^/\.well-known/
