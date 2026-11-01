@@ -42,17 +42,14 @@ final class AnalyticsCollectController extends Controller
 
     public static function collect(): never
     {
-        // A browser Origin, when the browser sends one, must be this host. The bearer token is the
-        // real credential — this is defence in depth, not the only thing standing in the way.
+        // A browser Origin, when the browser sends one, must be one this deployment allows.
+        // It is NOT compared against HTTP_HOST: that is the request's own Host header, which the
+        // caller sets, so an Origin checked against it proves nothing — and several products' test
+        // suites forbid reading it for exactly that reason. The bearer token is the real credential
+        // here, as on every other route; this is defence in depth.
         $origin = (string) ($_SERVER['HTTP_ORIGIN'] ?? '');
-        if ($origin !== '') {
-            $host = strtolower((string) parse_url($origin, PHP_URL_HOST));
-            $port = parse_url($origin, PHP_URL_PORT);
-            $originHost = $port ? "{$host}:{$port}" : $host;
-            if ($originHost !== strtolower((string) ($_SERVER['HTTP_HOST'] ?? ''))
-                && !self::originAllowed($origin)) {
-                self::noContent();
-            }
+        if ($origin !== '' && !self::originAllowed($origin)) {
+            self::noContent();
         }
 
         if ((int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > self::MAX_BYTES) {
@@ -108,10 +105,17 @@ final class AnalyticsCollectController extends Controller
     }
 
     /** The SPA is served from a different origin to the API; CORS_ALLOWED_ORIGINS names which. */
+    /**
+     * CORS_ALLOWED_ORIGINS, the deployment's own list — a configured value, not a request header.
+     *
+     * An empty list means there is nothing to check against, and the Origin is let through: a
+     * deployment that has not set the variable would otherwise drop every browser event, since a
+     * same-origin POST carries an Origin too. The bearer token still has to be valid.
+     */
     private static function originAllowed(string $origin): bool
     {
         $allowed = array_filter(array_map('trim', explode(',', \Aicountly\Api\Env::get('CORS_ALLOWED_ORIGINS'))));
 
-        return in_array($origin, $allowed, true);
+        return $allowed === [] || in_array($origin, $allowed, true);
     }
 }
