@@ -1,5 +1,5 @@
 /**
- * AICOUNTLY analytics — browser client. Version 1.0.0.
+ * AICOUNTLY analytics — browser client. Version: see VERSION beside the SDK.
  *
  * COPY, DON'T EDIT: this file lives in analytics-aicountly "sdk/js/". Products copy it unchanged.
  *
