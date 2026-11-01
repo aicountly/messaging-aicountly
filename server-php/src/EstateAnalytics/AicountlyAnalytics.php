@@ -39,7 +39,7 @@ namespace Aicountly\Analytics;
  */
 final class Analytics
 {
-    public const VERSION        = '1.0.0';
+    public const VERSION        = '1.3.0';
     public const SCHEMA_VERSION = '1';
     private const BATCH         = 200;
     private const MAX_ATTEMPTS  = 200;
