@@ -278,6 +278,152 @@
   font-size: 0.78rem;
 }
 
+.shell-user-sm {
+  width: 26px;
+  height: 26px;
+  font-size: 0.66rem;
+}
+
+.shell-user-lg {
+  width: 40px;
+  height: 40px;
+  font-size: 0.88rem;
+}
+
+/* --- Account menu -------------------------------------------------------- */
+
+/* The suite-wide account menu (AICOUNTLY_ACCOUNT_MENU.md): who you are, the
+   other AICOUNTLY accounts signed in on this browser, the two Manage links and
+   sign out. Wide enough for a name above a masked e-mail without wrapping;
+   every row truncates rather than widen the panel, which is what the
+   `min-width: 0` on the text column buys inside a flex row. */
+
+.shell-account {
+  position: relative;
+  flex: none;
+}
+
+.shell-account-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.shell-account-menu {
+  position: absolute;
+  top: calc(100% + 0.5rem);
+  right: 0;
+  width: min(17rem, calc(100vw - 2rem));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+  padding: 0.3rem 0;
+  text-align: left;
+}
+
+.shell-account-who {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.7rem 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-account-who-text {
+  min-width: 0;
+}
+
+.shell-account-name {
+  margin: 0;
+  font-size: 0.85rem;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-account-meta {
+  margin: 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-account-numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+.shell-account-section {
+  padding: 0.25rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.shell-account-section:last-child {
+  border-bottom: 0;
+}
+
+.shell-account-section-title {
+  margin: 0;
+  padding: 0.35rem 0.8rem 0.15rem;
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.shell-account-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 38px;
+  padding: 0.4rem 0.8rem;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font-size: 0.85rem;
+  text-align: left;
+}
+
+.shell-account-item:hover {
+  background: var(--brand-soft);
+}
+
+.shell-account-item-danger {
+  color: var(--danger);
+}
+
+.shell-account-item-danger:hover {
+  background: var(--danger-bg);
+}
+
+.shell-account-item-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.shell-account-item-name,
+.shell-account-item-meta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-account-item-meta {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
 /* --- Notification bell --------------------------------------------------- */
 
 .shell-bell {
