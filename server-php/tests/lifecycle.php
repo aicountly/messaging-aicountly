@@ -460,7 +460,11 @@ check('company_purge_requested: rows purged, audit retained, files and Drive doc
     same(0, (int) $pdo->query("SELECT COUNT(*) FROM lifecycle_object_deletions WHERE target_ref = '" . CMP . "' AND status <> 'deleted'")->fetchColumn(), 'every object recorded deleted');
     same(2, (int) $pdo->query("SELECT COUNT(*) FROM lifecycle_object_deletions WHERE target_ref = '" . CMP . "'")->fetchColumn(), 'provider media is not ours to delete');
     truthy((int) $pdo->query('SELECT COUNT(*) FROM messaging_audit_events WHERE cmp_id = ' . CMP)->fetchColumn() >= 1, 'audit trail retained');
-    $kept = $pdo->query("SELECT action, before_state::text AS b, after_state::text AS a, entity_label, summary, meta_json::text AS m FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND action = 'settings.updated'")->fetch(\PDO::FETCH_ASSOC);
+    // entity_id, not just the action: the read-only-guard check above makes a REAL settings write for this
+    // company once the lifecycle goes back to active, and SettingsController audits it as settings.updated
+    // too — with no `changes` key, so its meta_json is NULL and correctly stays NULL. Without naming the
+    // fixture's own row ('e-1') this picks whichever of the two the planner returns first.
+    $kept = $pdo->query("SELECT action, before_state::text AS b, after_state::text AS a, entity_label, summary, meta_json::text AS m FROM messaging_audit_events WHERE cmp_id = " . CMP . " AND action = 'settings.updated' AND entity_id = 'e-1'")->fetch(\PDO::FETCH_ASSOC);
     same(['settings.updated', '"[redacted]"', '"[redacted]"'], [$kept['action'] ?? null, $kept['b'] ?? null, $kept['a'] ?? null], 'kit 1.1 scrub: who / what kept, the row copies redacted');
     same(['[redacted]', '[redacted]'], [$kept['entity_label'] ?? null, $kept['summary'] ?? null], 'entity_label and summary redacted (migration 013)');
     same(['changes' => '[redacted]', 'reason' => 'ops', 'source' => 'ui'], jsonSorted($kept['m'] ?? null), 'meta_json.changes redacted, every other key unchanged');

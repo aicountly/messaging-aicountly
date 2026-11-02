@@ -308,7 +308,7 @@ jobs:
           #   .git*        — never publish repository metadata
           # The maintenance flag and its notice are operator state in the document root, not
           # build output. A --delete deploy would remove them and quietly bring the site back
-          # up in the middle of a window. No rsync here uses --delete-excluded, so an exclude
+          # up in the middle of a window. Nothing here passes --delete-excluded, so an exclude
           # protects them from deletion as well as from being overwritten.
           rsync -avz --delete \
             --exclude='.maintenance' \
@@ -352,14 +352,7 @@ jobs:
           # H leaves that stale copy exposed to --delete, so this deploy removes
           # it. bin/ and database/ still ship (the migration step and cron need
           # them); the deployed .htaccess 404s them over HTTP.
-          # The maintenance flag and its notice are operator state in the document root, not
-          # build output. A --delete deploy would remove them and quietly bring the site back
-          # up in the middle of a window. No rsync here uses --delete-excluded, so an exclude
-          # protects them from deletion as well as from being overwritten.
           rsync -avz --delete \
-            --exclude='.maintenance' \
-            --exclude='.maintenance.json' \
-            --exclude='.maintenance-allow' \
             --exclude='.env' \
             --include='.env.example' \
             --exclude='.env.*' \
