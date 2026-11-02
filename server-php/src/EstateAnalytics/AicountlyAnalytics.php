@@ -39,7 +39,14 @@ namespace Aicountly\Analytics;
  */
 final class Analytics
 {
-    public const VERSION        = '1.3.0';
+    public const VERSION        = '1.4.0';
+
+    /**
+     * Fields only the caller that verified them may state, so trackMany() strips them from every
+     * event in a batch. Everything else a browser sends is its own observation (what happened,
+     * when, on which path, how long it took) and travels as given.
+     */
+    private const CALLER_OWNED = ['company_id', 'branch_id', 'user_uuid', 'user_kind', 'origin_app'];
     public const SCHEMA_VERSION = '1';
     private const BATCH         = 200;
     private const MAX_ATTEMPTS  = 200;
@@ -237,11 +244,21 @@ final class Analytics
             }
             $name = (string) $e['event'];
             unset($e['event']);
-            // $common wins: it carries the identity the backend verified, which a browser payload
-            // must never be able to override. The operand order is the whole of that guarantee —
-            // PHP's `+` keeps the LEFT array's keys, so `$common + $e` lets the verified
-            // company_id, user_uuid and user_kind stand and `$e + $common` would let the browser
-            // forge all three. Covered by trackManyTest.php.
+            // IDENTITY IS THE CALLER'S TO STATE, NEVER THE BATCH'S. The operand order is half the
+            // guarantee: PHP's `+` keeps the LEFT array's keys, so `$common + $e` lets the verified
+            // company_id, user_uuid and user_kind stand, where `$e + $common` would let the browser
+            // forge all three.
+            //
+            // The other half is this unset, and it is the half that was missing. `+` only wins for
+            // keys $common actually HAS, so a field the caller left out — a product with no branch,
+            // or none with no company — could still be supplied by the event, and was: a signed-in
+            // person could attribute their own page views to any company id they liked, straight
+            // into the company-level adoption figures marketing and sales read. Stripping the keys
+            // here means an absent verified value stays absent instead of being filled in from the
+            // payload, so a caller cannot open the hole by omission. Covered by trackManyTest.php.
+            foreach (self::CALLER_OWNED as $owned) {
+                unset($e[$owned]);
+            }
             if ($this->track($name, $common + $e) !== null) {
                 $n++;
             }
