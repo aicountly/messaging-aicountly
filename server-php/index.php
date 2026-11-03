@@ -73,6 +73,22 @@ const RELAYED_PATHS = [
     'logout',
 ];
 
+/**
+ * Portal paths relayed on GET only — read-only, one path each, nothing inferred.
+ *
+ * `user/logo` is the signed-in person's profile photo (an image body). The browser cannot ask
+ * my.aicountly.com for it directly: the portal's CORS allowlist does not name product domains,
+ * so the account menu would have no photo at all (AICOUNTLY_ACCOUNT_MENU.md §6).
+ *
+ * It is deliberately a second, smaller list rather than another entry in RELAYED_PATHS: a path
+ * listed there accepts every method, and nothing about a profile photo should be writable through
+ * this host. Adding a path here is adding a GET onto someone else's portal account with their own
+ * token, so it stays one path at a time — never a prefix, never a wildcard.
+ */
+const RELAYED_READ_PATHS = [
+    'user/logo',
+];
+
 // ---------------------------------------------------------------------------
 // Routing
 //
@@ -140,7 +156,9 @@ if ($path === '' || $path === 'health') {
 if (strpos($path, 'global/') === 0) {
     $portalPath = substr($path, strlen('global/'));
 
-    if (!in_array($portalPath, RELAYED_PATHS, true)) {
+    $relayed = in_array($portalPath, RELAYED_PATHS, true)
+        || ($method === 'GET' && in_array($portalPath, RELAYED_READ_PATHS, true));
+    if (!$relayed) {
         send_json(404, ['message' => 'This path is not relayed. Call the portal API directly.']);
     }
 

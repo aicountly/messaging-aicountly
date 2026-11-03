@@ -236,3 +236,17 @@ function writeStored(key: string, value: number): void {
     /* private mode, or quota. The app works without it. */
   }
 }
+
+/**
+ * Forget the remembered company and branch.
+ *
+ * For switching to another AICOUNTLY account (`auth/accounts.ts`): the
+ * preference above belongs to the account that chose it, and the provider reads
+ * it on its first render, so carrying it across would have the next account's
+ * first screen asking `v1/session` for a company they cannot open. Not a
+ * sign-out — the tokens are untouched.
+ */
+export function clearStoredCompanyScope(): void {
+  writeStored(COMPANY_STORAGE_KEY, 0)
+  writeStored(BRANCH_STORAGE_KEY, 0)
+}
