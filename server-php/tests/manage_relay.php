@@ -143,6 +143,14 @@ $fake = sys_get_temp_dir() . '/manage_relay_fake_' . getmypid() . '.php';
 file_put_contents($fake, '<?php
 $headers = function_exists("getallheaders") ? getallheaders() : [];
 http_response_code(str_contains($_SERVER["REQUEST_URI"], "/permissions/") ? 409 : 200);
+// The portal answers the profile photo with an image body, not JSON. index.php hands back only
+// the status, the body and the content type, so the token it forwarded is echoed inside the body
+// — the only place the test can see it.
+if ($_SERVER["REQUEST_URI"] === "/api/user/logo") {
+    header("Content-Type: image/png");
+    echo "\x89PNG[" . ($headers["Authorization"] ?? "none") . "]";
+    return;
+}
 header("Content-Type: application/vnd.test+json");
 header("X-Correlation-Id: from-manage-123");
 echo json_encode(["method" => $_SERVER["REQUEST_METHOD"], "uri" => $_SERVER["REQUEST_URI"], "headers" => $headers, "body" => file_get_contents("php://input")]);
@@ -296,6 +304,27 @@ try {
 
     $r = $http($apiPort, 'POST', 'global/logout', ['Authorization: Bearer portal-auth-token']);
     $check('logout names the visitor too', (($seen($r))['x-aicountly-client-ip'] ?? '') === '127.0.0.1', $r['raw']);
+
+    // The account menu's profile photo (AICOUNTLY_ACCOUNT_MENU.md §6): one GET, read-only.
+    $r = $http($apiPort, 'GET', 'global/user/logo', ['Authorization: Bearer person-ses-key', 'Accept: image/*']);
+    $check('GET /global/user/logo reaches the portal\'s /api/user/logo with the person\'s token',
+        $r['status'] === 200 && $r['raw'] === "\x89PNG[Bearer person-ses-key]", bin2hex($r['raw']));
+    $check('the image bytes and content type come back unchanged', str_starts_with($r['raw'], "\x89PNG")
+        && str_contains((string) ($r['headers']['content-type'] ?? ''), 'image/png'), (string) ($r['headers']['content-type'] ?? ''));
+
+    // Read-only means read-only: nothing may be written to a portal account through this host.
+    foreach (['POST', 'PUT', 'PATCH', 'DELETE'] as $writeMethod) {
+        $r = $http($apiPort, $writeMethod, 'global/user/logo', ['Authorization: Bearer person-ses-key', 'Content-Type: application/json'], '{}');
+        $check("over HTTP, {$writeMethod} /global/user/logo is 404 and the portal is not called", $r['status'] === 404
+            && !str_contains($r['raw'], 'PNG'), (string) $r['status']);
+    }
+
+    // The relay stays an allowlist: one readable path is not the rest of the person's account.
+    foreach (['global/user', 'global/user/profile', 'global/userprofile', 'global/user/logo/../sessions'] as $unlisted) {
+        $r = $http($apiPort, 'GET', $unlisted, ['Authorization: Bearer person-ses-key']);
+        $check("over HTTP, GET /{$unlisted} is 404 and the portal is not called", $r['status'] === 404
+            && !str_contains($r['raw'], 'PNG'), (string) $r['status']);
+    }
 } finally {
     foreach ($procs as $p) {
         proc_terminate($p);

@@ -18,8 +18,26 @@ import { companyRegistry, MESSAGING_APP_NAME } from '../services/companyRegistry
 import type { Company } from '../services/types'
 import { Button, Drawer } from '../ui'
 
+/**
+ * The account menu's "Switch company" asks this button's drawer to open.
+ *
+ * An event rather than lifted state: the button sits in the top bar beside the menu and already
+ * owns the directory drawer, the registry client and the restricted-company dialog. Books does the
+ * same thing (`books:open-company-switcher`). The drawer is a real company switch — choosing a
+ * company there calls the same `selectCompany` the picker's select calls — and it is the one door
+ * that exists whether or not the select is rendered (the picker hides it for a single company).
+ */
+export const OPEN_COMPANY_SWITCHER_EVENT = 'messaging:open-company-switcher'
+
 export function BrowseCompaniesButton({ label = 'Browse all workspace companies', compact = false }: { label?: string; compact?: boolean }) {
   const [open, setOpen] = useState(false)
+
+  useEffect(() => {
+    const onOpen = () => setOpen(true)
+    window.addEventListener(OPEN_COMPANY_SWITCHER_EVENT, onOpen)
+    return () => window.removeEventListener(OPEN_COMPANY_SWITCHER_EVENT, onOpen)
+  }, [])
+
   return (
     <>
       <Button tone="ghost" small onClick={() => setOpen(true)} title={label} ariaLabel={label}>

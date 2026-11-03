@@ -7,20 +7,28 @@
  *
  *   1. who you are      photo, name, e-mail, masked mobile, Cust ID
  *   2. your accounts    the others signed in on this browser, and "Use another"
- *   3. company          the shell's own CompanyPicker, two controls to the left
+ *   3. company          Messaging is company-scoped: switch / edit / branches
  *   4. appearance       Messaging has no in-menu theme switch
  *   5. links            Manage profile, Manage Account
  *   6. sign out
  *
  * The identity block takes the name and Cust ID from `v1/session`, which is
  * what this product knows about the signed-in person, and the masked mobile and
- * masked e-mail from the roster cookie. There is no photo: this API has no
- * authenticated user-logo route to fetch one from, and initials are what the
- * contract allows instead.
+ * masked e-mail from the roster cookie. The photo comes from the portal through
+ * this product's own relay (`services/userLogo.ts` → `/api/global/user/logo`),
+ * with initials as the fallback whenever there is none to be had.
+ *
+ * The Company block is here even though CompanyPicker sits two controls to the
+ * left. A picker in the bar and an entry in the menu are not two sources of
+ * truth — they are two doors onto the same action, and the menu is the one that
+ * sits in the same place in every AICOUNTLY product. "Recent" is the one line
+ * left out: Messaging remembers the company last opened, not an ordered list of
+ * them, and the contract leaves out a line the product cannot perform rather
+ * than inventing one.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, LogOut, User, UserCog, UserPlus, Users } from 'lucide-react'
+import { Building2, ChevronDown, GitBranch, LogOut, Pencil, User, UserCog, UserPlus, Users } from 'lucide-react'
 
 import { useAuth } from '../auth/AuthProvider'
 import { canAddAccount, buildChooseAccountUrl, performAccountSwitch, readAccountRoster } from '../auth/accounts'
@@ -28,6 +36,8 @@ import type { RosterAccount } from '../auth/accounts'
 import { stopConnect } from '../connect/connect'
 import { useMessaging } from '../context/MessagingContext'
 import { getManageApiOrigin } from '../services/appLauncher'
+import { fetchUserLogoObjectUrl } from '../services/userLogo'
+import { OPEN_COMPANY_SWITCHER_EVENT } from './CompanyDiscovery'
 
 /**
  * Manage's own pages for this environment (Manage is hash-routed). Plain
@@ -57,10 +67,46 @@ function accountLabel(account: RosterAccount): string {
   return account.name || account.maskedEmail || `Account ${account.uuid}`
 }
 
+/**
+ * The profile photo as an object URL, or null while there is none.
+ *
+ * Fetched once per mount and revoked on unmount, so a blob never outlives the menu that showed
+ * it. It never throws and never reports a failure: the caller draws initials when this is null.
+ */
+function useUserLogo(): string | null {
+  const [src, setSrc] = useState<string | null>(null)
+
+  useEffect(() => {
+    let objectUrl: string | null = null
+    let cancelled = false
+
+    void fetchUserLogoObjectUrl().then((url) => {
+      if (url === null) return
+      if (cancelled) {
+        // Unmounted while the photo was in flight: nothing will show it, so let it go.
+        URL.revokeObjectURL(url)
+        return
+      }
+      objectUrl = url
+      setSrc(url)
+    })
+
+    return () => {
+      cancelled = true
+      if (objectUrl !== null) URL.revokeObjectURL(objectUrl)
+      setSrc(null)
+    }
+  }, [])
+
+  return src
+}
+
 export function AccountMenu() {
   const { signOut } = useAuth()
-  const { session } = useMessaging()
+  const { session, cmpId } = useMessaging()
   const [open, setOpen] = useState(false)
+  // Null until the photo arrives, and null for good when there is none: the menu draws initials.
+  const photo = useUserLogo()
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
 
@@ -130,7 +176,9 @@ export function AccountMenu() {
         onClick={() => setOpen((value) => !value)}
       >
         <span className="shell-user" aria-hidden>
-          {initials || <User size={15} />}
+          {photo !== null
+            ? <img src={photo} alt="" className="shell-user-photo" />
+            : initials || <User size={15} />}
         </span>
         <ChevronDown size={13} aria-hidden />
       </button>
@@ -139,8 +187,11 @@ export function AccountMenu() {
         <div className="shell-account-menu" role="menu" aria-label="Account menu">
           {name || activeEntry ? (
             <div className="shell-account-who">
+              {/* 1. Who you are — with the photo, which this menu used to leave out. */}
               <span className="shell-user shell-user-lg" aria-hidden>
-                {initials || <User size={18} />}
+                {photo !== null
+                  ? <img src={photo} alt="" className="shell-user-photo" />
+                  : initials || <User size={18} />}
               </span>
               <div className="shell-account-who-text">
                 <p className="shell-account-name">{name || activeEntry?.name || 'Signed in'}</p>
@@ -193,6 +244,58 @@ export function AccountMenu() {
               <button type="button" role="menuitem" className="shell-account-item" onClick={() => switchTo(undefined)}>
                 <UserPlus size={16} aria-hidden /> Use another account
               </button>
+            )}
+          </div>
+
+          {/* 3. Company — Messaging is company-scoped: every conversation hangs
+              off cmp_id. Switching opens the workspace-companies drawer beside
+              this menu, which is the one door that exists whether or not the
+              picker renders its select (it hides it for a single company).
+              Editing the company and its branches belong to Aicountly Manage,
+              which is where Messaging sends people for both. */}
+          <div className="shell-account-section">
+            <p className="shell-account-section-title">Company</p>
+            <button
+              type="button"
+              role="menuitem"
+              className="shell-account-item"
+              title="Choose another company"
+              onClick={() => {
+                setOpen(false)
+                window.dispatchEvent(new CustomEvent(OPEN_COMPANY_SWITCHER_EVENT))
+              }}
+            >
+              <Building2 size={16} aria-hidden /> Switch company
+            </button>
+            {cmpId > 0 && (
+              <>
+                <a
+                  role="menuitem"
+                  className="shell-account-item"
+                  href={manageUrl(`/company/${encodeURIComponent(String(cmpId))}/edit`)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Opens this company in Manage in a new tab"
+                  onClick={() => setOpen(false)}
+                >
+                  <Pencil size={16} aria-hidden />
+                  <span className="shell-account-item-text">Edit company</span>
+                  <span className="msg-visually-hidden"> (opens in a new tab)</span>
+                </a>
+                <a
+                  role="menuitem"
+                  className="shell-account-item"
+                  href={manageUrl(`/branch/${encodeURIComponent(String(cmpId))}`)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title="Opens this company's branches in Manage in a new tab"
+                  onClick={() => setOpen(false)}
+                >
+                  <GitBranch size={16} aria-hidden />
+                  <span className="shell-account-item-text">Manage branches</span>
+                  <span className="msg-visually-hidden"> (opens in a new tab)</span>
+                </a>
+              </>
             )}
           </div>
 
