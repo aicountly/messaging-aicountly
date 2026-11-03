@@ -382,28 +382,294 @@ test('the frontend never presents a service credential', () => {
   }
 })
 
+// ---------------------------------------------------------------------------
+// The bearer-token rule
+// ---------------------------------------------------------------------------
+
+/**
+ * The accessors that hand the browser one of the two portal credentials.
+ *
+ * src/auth/portal.ts owns all of them: getAuthToken() returns the long-lived
+ * auth_token, and ensureSesKey() / getSesKey() / peekSesKey() return the
+ * short-lived ses_key. The vendored registry client receives the ses_key
+ * through an injected options.getSesKey hook rather than importing portal.ts,
+ * which is why a member call counts too.
+ *
+ * This list is the whole allowlist. A credential that does not come out of one
+ * of these functions is not one of this browser's two.
+ */
+const PORTAL_CREDENTIAL_ACCESSORS = ['getAuthToken', 'ensureSesKey', 'getSesKey', 'peekSesKey']
+
+const isPortalCredentialCall = (expression) =>
+  PORTAL_CREDENTIAL_ACCESSORS.some((name) => new RegExp(`\\b${name}\\s*\\(`).test(expression))
+
+/** The text inside the bracket group opening at `open`, brackets and strings respected. */
+function bracketContents(source, open) {
+  const pairs = { '(': ')', '[': ']', '{': '}' }
+  const stack = [pairs[source[open]]]
+  let quote = null
+  for (let i = open + 1; i < source.length; i += 1) {
+    const char = source[i]
+    if (quote) {
+      if (char === '\\') i += 1
+      else if (char === quote) quote = null
+      continue
+    }
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      continue
+    }
+    if (pairs[char]) {
+      stack.push(pairs[char])
+      continue
+    }
+    if (char === stack[stack.length - 1]) {
+      stack.pop()
+      if (stack.length === 0) return source.slice(open + 1, i)
+    }
+  }
+  return null
+}
+
+/** Split an argument or parameter list on its top-level commas. */
+function splitTopLevel(list) {
+  const parts = []
+  let depth = 0
+  let quote = null
+  let start = 0
+  for (let i = 0; i < list.length; i += 1) {
+    const char = list[i]
+    if (quote) {
+      if (char === '\\') i += 1
+      else if (char === quote) quote = null
+      continue
+    }
+    if (char === '"' || char === "'" || char === '`') quote = char
+    else if ('([{<'.includes(char)) depth += 1
+    else if (')]}>'.includes(char)) depth -= 1
+    else if (char === ',' && depth === 0) {
+      parts.push(list.slice(start, i))
+      start = i + 1
+    }
+  }
+  parts.push(list.slice(start))
+  return parts.map((part) => part.trim()).filter((part) => part !== '')
+}
+
+/** Where `name` sits in a parameter list, or -1. Type annotations and defaults stripped. */
+function parameterIndex(list, name) {
+  return splitTopLevel(list).findIndex(
+    (parameter) => parameter.replace(/[?!]?\s*:[\s\S]*$/, '').replace(/=[\s\S]*$/, '').trim() === name,
+  )
+}
+
+/** Every function in `source` that takes `name` as a parameter, with its callee name and position. */
+function parameterOwners(name, source) {
+  const owners = []
+  const consider = (callee, open) => {
+    const list = bracketContents(source, open)
+    if (list === null) return
+    const index = parameterIndex(list, name)
+    if (index >= 0) owners.push({ callee, index })
+  }
+
+  for (const match of source.matchAll(/(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*(?:<[^>]*>)?\s*\(/g)) {
+    consider(match[1], match.index + match[0].length - 1)
+  }
+  // An arrow bound to a name: `const attempt = async (sesKey: string) => …`.
+  for (const match of source.matchAll(/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?\(/g)) {
+    const open = match.index + match[0].length - 1
+    const list = bracketContents(source, open)
+    if (list === null) continue
+    const after = source.slice(open + list.length + 2)
+    if (!/^\s*(?::[^=]*?)?=>/.test(after)) continue
+    consider(match[1], open)
+  }
+
+  return owners
+}
+
+/** The arguments passed at `index` by every call to `callee` in `source`. */
+function argumentsPassedTo(callee, index, source) {
+  const passed = []
+  const calls = source.matchAll(new RegExp(`(?<![\\w$.])${callee}\\s*(?:<[^>]*>)?\\s*\\(`, 'g'))
+  for (const call of calls) {
+    const open = call.index + call[0].length - 1
+    const list = bracketContents(source, open)
+    if (list === null) continue
+    const args = splitTopLevel(list)
+    if (index < args.length) passed.push(args[index])
+  }
+  return passed
+}
+
+/** Literals that are never a credential, so a `?? null` arm need not resolve to one. */
+const EMPTY_VALUE = /^(?:null|undefined|''|""|``|0|false)$/
+
+/**
+ * Can `expression`, read in `source`, only ever hold one of the two portal
+ * credentials?
+ *
+ * Deliberately a fail-closed resolver and not a name test: it answers what the
+ * value IS, by tracing it back to the function it came out of, rather than what
+ * it is CALLED. Anything it cannot trace to an accessor in
+ * PORTAL_CREDENTIAL_ACCESSORS is reported as a failure, so a shape this does
+ * not understand shows up as a red test rather than as a silent pass.
+ */
+function resolvePortalCredential(expression, source, seen = new Set()) {
+  let text = expression.trim()
+  for (;;) {
+    const unwrapped = text
+      .replace(/^await\s+/, '')
+      .replace(/\s*(?:as\s+\w+|[!])$/, '')
+      .trim()
+    if (unwrapped === text) break
+    text = unwrapped
+  }
+  while (/^\(/.test(text) && bracketContents(text, 0) === text.slice(1, -1)) {
+    text = text.slice(1, -1).trim()
+  }
+
+  if (isPortalCredentialCall(text)) return { ok: true }
+  if (EMPTY_VALUE.test(text)) return { ok: true }
+  if (seen.has(text)) return { ok: false, reason: `\`${text}\` resolves in a circle` }
+  seen.add(text)
+
+  // A ternary or a ??/|| fallback: every arm that can reach the header counts.
+  const arms = splitTopLevel(text.replace(/\?\?|\|\||[?:]/g, ','))
+  if (arms.length > 1) {
+    for (const arm of arms) {
+      const armResult = resolvePortalCredential(arm, source, seen)
+      if (!armResult.ok) return armResult
+    }
+    return { ok: true }
+  }
+
+  if (!/^[A-Za-z_$][\w$]*$/.test(text)) {
+    return { ok: false, reason: `\`${text}\` is not a portal-credential accessor` }
+  }
+
+  // A local binding: resolve every value the name can be given.
+  const bindings = [
+    ...source.matchAll(
+      new RegExp(`(?:const|let|var)\\s+${text}\\s*(?::[^=\\n]+?)?=\\s*([^\\n;]+)`, 'g'),
+    ),
+  ]
+  if (bindings.length > 0) {
+    for (const binding of bindings) {
+      const bound = resolvePortalCredential(binding[1], source, seen)
+      if (!bound.ok) return bound
+    }
+    return { ok: true }
+  }
+
+  // A parameter: resolve what every call site hands it.
+  const owners = parameterOwners(text, source)
+  if (owners.length > 0) {
+    let traced = false
+    for (const owner of owners) {
+      for (const argument of argumentsPassedTo(owner.callee, owner.index, source)) {
+        traced = true
+        const passed = resolvePortalCredential(argument, source, seen)
+        if (!passed.ok) {
+          return { ok: false, reason: `${owner.callee}() is handed ${passed.reason}` }
+        }
+      }
+    }
+    if (traced) return { ok: true }
+    return { ok: false, reason: `\`${text}\` is a parameter no call in this file fills` }
+  }
+
+  return { ok: false, reason: `\`${text}\` cannot be traced to a portal-credential accessor` }
+}
+
+/** Every `Bearer ${…}` in `source` that is not one of the two portal credentials. */
+function offendingBearers(source) {
+  const offences = []
+  for (const match of source.matchAll(/Bearer \$\{([^}]+)\}/g)) {
+    const resolved = resolvePortalCredential(match[1], source)
+    if (!resolved.ok) offences.push(`"Bearer \${${match[1]}}" — ${resolved.reason}`)
+  }
+  return offences
+}
+
 test('the frontend sends only its own two portal credentials as bearer tokens', () => {
   // The Aicountly SSO model gives a browser exactly two: the long-lived
   // auth_token, which goes to my.aicountly.com to mint a session, and the
   // short-lived ses_key, which goes to this product's API. Anything else in an
   // Authorization header is a credential a browser should not be holding.
+  //
+  // The check is on the VALUE, traced back to the accessor it came out of, not
+  // on the variable's name — a name tells you nothing about what a header
+  // actually carries, in either direction.
   for (const file of sourceFiles()) {
     // The vendored company-registry package (copied verbatim from manage-aicountly, never edited
-    // here) names its credential `key`; it is held to the same rule by the test below instead.
+    // here) takes its credential through an injected hook whose provider lives in another file;
+    // it is held to the same rule by the test below instead.
     if (file.includes(`${join('src', 'company-access')}`)) continue
-    const source = readFileSync(file, 'utf8')
-    for (const match of source.matchAll(/Bearer \$\{([^}]+)\}/g)) {
-      const subject = match[1]
-      assert.ok(
-        /ses|token/i.test(subject),
-        `${file} sends "Bearer \${${subject}}", which is neither the auth_token nor the ses_key`,
-      )
-      assert.ok(
-        !/service|secret|credential/i.test(subject),
-        `${file} sends "Bearer \${${subject}}"; a service credential is a backend's, never a browser's`,
-      )
-    }
+    const offences = offendingBearers(readFileSync(file, 'utf8'))
+    assert.deepEqual(offences, [], `${file} sends a credential that is not one of the two portal ones:\n  ${offences.join('\n  ')}`)
   }
+})
+
+test('the bearer-token rule reads the value, not the variable name', () => {
+  // This rule used to match on the identifier inside `Bearer ${…}`, requiring
+  // it to look like /ses|token/i. That is wrong in both directions, and this
+  // test pins both of them.
+  const ok = (source) => offendingBearers(source)
+
+  // 1. The false positive that was failing the suite. src/analytics/estateAnalytics.ts
+  //    holds the ses_key in a variable called `key`, which is correct and which the
+  //    name rule rejected.
+  assert.deepEqual(
+    ok(`const key = peekSesKey()\nreturn key ? { Authorization: \`Bearer \${key}\` } : null`),
+    [],
+    'a correct ses_key in a variable called `key` is accepted',
+  )
+
+  // 2. The false NEGATIVE, which matters more: a service credential in a variable
+  //    named to look like a portal one sailed through the name rule. It must not now.
+  assert.equal(
+    ok(`const sesToken = getWhatsAppServiceToken()\nheaders.Authorization = \`Bearer \${sesToken}\``).length,
+    1,
+    'a provider token called `sesToken` is still caught',
+  )
+
+  // 3. The other shapes a wrong credential arrives in.
+  assert.equal(ok('headers.Authorization = `Bearer ${import.meta.env.VITE_WHATSAPP_TOKEN}`').length, 1,
+    'a build-time secret is caught')
+  assert.equal(ok("const key = 'sk-live-abcd1234'\nheaders.Authorization = `Bearer ${key}`").length, 1,
+    'a hard-coded key is caught')
+  assert.equal(ok('headers.Authorization = `Bearer ${await loadServiceKey()}`').length, 1,
+    'an unknown accessor is caught')
+  assert.equal(ok('headers.Authorization = `Bearer ${whateverThisIs}`').length, 1,
+    'an identifier this file never binds is caught — the rule fails closed')
+
+  // 4. And the shapes the real source uses are all accepted, including a
+  //    credential handed across a function boundary.
+  assert.deepEqual(ok('headers.Authorization = `Bearer ${await ensureSesKey()}`'), [],
+    'a direct accessor call is accepted')
+  assert.deepEqual(
+    ok([
+      'async function send(path, sesKey) {',
+      '  const headers = { Authorization: `Bearer ${sesKey}` }',
+      '}',
+      'const sesKey = await ensureSesKey()',
+      'await send(path, sesKey)',
+    ].join('\n')),
+    [],
+    'a ses_key traced through a parameter is accepted',
+  )
+  assert.equal(
+    ok([
+      'async function send(path, sesKey) {',
+      '  const headers = { Authorization: `Bearer ${sesKey}` }',
+      '}',
+      'await send(path, getWhatsAppServiceToken())',
+    ].join('\n')).length,
+    1,
+    'and a service token traced through that same parameter is caught',
+  )
 })
 
 test('the company registry client sends Manage only the ses_key', () => {
