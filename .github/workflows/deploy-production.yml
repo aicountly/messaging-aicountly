@@ -22,7 +22,7 @@ on:
       run_ci_gate:
         description: Run the GitHub test gate before deploying (off = the suite was run locally before merge)
         type: boolean
-        default: false
+        default: true
 
 # Never let two deploys to the same target overlap.
 concurrency:
