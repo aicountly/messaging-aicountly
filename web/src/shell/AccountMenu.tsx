@@ -31,7 +31,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Building2, ChevronDown, GitBranch, LogOut, Pencil, User, UserCog, UserPlus, Users } from 'lucide-react'
 
 import { useAuth } from '../auth/AuthProvider'
-import { canAddAccount, buildChooseAccountUrl, performAccountSwitch, readAccountRoster } from '../auth/accounts'
+import { activeAccountFirstName, buildChooseAccountUrl, canAddAccount, performAccountSwitch, readAccountRoster } from '../auth/accounts'
 import type { RosterAccount } from '../auth/accounts'
 import { stopConnect } from '../connect/connect'
 import { useMessaging } from '../context/MessagingContext'
@@ -141,7 +141,8 @@ export function AccountMenu() {
   }, [open])
 
   const custId = session?.user.uuid ?? ''
-  const name = session?.user.name ?? ''
+  const name = activeAccountFirstName() ||
+      (session?.user.name ?? '')
   // The active account's own roster entry carries the masked mobile. Matched on
   // the subscriber id where both are known, so a stale cookie cannot label this
   // session with somebody else's number.

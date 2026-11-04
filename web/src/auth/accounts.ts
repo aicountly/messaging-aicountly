@@ -183,3 +183,21 @@ export function performAccountSwitch(uuid?: number | string): void {
       : buildAddAccountUrl(),
   )
 }
+
+/**
+ * The signed-in person's first name, as the portal published it; '' when the roster cannot be
+ * read.
+ *
+ * The menu's name has to be the same in every product, and the portal is the only thing that
+ * knows it. A product's own identity API knows whatever that product was provisioned with,
+ * which for someone who was never provisioned as a member is nothing at all -- that is how one
+ * menu came to show the literal words "Signed in". This needs no request: the portal writes the
+ * label into a cookie every product on the domain can read.
+ */
+export function activeAccountFirstName(): string {
+  try {
+    return readAccountRoster().find((account) => account.active)?.name ?? ''
+  } catch {
+    return ''
+  }
+}
