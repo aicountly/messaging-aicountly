@@ -133,6 +133,7 @@ test('the portal’s summary cookie is read as the accounts on this browser', ()
   assert.deepEqual(roster[0], {
     uuid: 88,
     name: 'Rahul Gupta',
+    fullName: 'Rahul Gupta',
     maskedEmail: 'ra•••@cagupta.in',
     maskedMobile: '+91••••••••78',
     active: true,

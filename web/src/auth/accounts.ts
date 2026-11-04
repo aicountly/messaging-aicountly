@@ -38,8 +38,13 @@ const VIEW_COOKIE = 'AIC_ACCOUNTS_VIEW'
 export interface RosterAccount {
   /** uuid_aictly — the subscriber id, and what the portal switches on. */
   uuid: number
-  /** Display name; may be empty when the account has no name on file. */
+  /**
+   * What a menu shows: the first name when the portal sent one, else the whole
+   * name. May be empty when the account has no name on file.
+   */
   name: string
+  /** The whole name, for anything that wants more than the menu line. */
+  fullName: string
   /** Already masked by the portal, e.g. `ra•••@cagupta.in`. Never the full address. */
   maskedEmail: string
   /** Already masked by the portal, e.g. `+91••••••••10`. */
@@ -98,7 +103,11 @@ export function readAccountRoster(): RosterAccount[] {
 
     accounts.push({
       uuid,
-      name: typeof record.n === 'string' ? record.n : '',
+      // The first name (`f`) is what a menu shows, so the same person reads the
+      // same name in every product; `n` is the whole name, kept for anything that
+      // wants it. A portal that has not shipped `f` yet falls back to `n`.
+      name: typeof record.f === 'string' && record.f !== '' ? record.f : (typeof record.n === 'string' ? record.n : ''),
+      fullName: typeof record.n === 'string' ? record.n : '',
       maskedEmail: typeof record.e === 'string' ? record.e : '',
       maskedMobile: typeof record.m === 'string' ? record.m : '',
       active: Number(record.a) === 1,
