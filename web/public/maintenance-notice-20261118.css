@@ -1,0 +1,38 @@
+#aic-maintenance-20261118 {
+  position: fixed;
+  z-index: 2147483000;
+  inset: auto 12px max(12px,env(safe-area-inset-bottom)) auto;
+  box-sizing: border-box;
+  width: min(30rem,calc(100% - 24px));
+  max-height: 45vh;
+  overflow: auto;
+  padding: 14px 16px;
+  border: 1px solid #e3b84c;
+  border-left: 4px solid #b67700;
+  border-radius: 8px;
+  background: #fff8df;
+  color: #342500;
+  font: normal 15px/1.45 system-ui,sans-serif;
+  text-align: left;
+  box-shadow: 0 3px 16px #0003;
+}
+
+#aic-maintenance-20261118 > button {
+  float: right;
+  margin: 0 0 4px 12px;
+  border: 1px solid #997932;
+  border-radius: 4px;
+  background: #fff;
+  color: #342500;
+  padding: 5px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+#aic-maintenance-20261118 > strong#aic-maintenance-title {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+#aic-maintenance-20261118[hidden] { display: none !important; }
