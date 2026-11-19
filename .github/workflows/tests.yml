@@ -1,11 +1,10 @@
 name: Tests
 
-# E8-OPS (F109): the repository's own suites as a gate. Manual (workflow_dispatch) or called by the
-# deploy workflows (workflow_call, job `verify`), whose deploy job `needs:` it — a red suite stops a
-# production or sandbox deploy. Never deploys, never reads a deployment secret, never calls a live
-# service: PostgreSQL is the job's own throwaway service container and every sibling product is a
-# local stub.
+# Runs on every push and pull request. Deployment remains manual.
+
 on:
+  push:
+  pull_request:
   workflow_dispatch:
   workflow_call:
 
