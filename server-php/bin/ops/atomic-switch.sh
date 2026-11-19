@@ -122,6 +122,32 @@ sys.exit(0 if fn(AT_FDCWD, os.fsencode(sys.argv[1]), AT_FDCWD, os.fsencode(sys.a
 PY
 }
 
+# A staged root may be 0700. Carry the working release's root access policy;
+# rsync/tar must not replace Apache's named search ACL with the stage's mode.
+# Only this directory is changed: no children, credentials or default ACLs.
+inherit_root_access() {
+  local from="$1" to="$2" acl mode identity target_mode
+  local LC_ALL=C
+  export LC_ALL
+  [ -d "$from" ] && [ ! -L "$from" ] && [ -d "$to" ] && [ ! -L "$to" ] || return 1
+  [ "$(stat -c '%u' -- "$from")" = "$EUID" ] && [ "$(stat -c '%u' -- "$to")" = "$EUID" ] || return 1
+  command -v getfacl >/dev/null 2>&1 && command -v setfacl >/dev/null 2>&1 || {
+    echo "atomic-switch: getfacl/setfacl are required to preserve release access" >&2; return 1;
+  }
+  identity="$(stat -c '%d:%i:%u:%g' -- "$from")" || return 1
+  mode="$(stat -c '%a' -- "$from")" || return 1
+  target_mode="$(stat -c '%a' -- "$to")" || return 1
+  acl="$(getfacl -cpnE --access -- "$from")" || return 1
+  [ -n "$acl" ] || return 1
+  printf '%s\n' "$acl" | setfacl --set-file=- -- "$to" || return 1
+  [ "$(getfacl -cpnE --access -- "$to")" = "$acl" ] &&
+    [ "$((8#$(stat -c '%a' -- "$to") & 0777))" = "$((8#$mode & 0777))" ] &&
+    [ "$((8#$(stat -c '%a' -- "$to") & 07000))" = "$((8#$target_mode & 07000))" ] &&
+    [ "$(stat -c '%d:%i:%u:%g' -- "$from")" = "$identity" ] &&
+    [ "$(getfacl -cpnE --access -- "$from")" = "$acl" ] &&
+    [ "$(stat -c '%a' -- "$from")" = "$mode" ]
+}
+
 # Point $live at $1 with a single rename (live already a symlink).
 swap_to() {
   local tmp="$live.next.$$"
@@ -183,6 +209,7 @@ if [ "$mode" = rollback ]; then
   done < <(release_names)
   [ -n "$prev" ] && [ -d "$prev" ] || { echo "atomic-switch: no earlier release in $releases"; exit 23; }
   # A pre-atomic folder is a plain api/: it still serves, its shared paths are symlinks into shared/.
+  inherit_root_access "$cur" "$prev" || { echo "atomic-switch: cannot preserve rollback root access" >&2; exit 17; }
   swap_to "$prev" || exit 17
   retire "$cur"; rm -f "$releases_dir/.retired/$(basename "$prev")"
   echo "atomic-switch: rolled back $live -> $prev (was $cur)"
@@ -238,6 +265,7 @@ else
   rm -f "$rel/$env_file" "$rel/REVISION" "$rel/REVISION.tmp"
   find "$rel" -maxdepth 1 -name '.env.*' ! -name '.env.example' -exec rm -f {} + 2>/dev/null
 fi
+inherit_root_access "$link_from" "$rel" || { rm -rf -- "$rel"; echo "atomic-switch: cannot preserve release root access" >&2; exit 17; }
 # The shipped example stays; every other .env file is the server's and comes from the current code.
 [ -f "$src/.env.example" ] && cp -p "$src/.env.example" "$rel/.env.example"
 umask 077
@@ -288,6 +316,7 @@ if [ ! -L "$live" ]; then
   #     "api is a folder"), the normal switch below puts the new release live.
   pre="$releases/${stamp}-pre-atomic"
   cp -al "$live" "$pre" 2>/dev/null || { rm -rf -- "$pre"; cp -a "$live" "$pre"; } || { rm -rf -- "$pre"; echo "atomic-switch: could not copy the plain folder"; exit 17; }
+  inherit_root_access "$live" "$pre" || { rm -rf -- "$pre" "$rel"; echo "atomic-switch: cannot preserve conversion root access" >&2; exit 17; }
   tmp="$live.next.$$"
   rm -f "$tmp"
   ln -s "$pre" "$tmp" || exit 17
