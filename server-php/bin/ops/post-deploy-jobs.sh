@@ -20,6 +20,11 @@
 # run, every heartbeat is skipped and Console shows them OVERDUE) · 21 the crontab could not be installed ·
 # 2 bad usage / no PHP.
 set -uo pipefail
+# The S01 deployment broker holds background work until a separate verified release.
+if [ "${AICOUNTLY_S01_WEB_ONLY:-0}" = "1" ]; then
+  echo "S01: scheduled jobs remain deferred; no cron or first-run job was changed."
+  exit 0
+fi
 # Whether `php -m` output names a module, without a pipe: `printf | grep -q` under pipefail can fail with
 # SIGPIPE when grep exits first, so two runs could choose different PHP CLIs (Connect sandbox: --apply
 # and --check disagreed). Same test as release.sh's php_ok().
@@ -67,8 +72,8 @@ php_ext="$(sed -n 's/^#![[:space:]]*php-ext:[[:space:]]*\([a-z0-9_]*\).*/\1/p' "
 php_ext="${php_ext:-pdo_pgsql}"
 case "$php_bin" in */* | '') ;; *) php_bin="$(command -v "$php_bin" 2>/dev/null || true)" ;; esac
 if [ -z "$php_bin" ]; then
-  for c in /opt/cpanel/ea-php84/root/usr/bin/php /opt/cpanel/ea-php83/root/usr/bin/php \
-           /opt/cpanel/ea-php82/root/usr/bin/php /opt/cpanel/ea-php81/root/usr/bin/php \
+  for c in /opt/remi/php84/root/usr/bin/php /opt/remi/php83/root/usr/bin/php \
+           /opt/remi/php82/root/usr/bin/php /opt/remi/php81/root/usr/bin/php \
            /usr/local/bin/php /usr/bin/php "$(command -v php 2>/dev/null || true)"; do
     if [ -n "$c" ] && [ -x "$c" ] && mods="$("$c" -m 2>/dev/null)" && has_module "$mods" "$php_ext"; then php_bin="$c"; break; fi
   done

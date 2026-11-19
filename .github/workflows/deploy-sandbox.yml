@@ -10,7 +10,7 @@
 # complete new release in one rename (server-php/bin/ops/atomic-switch.sh).
 # No source, no node_modules, and no .env ever reach the server.
 # ---------------------------------------------------------------------------
-name: Deploy to cPanel Sandbox
+name: Deploy to S01 Sandbox
 
 on:
   workflow_dispatch:
@@ -58,13 +58,23 @@ jobs:
       # the filesystem root instead of the document root.
 
       # Trust the host key the server presents (scanned on each run).
+      - name: Verify S01 deployment target
+        id: s01_target
+        env:
+          AIC_S01_TARGETS: '[{"domain":"messaging.gh.aicountly.com","account":"ghaicountly","root":"/home/ghaicountly/public_html/messaging.gh.aicountly.com","verified_blueprint":true,"ssh_login":"aicdf174b439638a655a"}]'
+          AIC_TARGET_SANDBOX_SSH_HOST: ${{ secrets.SANDBOX_SSH_HOST }}
+          AIC_TARGET_SANDBOX_SSH_PORT: ${{ secrets.SANDBOX_SSH_PORT }}
+          AIC_TARGET_SANDBOX_SSH_REMOTE_ROOT: ${{ secrets.SANDBOX_SSH_REMOTE_ROOT }}
+          AIC_TARGET_SANDBOX_SSH_USER: ${{ secrets.SANDBOX_SSH_USER }}
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/s01-target-guard.py"
+
       - name: Trust SSH host key
         env:
           PIN_HOST: ${{ secrets.SANDBOX_SSH_HOST }}
           PIN_PORT: ${{ secrets.SANDBOX_SSH_PORT }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -T 15 -p "${PIN_PORT:-22}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
+          python3 "$GITHUB_WORKSPACE/.github/scripts/s01-keyscan.py" -T 15 -p "${PIN_PORT:-9898}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
           [ -s ~/.ssh/known_hosts ] || { echo "::error::No SSH host key to trust."; exit 1; }
           chmod 600 ~/.ssh/known_hosts
           ssh-keygen -l -f ~/.ssh/known_hosts | sed 's/^/    /'
@@ -214,7 +224,7 @@ jobs:
           Host deploy-target
             HostName $SSH_HOST
             User $SSH_USER
-            Port ${SSH_PORT:-22}
+            Port ${SSH_PORT:-9898}
             IdentityFile ~/.ssh/deploy_key
             IdentitiesOnly yes
             StrictHostKeyChecking yes

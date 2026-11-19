@@ -10,7 +10,7 @@
 # complete new release in one rename (server-php/bin/ops/atomic-switch.sh).
 # No source, no node_modules, and no .env ever reach the server.
 # ---------------------------------------------------------------------------
-name: Deploy to cPanel Production
+name: Deploy to S01 Production
 
 on:
   workflow_dispatch:
@@ -59,6 +59,16 @@ jobs:
       # The owner's rule (2026-10-26): production deploys run 20:00-08:00 IST; in business hours
       # only with the owner's explicit permission, recorded (scripts/ops/deploy-window.sh). The
       # first step after the checkout that carries the script, before any build or upload.
+      - name: Verify S01 deployment target
+        id: s01_target
+        env:
+          AIC_S01_TARGETS: '[{"domain":"messaging.aicountly.com","account":"messagingaic","root":"/home/messagingaic/public_html","verified_blueprint":true,"ssh_login":"aicd75d4e5e7a3ce30f0"}]'
+          AIC_TARGET_PROD_SSH_HOST: ${{ secrets.PROD_SSH_HOST }}
+          AIC_TARGET_PROD_SSH_PORT: ${{ secrets.PROD_SSH_PORT }}
+          AIC_TARGET_PROD_SSH_REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
+          AIC_TARGET_PROD_SSH_USER: ${{ secrets.PROD_SSH_USER }}
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/s01-target-guard.py"
+
       - name: Production deploy window (20:00-08:00 IST)
         env:
           BUSINESS_HOURS_REASON: ${{ inputs.business_hours_reason }}
@@ -84,7 +94,7 @@ jobs:
           PIN_PORT: ${{ secrets.PROD_SSH_PORT }}
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          ssh-keyscan -T 15 -p "${PIN_PORT:-22}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
+          python3 "$GITHUB_WORKSPACE/.github/scripts/s01-keyscan.py" -T 15 -p "${PIN_PORT:-9898}" "$PIN_HOST" > ~/.ssh/known_hosts 2>/dev/null || { echo "::error::ssh-keyscan could not reach the host"; exit 1; }
           [ -s ~/.ssh/known_hosts ] || { echo "::error::No SSH host key to trust."; exit 1; }
           chmod 600 ~/.ssh/known_hosts
           ssh-keygen -l -f ~/.ssh/known_hosts | sed 's/^/    /'
@@ -235,7 +245,7 @@ jobs:
           Host deploy-target
             HostName $SSH_HOST
             User $SSH_USER
-            Port ${SSH_PORT:-22}
+            Port ${SSH_PORT:-9898}
             IdentityFile ~/.ssh/deploy_key
             IdentitiesOnly yes
             StrictHostKeyChecking yes
@@ -487,6 +497,7 @@ jobs:
       # --------------------------------------------------------------------
 
       - name: Scheduled jobs (crontab + Cron Job Monitor key)
+        if: ${{ vars.S01_WEB_ONLY == '0' }}
         env:
           REMOTE_ROOT: ${{ secrets.PROD_SSH_REMOTE_ROOT }}
           CONSOLE_CRON_MONITOR_KEY: ${{ secrets.CONSOLE_CRON_MONITOR_KEY }}
@@ -506,7 +517,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           case "$rc" in
-            0)  echo "Scheduled jobs installed; heartbeats go to Console's Cron Job Monitor." ;;
+            0)  echo "Scheduled-job hook completed; see its output above for installed or deferred status." ;;
             20) echo "::warning::The jobs are installed, but api/.env has no CONSOLE_CRON_MONITOR_KEY and the repo secret is empty — they run without reporting, so Console shows them OVERDUE. Add the CONSOLE_CRON_MONITOR_KEY repository secret and deploy again." ;;
             21) echo "::error::The crontab could not be installed on the host (output above). The release is live; the jobs are not scheduled."; exit 1 ;;
             *)  echo "::error::post-deploy-jobs.sh failed (exit $rc, output above)."; exit 1 ;;
