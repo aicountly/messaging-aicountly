@@ -417,10 +417,13 @@ jobs:
           STAGE: .aicountly-deploy/messaging-production/stage
         run: |
           # Find the account's PHP CLI. cPanel accounts often have several and
-          # the one on PATH is not reliably the CLI build.
-          php_bin=$(ssh deploy-target 'command -v php || command -v /usr/local/bin/php || command -v /usr/bin/php' 2>/dev/null | head -n1)
+          # the one on PATH is not reliably the CLI build. S01 (since the 18 Nov
+          # 2026 move) has Remi PHP under /opt/remi and the deploy user may have
+          # no php on its non-interactive PATH: then the newest Remi build with
+          # pdo_pgsql (the migrations connect over pgsql:).
+          php_bin=$(ssh deploy-target 'command -v php || command -v /usr/local/bin/php || command -v /usr/bin/php || for c in /opt/remi/php84/root/usr/bin/php /opt/remi/php83/root/usr/bin/php /opt/remi/php82/root/usr/bin/php /opt/remi/php81/root/usr/bin/php; do [ -x "$c" ] && "$c" -m 2>/dev/null | grep -qix pdo_pgsql && { echo "$c"; break; }; done' 2>/dev/null | head -n1)
           if [ -z "$php_bin" ]; then
-            echo "::error::No PHP CLI found on the server. Migrations were not applied."
+            echo "::error::No PHP CLI found on the server (no php on the PATH, /usr/local/bin/php or /usr/bin/php, and no /opt/remi/php8{4,3,2,1} build with pdo_pgsql). Migrations were not applied."
             exit 1
           fi
           echo "Using $php_bin"
