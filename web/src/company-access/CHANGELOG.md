@@ -3,6 +3,54 @@
 Copy the whole folder into a product (`web/src/company-access/`); `VERSION` says which release a
 product carries. Newest first.
 
+## 1.6.0 — 2026-11-21
+
+Users & Access lists the people who have access, and adds the rest from a picker (owner request, 2026-11-21: "show
+only those users who have access … and option to add user to grant access"). The owner's table used to hold every
+Workspace team member and Company user, most of them "Access restricted" with a role, a date and a Grant button each.
+
+- `<CompanyUsersAccessPanel>`, People & access (owner): the table lists everyone whose status in THIS application is not
+  `ACCESS_RESTRICTED` — the owner, people granted (directly or through the Workspace team), and those whose access
+  expired, was revoked or is requested, who keep their Grant / Revoke controls as before.
+- **Add user** opens a picker of the people who are `ACCESS_RESTRICTED` here: search by name, e-mail or mobile, choose
+  one, the role (Default role when the product offers none) and an optional end date, Grant. On success the panel
+  reloads and they move into the table; on a refusal the picker stays open with the error. Disabled, with a reason,
+  when nobody is left to add.
+- A table with nobody in it says so and points to Add user.
+- Display only: the same `permissions()` answer split in two, the same `grant()` call. No new route, no API change,
+  no host change.
+
+## 1.5.0 — 2026-11-13
+
+Who somebody is, said the same way on every screen that lists people — Books' team list
+(`modules/access/TeamMembersPage.jsx`) is the shape: name, e-mail, mobile and the account id, all four,
+each on a labelled line of its own.
+
+The rule that comes with it is the point. **A field that is missing says so.** It is never quietly
+replaced by another field and never dropped from the row. These screens used to print whichever field
+happened to be there — so a person the registry had no name for was listed as "User #4243", which reads
+like an account called that — and then showed the e-mail ONLY when a name was there too, so the row that
+needed the address most was the one that hid it.
+
+- New `<PersonIdentity person={…} />` draws the four labelled fields; anything the registry has not been
+  told reads "Not Available", quietly, never emphasised. New `formatPersonDisplay()` behind it, ported
+  from Books field for field, including Books' correction for an address filed as a name (a share made by
+  e-mail before the directory knew one) — it is read back onto the e-mail line instead of standing in as
+  a name.
+- `<CompanyUsersAccessPanel>` people table and `<WorkspaceManager>`'s Workspace team, Company users and
+  suggestion lists all draw their rows with it.
+- `PermissionMember.mobile`, `WorkspaceMember.mobile` and `MemberSuggestion.mobile`, all optional: a
+  registry older than this sends none and the row says the mobile is not available.
+- `CompanyPermissions.viewer_uuid`, optional: who is asking, so the people table marks their own row
+  "(you)" as the sharing dialogs do. Absent from an older registry and the row is simply not marked.
+- `personName()` stays, for a person's name in a SENTENCE — a toast, a confirmation, an aria-label, where
+  "Not Available was invited to your workspace" would be nonsense. `personSecondary()` is deprecated: it
+  is the rule that hid the address.
+- Styles: `.aic-ca-identity`, `.aic-ca-detail`, `.aic-ca-detail-label`, `.aic-ca-detail-value`,
+  `.aic-ca-detail-strong`, `.aic-ca-detail-missing`.
+
+Needs no new route and no API change; a relay passes the mobile through if its registry sends one.
+
 ## 1.4.0 — 2026-10-29
 
 One set of team permissions for several people at once (owner request, 2026-10-29: "a single profile to either all

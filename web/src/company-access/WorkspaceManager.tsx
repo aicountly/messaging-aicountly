@@ -12,11 +12,13 @@ import type {
 } from './companyRegistryClient.ts';
 import { CompanyRegistryError, emptyWorkspaceSettings } from './companyRegistryClient.ts';
 import { WorkspaceMemberSettingsForm, appLabel, workspaceSettingsSummary } from './WorkspaceCreation.tsx';
-import { personName, personSecondary, shortDate } from './people.ts';
+import { personName, shortDate } from './people.ts';
+import { PersonIdentity } from './PersonIdentity.tsx';
 import { injectCompanyAccessStyles } from './styles.ts';
 
 /** Runs one change and reports it; resolves (never rejects) once the change is done or has failed. */
-export type WorkspaceRun = (key: string, fn: () => Promise<unknown>, done: string) => Promise<void>;
+// Promise<unknown> (1.6.0): a host's run may report whether the change went through; this screen ignores it.
+export type WorkspaceRun = (key: string, fn: () => Promise<unknown>, done: string) => Promise<unknown>;
 
 export interface WorkspaceManagerProps {
   client: CompanyRegistryClient;
@@ -526,7 +528,6 @@ export function WorkspaceManager({ client, workspace, onChanged, run: hostRun, b
         ) : (
           <ul className="aic-ca-list" aria-label="Workspace team">
             {team.map((m) => {
-              const secondary = personSecondary(m);
               const who = personName(m);
               const direct = m.direct_companies ?? [];
               const invited = m.status === 'invited';
@@ -538,8 +539,7 @@ export function WorkspaceManager({ client, workspace, onChanged, run: hostRun, b
                       <Pick who={who} checked={teamPicked.has(m.uuid)} disabled={teamLocked} onChange={(on) => setTeamPicked((p) => toggled(p, m.uuid, on))} />
                     )}
                     <span style={{ minWidth: 0, flex: '1 1 auto' }}>
-                      <span className="aic-ca-name" style={{ display: 'block' }}>{who}</span>
-                      {secondary ? <span className="aic-ca-meta" style={{ display: 'block' }}>{secondary}</span> : null}
+                      <PersonIdentity person={m} />
                       <span className="aic-ca-meta" style={{ display: 'block' }}>{memberStatus(m)}</span>
                       {m.membership_type !== 'owner' && m.settings ? (
                         <span className="aic-ca-meta" style={{ display: 'block' }}>{workspaceSettingsSummary(m.settings)}</span>
@@ -727,7 +727,6 @@ export function WorkspaceManager({ client, workspace, onChanged, run: hostRun, b
           ) : null}
           <ul className="aic-ca-list" aria-label="Company users">
             {companyUsers.map((u) => {
-              const secondary = personSecondary(u);
               const who = personName(u);
               const k = u.uuid;
               const member = (members ?? []).find((m) => m.uuid === u.uuid);
@@ -738,8 +737,7 @@ export function WorkspaceManager({ client, workspace, onChanged, run: hostRun, b
                       <Pick who={who} checked={usersPicked.has(u.uuid)} disabled={usersLocked} onChange={(on) => setUsersPicked((p) => toggled(p, u.uuid, on))} />
                     ) : null}
                     <span style={{ minWidth: 0, flex: '1 1 auto' }}>
-                      <span className="aic-ca-name" style={{ display: 'block' }}>{who}</span>
-                      {secondary ? <span className="aic-ca-meta" style={{ display: 'block' }}>{secondary}</span> : null}
+                      <PersonIdentity person={u} />
                       {u.companies.length === 0 ? (
                         <span className="aic-ca-meta" style={{ display: 'block' }}>No company is shared with them — they have no access to your workspace.</span>
                       ) : (
@@ -825,13 +823,12 @@ export function WorkspaceManager({ client, workspace, onChanged, run: hostRun, b
           <div className="aic-ca-meta">People you already share companies with:</div>
           <ul className="aic-ca-list">
             {suggestions.map((s) => {
-              const secondary = personSecondary(s);
               return (
-                <li key={s.uuid} className="aic-ca-item" style={{ cursor: 'default' }}>
+                <li key={s.uuid} className="aic-ca-item" style={{ cursor: 'default', alignItems: 'flex-start' }}>
                   <span style={{ minWidth: 0 }}>
-                    <span className="aic-ca-name" style={{ display: 'block' }}>{personName(s)}</span>
+                    <PersonIdentity person={s} />
                     <span className="aic-ca-meta">
-                      {secondary ? `${secondary} · ` : ''}shares {s.shared_company_count} of your compan{s.shared_company_count === 1 ? 'y' : 'ies'}
+                      shares {s.shared_company_count} of your compan{s.shared_company_count === 1 ? 'y' : 'ies'}
                     </span>
                   </span>
                   <button

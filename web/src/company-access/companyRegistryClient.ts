@@ -196,6 +196,13 @@ export interface PermissionMember {
   uuid: string;
   name: string | null;
   email: string | null;
+  /**
+   * v1.5.0. Beside the address because the access screens name a person by all
+   * four of name, e-mail, mobile and id. Optional: a registry older than 1.5.0
+   * sends none, and the row then says the mobile is not available rather than
+   * pretending there is no such person.
+   */
+  mobile?: string | null;
   relationship: 'owner' | 'member' | 'workspace';
   is_owner: boolean;
   legacy_co_owner: boolean;
@@ -219,6 +226,8 @@ export interface CompanyPermissions {
   company: { cmp_id: number; name: string; company_status: string };
   is_owner: boolean;
   can_manage_access: boolean;
+  /** v1.5.0: who is asking, so their own row can be marked. Absent from an older registry. */
+  viewer_uuid?: string | null;
   app: string | null;
   applications: Array<{ key: string; name: string }>;
   members: PermissionMember[];
@@ -274,6 +283,8 @@ export interface WorkspaceMember {
   status: 'invited' | 'active' | 'declined' | 'exited' | 'removed';
   name: string | null;
   email: string | null;
+  /** v1.5.0, as on {@link PermissionMember}: optional, and absent means "not known". */
+  mobile?: string | null;
   invited_at: string | null;
   accepted_at: string | null;
   /** v1.2.0: the owner's sharing settings for this member (null for the owner's own row). */
@@ -289,6 +300,8 @@ export interface MemberSuggestion {
   uuid: string;
   name: string | null;
   email: string | null;
+  /** v1.5.0, as on {@link PermissionMember}: optional, and absent means "not known". */
+  mobile?: string | null;
   shared_company_count: number;
 }
 

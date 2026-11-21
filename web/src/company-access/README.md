@@ -1,4 +1,4 @@
-# AICOUNTLY shared company access (v1.4.0)
+# AICOUNTLY shared company access (v1.6.0)
 
 One company directory, one access model and one set of screens for every AICOUNTLY product.
 The authority is Manage's company registry (`/api/v1/*`, contract in
