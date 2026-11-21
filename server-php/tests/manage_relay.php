@@ -47,7 +47,7 @@ $client = (string) file_get_contents(dirname($root) . '/web/src/company-access/c
 preg_match_all("/call<(?:[^<>]|<[^<>]*>)*>\\('(GET|POST|PUT|PATCH|DELETE)', [`']([^`']+)[`']/", $client, $calls, PREG_SET_ORDER);
 $check('the shared client was read (all 32 calls of company-access 1.4.0)', count($calls) >= 32, (string) count($calls));
 $version = trim((string) file_get_contents(dirname($root) . '/web/src/company-access/VERSION'));
-$check('the vendored company-access is 1.7.0', $version === '1.7.0', $version);
+$check('the vendored company-access is 1.8.0', $version === '1.8.0', $version);
 foreach ($calls as [, $method, $path]) {
     $concrete = preg_replace('/\$\{query\([^}]*\}\)?\}?/', '', $path);
     $concrete = str_replace('${action}', 'accept', (string) $concrete);

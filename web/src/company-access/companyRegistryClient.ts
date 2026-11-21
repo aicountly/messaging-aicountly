@@ -220,7 +220,19 @@ export interface PermissionMember {
   workspace_role_key?: string | null;
   /** v1.3.0: what opens this application for them. */
   app_access_via?: 'owner' | 'share' | 'workspace' | null;
+  /**
+   * v1.8.0 (Manage `company-roles.v1`): the role they open this application with, by one order — the role set for
+   * THIS company, else their Workspace team role, else the application's default. Absent from an older registry.
+   */
+  role_source?: RoleSource | null;
+  /** v1.8.0: the role set for this company only (null: they inherit). */
+  company_role_key?: string | null;
+  /** v1.8.0: the role that applies, whichever its source (null: the product decides, e.g. Books' own default). */
+  effective_role_key?: string | null;
 }
+
+/** v1.8.0: where a person's role in an application comes from. */
+export type RoleSource = 'company' | 'workspace' | 'default';
 
 export interface CompanyPermissions {
   company: { cmp_id: number; name: string; company_status: string };
@@ -228,6 +240,8 @@ export interface CompanyPermissions {
   can_manage_access: boolean;
   /** v1.5.0: who is asking, so their own row can be marked. Absent from an older registry. */
   viewer_uuid?: string | null;
+  /** v1.8.0: the role someone opens the application with when neither this company nor the Workspace team names one. */
+  default_role_key?: string | null;
   app: string | null;
   applications: Array<{ key: string; name: string }>;
   members: PermissionMember[];
