@@ -3,6 +3,32 @@
 Copy the whole folder into a product (`web/src/company-access/`); `VERSION` says which release a
 product carries. Newest first.
 
+## 1.7.0 — 2026-11-21
+
+"Add user" finds anyone (owner request, 2026-11-21: "add user using email / uuid / mobile … show with details of user to
+invite … handle multiple accounts … if user is not registered, it will show user not registered with invite to send").
+
+- `<CompanyUsersAccessPanel>` → Add user → **Find by** E-mail / Mobile / Account ID. The answer shows who it is (name,
+  e-mail, mobile, ID — `PersonIdentity`), how they are tied to the company, their status here, and the one thing to do:
+  - **Grant** (in the company or the owner's workspace): role, optional end date — the existing `grant()`.
+  - **Send invitation** (registered, not tied yet): role — they get access once they accept it.
+  - nothing to do (already has access, already invited, the owner) — with the reason.
+  - **Several accounts on one e-mail or mobile** are listed side by side (one radio each, named by account ID and name)
+    to choose from, instead of the look-up finding nobody.
+  - **Not registered**: "No AICOUNTLY account uses this …" and **Send invitation** to sign up; for a mobile, the
+    e-mail the invitation goes to is asked for.
+  - **Account ID** is looked up among the people tied to the owner only (the directory is never walked by id); an
+    unknown one says to use e-mail or mobile.
+- The 1.6.0 list of the workspace's restricted people stays below it ("Or choose from …"). Add user is no longer
+  disabled when that list is empty.
+- Client: `lookupPerson(cmpId, {kind, value})` → `POST v1/companies/{id}/people/lookup`;
+  `invitePerson(cmpId, {uuid | email, mobile?, role_key?})` → `POST v1/companies/{id}/people/invite`. Types
+  `PersonLookupKind`, `PersonMatch`, `PersonLookupResult`.
+- **Needs Manage with contract `company-people.v1`** (and my.aicountly `userinfo/lookup … candidates=1` for several
+  accounts on one e-mail or mobile). An older Manage answers the look-up 404: the panel says so and the list still works.
+- **Relays:** a product that relays the client's calls through an allow-list must add
+  `POST v1/companies/{id}/people/lookup` and `POST v1/companies/{id}/people/invite`.
+
 ## 1.6.0 — 2026-11-21
 
 Users & Access lists the people who have access, and adds the rest from a picker (owner request, 2026-11-21: "show

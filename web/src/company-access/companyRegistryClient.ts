@@ -305,6 +305,37 @@ export interface MemberSuggestion {
   shared_company_count: number;
 }
 
+/** v1.7.0: how the owner identifies the person they are adding. */
+export type PersonLookupKind = 'email' | 'mobile' | 'account_id';
+
+/** v1.7.0: one account a people look-up found, and what the owner can do for it in this application. */
+export interface PersonMatch {
+  uuid: string;
+  name: string | null;
+  email: string | null;
+  mobile: string | null;
+  /** owner · company (shared this company) · workspace (the owner's workspace) · none (not tied yet). */
+  relation: 'owner' | 'company' | 'workspace' | 'none';
+  workspace_group: WorkspaceGroup | null;
+  app_access_status: AccessStatus | null;
+  /** grant — `grant()` now · invite — `invitePerson()` (they accept) · none — `note` says why. */
+  action: 'grant' | 'invite' | 'none';
+  note: string | null;
+}
+
+/** v1.7.0: `POST v1/companies/{id}/people/lookup`. */
+export interface PersonLookupResult {
+  kind: PersonLookupKind;
+  /** What was looked up, normalised (a mobile as its 10 digits). */
+  value: string;
+  app: string;
+  status: 'found' | 'multiple' | 'not_registered' | 'not_found';
+  matches: PersonMatch[];
+  /** Somebody with no account: invite them to sign up (by e-mail — a mobile needs one added). */
+  invite: { possible: boolean; needs_email: boolean };
+  message: string | null;
+}
+
 export interface AuditEntry {
   audit_id: number;
   occurred_at: string;
@@ -455,6 +486,10 @@ export interface CompanyRegistryClient {
   removeFromCompany(cmpId: number, uuid: string): Promise<RemoveFromCompanyResult>;
   respondToWorkspace(workspaceId: number, action: 'accept' | 'decline' | 'exit'): Promise<unknown>;
   duplicateCheck(body: { comp_name?: string; pan?: string; cin?: string; llpin?: string; gstins?: string[] }): Promise<{ matches: DuplicateMatch[]; can_create: boolean; needs_acknowledgement: boolean }>;
+  /** v1.7.0: owner — find a person by e-mail, mobile or account ID (several accounts on one e-mail / mobile are all returned). */
+  lookupPerson(cmpId: number, body: { kind: PersonLookupKind; value: string; app?: string }): Promise<PersonLookupResult>;
+  /** v1.7.0: owner — invite a found account (`uuid`) or an e-mail with no account to this company, for this application. */
+  invitePerson(cmpId: number, body: { uuid?: string; email?: string; mobile?: string; role_key?: string | null; app?: string }): Promise<{ invited: boolean; registered: boolean; app: string; message: string }>;
 }
 
 export function createCompanyRegistryClient(options: CompanyRegistryClientOptions): CompanyRegistryClient {
@@ -548,6 +583,10 @@ export function createCompanyRegistryClient(options: CompanyRegistryClientOption
     respondToWorkspace: async (workspaceId, action) => (await call<unknown>('POST', `/v1/workspaces/${workspaceId}/${action}`, {})).data,
     duplicateCheck: async (body) =>
       (await call<{ matches: DuplicateMatch[]; can_create: boolean; needs_acknowledgement: boolean }>('POST', '/v1/companies/duplicate-check', body)).data,
+    lookupPerson: async (cmpId, body) =>
+      (await call<PersonLookupResult>('POST', `/v1/companies/${cmpId}/people/lookup`, { app: appKey, ...body })).data,
+    invitePerson: async (cmpId, body) =>
+      (await call<{ invited: boolean; registered: boolean; app: string; message: string }>('POST', `/v1/companies/${cmpId}/people/invite`, { app: appKey, ...body })).data,
   };
 }
 
