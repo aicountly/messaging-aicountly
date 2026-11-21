@@ -15,10 +15,13 @@ setting — and a team member who had also been shared the company silently lost
 - **The order** (Manage, `decide()`; applied by companyinfo, the panel and the seat calls): the role set for **this
   company** → else the person's **Workspace team role** (Manage → Workspace, every company) → else the
   application's **default**.
-- `<CompanyUsersAccessPanel>`: every non-owner row with access has the same role picker. Its first option names what
-  they inherit — **Workspace team role (Administrator)** or **Default (Viewer)** — and the Access column says where
-  the role comes from (*set for this company* / *from the Workspace team* / *default*; in Books, which names no
-  default role in Manage, *Books profile: …* — the profile the share gave).
+- `<CompanyUsersAccessPanel>`: every non-owner row with access has the same role picker: the application's **own access
+  profiles** plus one inherited choice, **Workspace Default** — the role set for the person in Manage → Workspace,
+  shown beside it (e.g. "Workspace Default (Administrator)"). There is no separate "Default (Viewer)": the
+  application's lowest profile is chosen like any other (owner, 2026-11-21). The Access column says where the role
+  comes from (*set for this company* / *Workspace Default*; someone not on the Workspace team has no Workspace role and
+  keeps the application's base profile until one is chosen; in Books, which names no base role in Manage, *Books
+  profile: …*). "Add user" and access-request approval offer the same **Workspace Default** first choice.
   - Team-only member: choosing a role grants it for this company only (their other companies keep the team role);
     "For every company: Manage → Workspace" points to where the team role is changed.
   - Someone with a grant here: choosing the first option clears the company role and they go back to the inherited

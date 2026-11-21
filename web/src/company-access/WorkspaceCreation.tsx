@@ -237,8 +237,8 @@ export function WorkspaceMemberSettingsForm({ value, onChange, appRoles, disable
       ) : null}
       <div className="aic-ca-stack">
         <div>
-          <span className="aic-ca-name">App permissions on every company in your workspace</span>
-          <span className="aic-ca-meta" style={{ display: 'block' }}>Applies to all your companies (except ones you hide), now and later. Ends at once if they leave, you move them to Company users or you remove them.</span>
+          <span className="aic-ca-name">Workspace Default — app permissions on every company in your workspace</span>
+          <span className="aic-ca-meta" style={{ display: 'block' }}>Applies to all your companies (except ones you hide), now and later, unless another role is set for one company in its Users &amp; Access. Ends at once if they leave, you move them to Company users or you remove them.</span>
         </div>
         {apps.map((app) => (
           <label key={app} className="aic-ca-row">

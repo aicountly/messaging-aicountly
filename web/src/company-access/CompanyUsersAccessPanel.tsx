@@ -204,6 +204,9 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
   );
 }
 
+/** 1.8.0: the one inherited choice in every role picker — the role set in Manage → Workspace. */
+const WORKSPACE_DEFAULT = 'Workspace Default';
+
 /** Resolves true when the change went through (the panel has reloaded), false when it showed an error. */
 type Run = (key: string, fn: () => Promise<unknown>, done: string) => Promise<boolean>;
 
@@ -219,23 +222,24 @@ function OwnerPeople({ members, companyName, appName, roles, busyKey, run, clien
   const [expiry, setExpiry] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
   const appKey = client.appKey;
-  const roleLabel = (key: string | null | undefined) => roles?.find((r) => r.key === key)?.label ?? key ?? 'Default';
-  // 1.8.0: what someone gets when no role is set for THIS company — their Workspace team role (Manage → Workspace,
-  // every company), else the application's default. The role picker's first option names it, so "Default" no longer
-  // reads as "the Workspace setting" while meaning the application's lowest role.
+  const roleLabel = (key: string | null | undefined) => roles?.find((r) => r.key === key)?.label ?? key ?? WORKSPACE_DEFAULT;
+  // 1.8.0: the picker offers the application's own access profiles plus ONE inherited choice, "Workspace Default": the
+  // role set for the person in Manage → Workspace (every company). There is no separate "Default (Viewer)" — the
+  // application's lowest role is one of its own profiles, chosen like any other.
   const inheritedLabel = (m: PermissionMember) => (m.workspace_role_key
-    ? `Workspace team role (${roleLabel(m.workspace_role_key)})`
-    : defaultRoleKey ? `Default (${roleLabel(defaultRoleKey)})` : 'Default');
+    ? `${WORKSPACE_DEFAULT} (${roleLabel(m.workspace_role_key)})`
+    : WORKSPACE_DEFAULT);
   const sourceNote = (m: PermissionMember, companyRole: string | null) => {
     if (m.role_source === 'company' || (m.role_source === undefined && companyRole)) {
       return `Role: ${roleLabel(companyRole)} · set for this company`;
     }
     if (m.role_source === 'workspace' || (m.role_source === undefined && m.workspace_role_key)) {
-      return `Role: ${roleLabel(m.workspace_role_key)} · from the Workspace team`;
+      return `Role: ${roleLabel(m.workspace_role_key)} · ${WORKSPACE_DEFAULT}`;
     }
+    // Not on the Workspace team, so no Workspace role: the application's base profile applies until one is chosen.
     const role = m.effective_role_key ?? defaultRoleKey;
     if (role) {
-      return `Role: ${roleLabel(role)} · default`;
+      return `Role: ${roleLabel(role)} · ${WORKSPACE_DEFAULT} (not on the Workspace team)`;
     }
     // Books names no default role in Manage: its own profile is what applies (the share's profile).
     return appKey === 'books' && m.books_profile && m.books_profile !== 'none' ? `Books profile: ${roleLabel(m.books_profile)}` : null;
@@ -349,7 +353,7 @@ function OwnerPeople({ members, companyName, appName, roles, busyKey, run, clien
                               return;
                             }
                             void run(k, () => client.updateGrant(cmpId, `${m.uuid}:${appKey}`, { role_key: next || null }),
-                              next ? `${who(m)}'s role on ${companyName} is now ${roleLabel(next)}.` : `${who(m)} now has ${inheritedLabel(m).replace(/^Default/, "the default role")} on ${companyName}.`);
+                              next ? `${who(m)}'s role on ${companyName} is now ${roleLabel(next)}.` : `${who(m)} is back on ${inheritedLabel(m)} on ${companyName}.`);
                           }}
                         >
                           <option value="">{inheritedLabel(m)}</option>
@@ -513,7 +517,7 @@ function AddUser({ people, companyName, appName, roles, busyKey, client, cmpId, 
   const match = result?.matches.find((m) => m.uuid === picked) ?? null;
   const roleSelect = (label: string) => roles && roles.length > 0 ? (
     <select className="aic-ca-select" style={{ width: 'auto' }} aria-label={label} value={roleKey} onChange={(e) => setRoleKey(e.target.value)}>
-      <option value="">Default role</option>
+      <option value="">{WORKSPACE_DEFAULT}</option>
       {roles.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
     </select>
   ) : null;
@@ -787,7 +791,7 @@ function Requests({ requests, isOwner, roles, busyKey, run, client }: {
                 <div className="aic-ca-row">
                   {roles && roles.length > 0 && r.app_key === client.appKey ? (
                     <select className="aic-ca-select" style={{ width: 'auto' }} aria-label="Role to grant" value={role[r.request_id] ?? r.requested_role ?? ''} onChange={(e) => setRole({ ...role, [r.request_id]: e.target.value })}>
-                      <option value="">Default role</option>
+                      <option value="">{WORKSPACE_DEFAULT}</option>
                       {roles.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
                     </select>
                   ) : null}
