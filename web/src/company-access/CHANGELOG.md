@@ -3,6 +3,38 @@
 Copy the whole folder into a product (`web/src/company-access/`); `VERSION` says which release a
 product carries. Newest first.
 
+## 1.8.0 — 2026-11-21
+
+One role order, one control for every row (owner report, 2026-11-21: "why for some users it is showing to change
+settings in manage -> workspace instead of default, since default is what we set in manage -> workspace").
+
+Before, a Workspace team member with access only through the team showed "Change it in the Workspace team's settings";
+anyone holding a share showed a picker whose **Default** meant the *application's lowest role*, not the Workspace
+setting — and a team member who had also been shared the company silently lost their Workspace team role for it.
+
+- **The order** (Manage, `decide()`; applied by companyinfo, the panel and the seat calls): the role set for **this
+  company** → else the person's **Workspace team role** (Manage → Workspace, every company) → else the
+  application's **default**.
+- `<CompanyUsersAccessPanel>`: every non-owner row with access has the same role picker: the application's **own access
+  profiles** plus one inherited choice, **Workspace Default** — the role set for the person in Manage → Workspace,
+  shown beside it (e.g. "Workspace Default (Administrator)"). There is no separate "Default (Viewer)": the
+  application's lowest profile is chosen like any other (owner, 2026-11-21). The Access column says where the role
+  comes from (*set for this company* / *Workspace Default*; someone not on the Workspace team has no Workspace role and
+  keeps the application's base profile until one is chosen; in Books, which names no base role in Manage, *Books
+  profile: …*). "Add user" and access-request approval offer the same **Workspace Default** first choice.
+  - Team-only member: choosing a role grants it for this company only (their other companies keep the team role);
+    "For every company: Manage → Workspace" points to where the team role is changed.
+  - Someone with a grant here: choosing the first option clears the company role and they go back to the inherited
+    one (Manage `PATCH …/permissions/{ref}` with `role_key: null`; it used to answer 422).
+  - Revoking the grant here from a team member says they keep the app with their Workspace team role.
+- Client types: `PermissionMember.role_source` / `company_role_key` / `effective_role_key`, `RoleSource`,
+  `CompanyPermissions.default_role_key` — all optional; an older Manage sends none and the panel reads what it can.
+- **Needs Manage with contract `company-roles.v1`** for the order, the role note and clearing a role. No relay change:
+  the panel uses the routes it already used (`POST`/`PATCH`/`DELETE v1/companies/{id}/permissions…`).
+- Manage now also applies a role change **in the product** (the same seat call a grant makes) and, when a grant here
+  is revoked from someone the team still gives the app, moves their product seat to the team role instead of revoking
+  it.
+
 ## 1.7.0 — 2026-11-21
 
 "Add user" finds anyone (owner request, 2026-11-21: "add user using email / uuid / mobile … show with details of user to
