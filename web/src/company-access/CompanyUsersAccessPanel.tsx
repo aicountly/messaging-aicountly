@@ -190,7 +190,7 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
 
       {tab === 'people' ? (
         isOwner ? (
-          <OwnerPeople members={members} companyName={companyName} appName={appName} roles={roles} busyKey={busyKey} run={run} client={client} cmpId={cmpId} viewerUuid={perm?.viewer_uuid ?? null} />
+          <OwnerPeople members={members} companyName={companyName} appName={appName} roles={roles} busyKey={busyKey} run={run} client={client} cmpId={cmpId} viewerUuid={perm?.viewer_uuid ?? null} defaultRoleKey={perm?.default_role_key ?? null} />
         ) : (
           <MyAccess summary={summary} appName={appName} roles={roles} busyKey={busyKey} run={run} client={client} cmpId={cmpId} />
         )
@@ -204,20 +204,46 @@ export function CompanyUsersAccessPanel({ client, cmpId, appName, roles, onChang
   );
 }
 
+/** 1.8.0: the one inherited choice in every role picker — the role set in Manage → Workspace. */
+const WORKSPACE_DEFAULT = 'Workspace Default';
+
 /** Resolves true when the change went through (the panel has reloaded), false when it showed an error. */
 type Run = (key: string, fn: () => Promise<unknown>, done: string) => Promise<boolean>;
 
-function OwnerPeople({ members, companyName, appName, roles, busyKey, run, client, cmpId, viewerUuid }: {
+function OwnerPeople({ members, companyName, appName, roles, busyKey, run, client, cmpId, viewerUuid, defaultRoleKey }: {
   members: PermissionMember[]; companyName: string; appName: string; roles?: Array<{ key: string; label: string }>; busyKey: string | null; run: Run;
   client: CompanyRegistryClient; cmpId: number;
   /** Who is asking, so their own row is marked. Null from a registry older than 1.5.0. */
   viewerUuid: string | null;
+  /** v1.8.0: the application's own default role (null: unknown, or the product decides it). */
+  defaultRoleKey: string | null;
 }) {
   const [role, setRole] = useState<Record<string, string>>({});
   const [expiry, setExpiry] = useState<Record<string, string>>({});
   const [adding, setAdding] = useState(false);
   const appKey = client.appKey;
-  const roleLabel = (key: string | null | undefined) => roles?.find((r) => r.key === key)?.label ?? key ?? 'Default';
+  const roleLabel = (key: string | null | undefined) => roles?.find((r) => r.key === key)?.label ?? key ?? WORKSPACE_DEFAULT;
+  // 1.8.0: the picker offers the application's own access profiles plus ONE inherited choice, "Workspace Default": the
+  // role set for the person in Manage → Workspace (every company). There is no separate "Default (Viewer)" — the
+  // application's lowest role is one of its own profiles, chosen like any other.
+  const inheritedLabel = (m: PermissionMember) => (m.workspace_role_key
+    ? `${WORKSPACE_DEFAULT} (${roleLabel(m.workspace_role_key)})`
+    : WORKSPACE_DEFAULT);
+  const sourceNote = (m: PermissionMember, companyRole: string | null) => {
+    if (m.role_source === 'company' || (m.role_source === undefined && companyRole)) {
+      return `Role: ${roleLabel(companyRole)} · set for this company`;
+    }
+    if (m.role_source === 'workspace' || (m.role_source === undefined && m.workspace_role_key)) {
+      return `Role: ${roleLabel(m.workspace_role_key)} · ${WORKSPACE_DEFAULT}`;
+    }
+    // Not on the Workspace team, so no Workspace role: the application's base profile applies until one is chosen.
+    const role = m.effective_role_key ?? defaultRoleKey;
+    if (role) {
+      return `Role: ${roleLabel(role)} · ${WORKSPACE_DEFAULT} (not on the Workspace team)`;
+    }
+    // Books names no default role in Manage: its own profile is what applies (the share's profile).
+    return appKey === 'books' && m.books_profile && m.books_profile !== 'none' ? `Books profile: ${roleLabel(m.books_profile)}` : null;
+  };
   // 1.6.0: the table lists the people who HAVE a standing in this application (owner, granted,
   // expired, revoked, requested, …). Everyone who is only "Access restricted" here — the whole
   // Workspace team and every Company user who was never given this app — is offered by "Add user"
@@ -277,6 +303,9 @@ function OwnerPeople({ members, companyName, appName, roles, busyKey, run, clien
             // v1.3.0: access in this app through the Workspace team, not a grant here — nothing here to revoke.
             const viaTeam = granted && m.app_access_via === 'workspace';
             const teamToo = !viaTeam && (m.workspace_role_key ?? null) !== null;
+            // 1.8.0: the role set for this company only ('' = they inherit the team role / the default).
+            const companyRole = m.company_role_key !== undefined ? m.company_role_key : (viaTeam ? null : mine?.role_key ?? null);
+            const note = granted ? sourceNote(m, companyRole) : null;
             const others = m.app_scope === 'all'
               ? ['All applications']
               : entitlements.filter((e) => e.app_key !== appKey && e.state === 'active').map((e) => e.app_name);
@@ -297,51 +326,66 @@ function OwnerPeople({ members, companyName, appName, roles, busyKey, run, clien
                 </td>
                 <td>
                   <CompanyAccessBadge status={status} />
-                  {viaTeam ? <div className="aic-ca-meta">Through the Workspace team{m.workspace_role_key ? ` · ${roleLabel(m.workspace_role_key)}` : ''}</div> : null}
-                  {!viaTeam && mine?.role_key ? <div className="aic-ca-meta">Role: {roleLabel(mine.role_key)}</div> : null}
+                  {viaTeam ? <div className="aic-ca-meta">Through the Workspace team</div> : null}
+                  {note ? <div className="aic-ca-meta">{note}</div> : null}
                   {until && !viaTeam ? <div className="aic-ca-meta">Until {until}</div> : null}
                 </td>
                 <td>{others.length ? others.map((o) => <span className="aic-ca-chip" key={o}>{o}</span>) : <span className="aic-ca-meta">—</span>}</td>
                 <td>
-                  {m.is_owner || m.legacy_co_owner ? null : viaTeam ? (
-                    <span className="aic-ca-meta">Change it in the Workspace team&apos;s settings</span>
-                  ) : granted ? (
+                  {m.is_owner || m.legacy_co_owner ? null : granted ? (
                     <div className="aic-ca-row">
                       {roles && roles.length > 0 ? (
                         <select
                           className="aic-ca-select"
                           style={{ width: 'auto' }}
                           aria-label={`Role for ${who(m)}`}
-                          value={mine?.role_key ?? ''}
+                          title="The first choice is the role they get when none is set for this company: their Workspace team role, else the application's default."
+                          value={companyRole ?? ''}
                           disabled={busyKey === k}
-                          onChange={(e) => void run(k, () => client.updateGrant(cmpId, `${m.uuid}:${appKey}`, { role_key: e.target.value || null }), `${who(m)}'s role was changed.`)}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            if (viaTeam) {
+                              // Through the team only: a role for this company is a grant here, on top of the team.
+                              if (next) {
+                                void run(k, () => client.grant(cmpId, { uuid: m.uuid, role_key: next }),
+                                  `${who(m)} now has ${roleLabel(next)} in ${appName} on ${companyName}; their other companies keep the Workspace team role.`);
+                              }
+                              return;
+                            }
+                            void run(k, () => client.updateGrant(cmpId, `${m.uuid}:${appKey}`, { role_key: next || null }),
+                              next ? `${who(m)}'s role on ${companyName} is now ${roleLabel(next)}.` : `${who(m)} is back on ${inheritedLabel(m)} on ${companyName}.`);
+                          }}
                         >
-                          <option value="">Default</option>
+                          <option value="">{inheritedLabel(m)}</option>
                           {roles.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
                         </select>
                       ) : null}
+                      {viaTeam ? (
+                        <span className="aic-ca-meta">For every company: Manage → Workspace</span>
+                      ) : (
                       <button
                         type="button"
                         className="aic-ca-btn aic-ca-btn-sm aic-ca-btn-danger"
                         disabled={busyKey === k}
                         onClick={() => {
                           const ask = teamToo
-                            ? `Revoke the access to ${companyName} in ${appName} granted to ${who(m)} here? They are on your Workspace team, so they keep ${appName} on ${companyName} through the team (${roleLabel(m.workspace_role_key)}) — change that in the team's settings. Their other applications are not affected.`
+                            ? `Revoke the access to ${companyName} in ${appName} granted to ${who(m)} here? They are on your Workspace team, so they keep ${appName} on ${companyName} with their Workspace team role (${roleLabel(m.workspace_role_key)}). Their other applications are not affected.`
                             : `Revoke ${who(m)}'s access to ${companyName} in ${appName}? Their other applications are not affected.`;
                           if (window.confirm(ask)) {
                             void run(k, () => client.revoke(cmpId, `${m.uuid}:${appKey}`),
-                              teamToo ? `The grant here was revoked; ${who(m)} still opens this company in ${appName} through the Workspace team.` : `${who(m)} can no longer open this company in ${appName}.`);
+                              teamToo ? `The grant here was revoked; ${who(m)} still opens this company in ${appName} through the Workspace team, as ${roleLabel(m.workspace_role_key)}.` : `${who(m)} can no longer open this company in ${appName}.`);
                           }
                         }}
                       >
                         Revoke
                       </button>
+                      )}
                     </div>
                   ) : (
                     <div className="aic-ca-row">
                       {roles && roles.length > 0 ? (
                         <select className="aic-ca-select" style={{ width: 'auto' }} aria-label={`Role for ${who(m)}`} value={role[k] ?? ''} onChange={(e) => setRole({ ...role, [k]: e.target.value })}>
-                          <option value="">Default role</option>
+                          <option value="">{inheritedLabel(m)}</option>
                           {roles.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
                         </select>
                       ) : null}
@@ -473,7 +517,7 @@ function AddUser({ people, companyName, appName, roles, busyKey, client, cmpId, 
   const match = result?.matches.find((m) => m.uuid === picked) ?? null;
   const roleSelect = (label: string) => roles && roles.length > 0 ? (
     <select className="aic-ca-select" style={{ width: 'auto' }} aria-label={label} value={roleKey} onChange={(e) => setRoleKey(e.target.value)}>
-      <option value="">Default role</option>
+      <option value="">{WORKSPACE_DEFAULT}</option>
       {roles.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
     </select>
   ) : null;
@@ -747,7 +791,7 @@ function Requests({ requests, isOwner, roles, busyKey, run, client }: {
                 <div className="aic-ca-row">
                   {roles && roles.length > 0 && r.app_key === client.appKey ? (
                     <select className="aic-ca-select" style={{ width: 'auto' }} aria-label="Role to grant" value={role[r.request_id] ?? r.requested_role ?? ''} onChange={(e) => setRole({ ...role, [r.request_id]: e.target.value })}>
-                      <option value="">Default role</option>
+                      <option value="">{WORKSPACE_DEFAULT}</option>
                       {roles.map((x) => <option key={x.key} value={x.key}>{x.label}</option>)}
                     </select>
                   ) : null}

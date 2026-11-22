@@ -1,4 +1,4 @@
-# AICOUNTLY shared company access (v1.7.0)
+# AICOUNTLY shared company access (v1.8.0)
 
 One company directory, one access model and one set of screens for every AICOUNTLY product.
 The authority is Manage's company registry (`/api/v1/*`, contract in
@@ -195,6 +195,8 @@ invitations, requests to review). A request may name Manage itself (`app: 'manag
 `GET v1/workspaces/{id}/company-users`, `POST v1/workspaces/{id}/members/{uuid}/move` and
 `DELETE v1/companies/{id}/members/{uuid}`, and for 1.7.0 ("Add user" finds by e-mail / mobile / account ID)
 `POST v1/companies/{id}/people/lookup` and `POST v1/companies/{id}/people/invite`.
+1.8.0 (one role order: company → Workspace team → default) needs no new route: it uses the permissions routes
+already listed, and `PATCH v1/companies/{id}/permissions/{ref}` with `role_key: null` to go back to the inherited role.
 
 ## 6. Mock / offline mode
 

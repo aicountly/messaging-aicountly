@@ -1,6 +1,6 @@
 {
   "module": "company-access",
-  "version": "1.7.0",
-  "treeSha256": "8541e0c62fcdc7bd69d3fb4eb0077bc881676c647308a18f4a558628056de599",
-  "sourceCommit": "99ed585da50905e74f1aa4f44e7ad1e795f33850"
+  "version": "1.8.0",
+  "treeSha256": "9c3f97f2db37c549d40d23d3a2588296a0f9dcb31dd57900b63749fdcac35ddd",
+  "sourceCommit": "3fe950bedb33fd0fdf7027c3d7352fc35806d7d9"
 }
