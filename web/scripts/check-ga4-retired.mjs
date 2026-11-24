@@ -2,9 +2,15 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, existsSync } from 'node:fs'
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { createServer } from 'vite'
+import { execFileSync } from 'node:child_process'
 
 export async function verifyNoGa4() {
+  // Vite/esbuild need Node's native typed arrays, outside a test runner's DOM realm.
+  if (typeof window !== 'undefined') {
+    execFileSync(process.execPath, [fileURLToPath(import.meta.url)], {stdio: 'pipe'})
+    return
+  }
+  const { createServer } = await import('vite')
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
   const utils = ['ts', 'js'].map(ext => join(root, 'src/utils/analytics.' + ext)).find(existsSync)
   assert.ok(utils, 'analytics compatibility module exists')
@@ -57,6 +63,7 @@ export async function verifyNoGa4() {
   }
 }
 if(process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  await verifyNoGa4()
-  console.log('PASS: GA4 and consent UI remain retired, including with old configuration and granted cookies')
+  verifyNoGa4().then(() => {
+    console.log('PASS: GA4 and consent UI remain retired, including with old configuration and granted cookies')
+  }).catch(error => { console.error(error); process.exitCode = 1 })
 }
