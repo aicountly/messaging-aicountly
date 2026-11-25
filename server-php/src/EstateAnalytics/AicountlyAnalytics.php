@@ -39,7 +39,7 @@ namespace Aicountly\Analytics;
  */
 final class Analytics
 {
-    public const VERSION        = '1.4.0';
+    public const VERSION        = '1.5.1';
 
     /**
      * Fields only the caller that verified them may state, so trackMany() strips them from every
@@ -149,9 +149,9 @@ final class Analytics
      * event was unusable (logged). NEVER THROWS.
      *
      * The only required arguments are the event name and who it was for. Everything else is
-     * optional. `idempotency_key` is derived when not given, from the event, the actor and the
-     * second — enough that an accidental double-call in one request collapses to one event, and
-     * a genuine second occurrence a second later does not.
+     * optional. Each track() call gets a random key unless the caller supplies a stable business
+     * key. The queued event retains that key across delivery retries. Time-based keys collide
+     * for distinct actions in the same second, especially anonymous page requests.
      *
      * @param string $eventName must be registered in the Analytics tracking plan (docs/04)
      * @param array{
@@ -173,8 +173,7 @@ final class Analytics
 
             $key = isset($a['idempotency_key']) && $a['idempotency_key'] !== ''
                 ? self::safeKey((string) $a['idempotency_key'])
-                : self::safeKey(sprintf('%s:%s:%s:%s:%d', $source, $name,
-                    (string) ($a['company_id'] ?? '-'), (string) ($a['user_uuid'] ?? '-'), time()));
+                : 'event:' . bin2hex(random_bytes(16));
 
             [$properties, $badKey] = $this->properties($a['properties'] ?? []);
             if ($badKey !== null) {
