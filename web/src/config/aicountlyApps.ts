@@ -26,7 +26,6 @@ export const AICOUNTLY_APPS: AicountlyAppDef[] = [
     jumpKey: 'buddy',
     prodHost: 'pulse.aicountly.com',
     sandboxHost: 'pulse.gh.aicountly.com',
-    altHosts: ['buddy.aicountly.com', 'buddy.gh.aicountly.com'],
     accent: 'bg-emerald-600',
   },
   {
